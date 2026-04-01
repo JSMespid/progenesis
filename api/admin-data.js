@@ -18,12 +18,26 @@ async function supabase(path, method = 'GET', body = null, useService = false) {
   try { return text ? JSON.parse(text) : []; } catch { return []; }
 }
 
+// 테이블별 정렬 기준
+function getOrderClause(table) {
+  const orders = {
+    methodologies: 'order_num.asc,created_at.asc',
+    ossp: 'created_at.asc',
+    ossp_phases: 'order_num.asc,created_at.asc',
+    ossp_deliverables: 'created_at.asc',
+    ossp_files: 'created_at.asc',
+    projects: 'created_at.desc',
+  };
+  return orders[table] || 'created_at.asc';
+}
+
 export default async function handler(req, res) {
   const { table, action, id, data } = req.body || {};
 
   if (req.method === 'GET') {
     const { table: t, filter } = req.query;
-    let path = `/${t}?order=order_num.asc,created_at.asc`;
+    if (!t) return res.status(400).json({ error: 'table is required' });
+    let path = `/${t}?order=${getOrderClause(t)}`;
     if (filter) path += `&${filter}`;
     const result = await supabase(path, 'GET', null, false);
     return res.status(200).json(result);
@@ -33,6 +47,7 @@ export default async function handler(req, res) {
 
   if (action === 'create') {
     const result = await supabase(`/${table}`, 'POST', data, true);
+    if (result.error) return res.status(400).json({ error: result.message || result.error });
     return res.status(200).json(result);
   }
 

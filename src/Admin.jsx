@@ -311,13 +311,17 @@ function OsspManager({ token }) {
   const [tab, setTab] = useState('ossp');
 
   async function loadOssp() {
-    const data = await fetch('/api/admin-data?table=ossp', { headers:{ Authorization:`Bearer ${token}` } }).then(r=>r.json());
-    if (Array.isArray(data)) setOsspList(data);
+    try {
+      const data = await fetch('/api/admin-data?table=ossp', { headers:{ Authorization:`Bearer ${token}` } }).then(r=>r.json());
+      if (Array.isArray(data)) setOsspList(data);
+    } catch(e) { console.error('loadOssp error:', e); }
   }
 
   async function loadMethodologies() {
-    const data = await fetch('/api/admin-data?table=methodologies', { headers:{ Authorization:`Bearer ${token}` } }).then(r=>r.json());
-    if (Array.isArray(data)) setMethodologies(data.filter(m=>m.is_active));
+    try {
+      const data = await fetch('/api/admin-data?table=methodologies', { headers:{ Authorization:`Bearer ${token}` } }).then(r=>r.json());
+      if (Array.isArray(data)) setMethodologies(data.filter(m=>m.is_active));
+    } catch(e) { console.error('loadMethodologies error:', e); }
   }
 
   async function loadPhases(osspId) {
