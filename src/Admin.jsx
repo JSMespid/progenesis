@@ -328,22 +328,39 @@ function OsspManager({ token }) {
   useEffect(() => { loadOssp(); loadMethodologies(); }, []);
   useEffect(() => { if (selectedOssp) loadPhases(selectedOssp.id); }, [selectedOssp]);
 
+  const [saveError, setSaveError] = useState('');
+  const [saveSuccess, setSaveSuccess] = useState('');
+
   async function saveOssp() {
-    if (!form.methodology_id) return;
-    setLoading(true);
-    const selectedMethod = methodologies.find(m=>m.id===form.methodology_id);
-    const saveData = {
-      methodology_id: form.methodology_id,
-      name: selectedMethod?.name || '',
-      version: form.version,
-      description: form.description,
-    };
-    const action = editingOssp ? 'update' : 'create';
-    const body = { action, table:'ossp', data:saveData };
-    if (editingOssp) body.id = editingOssp;
-    await fetch('/api/admin-data', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${token}` }, body:JSON.stringify(body) });
-    setForm({ methodology_id:'', version:'', description:'' }); setEditingOssp(null);
-    await loadOssp(); setLoading(false);
+    if (!form.methodology_id) { setSaveError('방법론을 선택해주세요.'); return; }
+    setLoading(true); setSaveError(''); setSaveSuccess('');
+    try {
+      const selectedMethod = methodologies.find(m=>m.id===form.methodology_id);
+      const saveData = {
+        methodology_id: form.methodology_id,
+        name: selectedMethod?.name || '',
+        version: form.version,
+        description: form.description,
+      };
+      const action = editingOssp ? 'update' : 'create';
+      const body = { action, table:'ossp', data:saveData };
+      if (editingOssp) body.id = editingOssp;
+      const res = await fetch('/api/admin-data', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
+        body:JSON.stringify(body)
+      });
+      const result = await res.json();
+      if (result.error) throw new Error(result.error);
+      setSaveSuccess(editingOssp ? 'OSSP가 수정되었습니다!' : 'OSSP가 등록되었습니다!');
+      setForm({ methodology_id:'', version:'', description:'' });
+      setEditingOssp(null);
+      await loadOssp();
+      setTimeout(() => setSaveSuccess(''), 3000);
+    } catch(e) {
+      setSaveError('오류: ' + e.message);
+    }
+    setLoading(false);
   }
 
   async function savePhase() {
@@ -421,9 +438,21 @@ function OsspManager({ token }) {
               </div>
             )}
 
+            {saveError && (
+              <div style={{ padding:"10px 14px", background:T.red+"11", borderRadius:8, fontSize:13, color:T.red }}>
+                ❌ {saveError}
+              </div>
+            )}
+            {saveSuccess && (
+              <div style={{ padding:"10px 14px", background:T.green+"11", borderRadius:8, fontSize:13, color:T.green }}>
+                ✅ {saveSuccess}
+              </div>
+            )}
             <div style={{ display:"flex", gap:8, marginTop:4 }}>
-              <Btn onClick={saveOssp} disabled={!form.methodology_id||loading}>{editingOssp?"수정 저장":"등록"}</Btn>
-              {editingOssp && <Btn variant="ghost" onClick={()=>{ setEditingOssp(null); setForm({ methodology_id:'', version:'', description:'' }); }}>취소</Btn>}
+              <Btn onClick={saveOssp} disabled={!form.methodology_id||loading}>
+                {loading ? "저장 중..." : editingOssp ? "수정 저장" : "등록"}
+              </Btn>
+              {editingOssp && <Btn variant="ghost" onClick={()=>{ setEditingOssp(null); setForm({ methodology_id:'', version:'', description:'' }); setSaveError(''); setSaveSuccess(''); }}>취소</Btn>}
             </div>
           </div>
         </Card>
