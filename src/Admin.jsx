@@ -301,9 +301,10 @@ function MethodologyManager({ token }) {
 // ── OSSP 관리 ───────────────────────────────────────────────────
 function OsspManager({ token }) {
   const [osspList, setOsspList] = useState([]);
+  const [methodologies, setMethodologies] = useState([]);
   const [selectedOssp, setSelectedOssp] = useState(null);
   const [phases, setPhases] = useState([]);
-  const [form, setForm] = useState({ name:'', version:'', description:'' });
+  const [form, setForm] = useState({ methodology_id:'', version:'', description:'' });
   const [phaseForm, setPhaseForm] = useState({ code:'', name:'' });
   const [editingOssp, setEditingOssp] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -314,21 +315,34 @@ function OsspManager({ token }) {
     if (Array.isArray(data)) setOsspList(data);
   }
 
+  async function loadMethodologies() {
+    const data = await fetch('/api/admin-data?table=methodologies', { headers:{ Authorization:`Bearer ${token}` } }).then(r=>r.json());
+    if (Array.isArray(data)) setMethodologies(data.filter(m=>m.is_active));
+  }
+
   async function loadPhases(osspId) {
     const data = await fetch(`/api/admin-data?table=ossp_phases&filter=ossp_id=eq.${osspId}`, { headers:{ Authorization:`Bearer ${token}` } }).then(r=>r.json());
     if (Array.isArray(data)) setPhases(data);
   }
 
-  useEffect(() => { loadOssp(); }, []);
+  useEffect(() => { loadOssp(); loadMethodologies(); }, []);
   useEffect(() => { if (selectedOssp) loadPhases(selectedOssp.id); }, [selectedOssp]);
 
   async function saveOssp() {
+    if (!form.methodology_id) return;
     setLoading(true);
+    const selectedMethod = methodologies.find(m=>m.id===form.methodology_id);
+    const saveData = {
+      methodology_id: form.methodology_id,
+      name: selectedMethod?.name || '',
+      version: form.version,
+      description: form.description,
+    };
     const action = editingOssp ? 'update' : 'create';
-    const body = { action, table:'ossp', data:form };
+    const body = { action, table:'ossp', data:saveData };
     if (editingOssp) body.id = editingOssp;
     await fetch('/api/admin-data', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${token}` }, body:JSON.stringify(body) });
-    setForm({ name:'', version:'', description:'' }); setEditingOssp(null);
+    setForm({ methodology_id:'', version:'', description:'' }); setEditingOssp(null);
     await loadOssp(); setLoading(false);
   }
 
@@ -347,7 +361,7 @@ function OsspManager({ token }) {
   }
 
   async function deleteOssp(id) {
-    if (!confirm('OSSP를 삭제하시겠습니까? 관련 단계와 산출물도 모두 삭제됩니다.')) return;
+    if (!confirm('OSSP를 삭제하시겠습니까?')) return;
     await fetch('/api/admin-data', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${token}` }, body:JSON.stringify({ action:'delete', table:'ossp', id }) });
     setSelectedOssp(null); await loadOssp();
   }
@@ -360,60 +374,67 @@ function OsspManager({ token }) {
       </div>
 
       <div style={{ display:"flex", gap:3, marginBottom:24, background:T.surface, borderRadius:10, padding:3, border:`1px solid ${T.border}`, width:"fit-content" }}>
-        {[["ossp","OSSP 목록"],["phases","단계 관리"]].map(([id,label])=>(
+        {[["ossp","OSSP 등록"],["phases","단계 관리"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{ padding:"7px 20px", borderRadius:8, fontSize:13, fontWeight:tab===id?700:400, background:tab===id?T.accent:"transparent", color:tab===id?"#fff":T.muted, border:"none", cursor:"pointer", fontFamily:"inherit" }}>{label}</button>
         ))}
       </div>
 
       {tab==="ossp" && (
-        <>
-          <Card style={{ padding:24, marginBottom:20 }}>
-            <h2 style={{ fontSize:15, fontWeight:600, marginBottom:16 }}>{editingOssp?"OSSP 수정":"새 OSSP 등록"}</h2>
-            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
-                <Input label="방법론 이름 *" value={form.name} onChange={v=>setForm(p=>({...p,name:v}))} placeholder="예: 정보공학방법론" />
-                <Input label="버전" value={form.version} onChange={v=>setForm(p=>({...p,version:v}))} placeholder="예: v2.0" />
-              </div>
-              <Input label="설명" value={form.description} onChange={v=>setForm(p=>({...p,description:v}))} placeholder="예: 정보공학(IE) 기반 SI 프로젝트 개발 방법론" />
-              <div style={{ display:"flex", gap:8 }}>
-                <Btn onClick={saveOssp} disabled={!form.name||loading}>{editingOssp?"수정 저장":"등록"}</Btn>
-                {editingOssp && <Btn variant="ghost" onClick={()=>{ setEditingOssp(null); setForm({ name:'', version:'', description:'' }); }}>취소</Btn>}
-              </div>
-            </div>
-          </Card>
+        <Card style={{ padding:24 }}>
+          <h2 style={{ fontSize:15, fontWeight:600, marginBottom:16 }}>{editingOssp?"OSSP 수정":"새 OSSP 등록"}</h2>
+          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
 
-          <Card style={{ padding:24 }}>
-            <h2 style={{ fontSize:15, fontWeight:600, marginBottom:16 }}>등록된 OSSP ({osspList.length}개)</h2>
-            {osspList.length===0 ? (
-              <div style={{ textAlign:"center", padding:"32px 0", color:T.muted, fontSize:13 }}>등록된 OSSP가 없습니다.</div>
-            ) : (
-              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                {osspList.map(item=>(
-                  <div key={item.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 16px", background:T.bg, borderRadius:10, border:`1px solid ${selectedOssp?.id===item.id?T.accent:T.border}`, cursor:"pointer" }}
-                    onClick={()=>{ setSelectedOssp(item); setTab('phases'); }}>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontWeight:600, fontSize:14, marginBottom:3 }}>{item.name} <span style={{ fontSize:12, color:T.muted }}>{item.version}</span></div>
-                      <div style={{ fontSize:12, color:T.muted }}>{item.description}</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+              <label style={{ fontSize:11, color:T.muted, fontWeight:600, textTransform:"uppercase", letterSpacing:0.8 }}>방법론 선택 *</label>
+              <select value={form.methodology_id} onChange={e=>setForm(p=>({...p,methodology_id:e.target.value}))}
+                style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:9, padding:"9px 12px", color:form.methodology_id?T.text:T.muted, fontSize:13, fontFamily:"inherit", outline:"none", cursor:"pointer" }}>
+                <option value="">-- 방법론을 선택하세요 --</option>
+                {methodologies.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+              {methodologies.length===0 && (
+                <div style={{ fontSize:11, color:T.amber }}>⚠️ 먼저 개발 방법론을 등록해 주세요.</div>
+              )}
+            </div>
+
+            <Input label="버전" value={form.version} onChange={v=>setForm(p=>({...p,version:v}))} placeholder="예: v2.0" />
+            <Input label="설명" value={form.description} onChange={v=>setForm(p=>({...p,description:v}))} placeholder="예: 정보공학(IE) 기반 SI 프로젝트 개발 방법론" />
+
+            {osspList.length > 0 && (
+              <div style={{ marginTop:4 }}>
+                <div style={{ fontSize:12, color:T.muted, marginBottom:8, fontWeight:600 }}>등록된 OSSP</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                  {osspList.map(item=>(
+                    <div key={item.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", background:T.bg, borderRadius:9, border:`1px solid ${T.border}` }}>
+                      <div style={{ flex:1 }}>
+                        <span style={{ fontWeight:600, fontSize:13 }}>{item.name}</span>
+                        {item.version && <span style={{ fontSize:11, color:T.muted, marginLeft:6 }}>{item.version}</span>}
+                        {item.description && <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>{item.description}</div>}
+                      </div>
+                      <div style={{ display:"flex", gap:5 }}>
+                        <Btn variant="outline" onClick={()=>{ setEditingOssp(item.id); setForm({ methodology_id:item.methodology_id||'', version:item.version||'', description:item.description||'' }); }} style={{ fontSize:11, padding:"4px 9px" }}>수정</Btn>
+                        <Btn variant="ghost" onClick={()=>{ setSelectedOssp(item); setTab('phases'); }} style={{ fontSize:11, padding:"4px 9px" }}>단계관리</Btn>
+                        <Btn variant="danger" onClick={()=>deleteOssp(item.id)} style={{ fontSize:11, padding:"4px 9px" }}>삭제</Btn>
+                      </div>
                     </div>
-                    <div style={{ display:"flex", gap:6 }} onClick={e=>e.stopPropagation()}>
-                      <Btn variant="outline" onClick={()=>{ setEditingOssp(item.id); setForm({ name:item.name, version:item.version||'', description:item.description||'' }); }} style={{ fontSize:11, padding:"5px 10px" }}>수정</Btn>
-                      <Btn variant="ghost" onClick={()=>{ setSelectedOssp(item); setTab('phases'); }} style={{ fontSize:11, padding:"5px 10px" }}>단계관리</Btn>
-                      <Btn variant="danger" onClick={()=>deleteOssp(item.id)} style={{ fontSize:11, padding:"5px 10px" }}>삭제</Btn>
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             )}
-          </Card>
-        </>
+
+            <div style={{ display:"flex", gap:8, marginTop:4 }}>
+              <Btn onClick={saveOssp} disabled={!form.methodology_id||loading}>{editingOssp?"수정 저장":"등록"}</Btn>
+              {editingOssp && <Btn variant="ghost" onClick={()=>{ setEditingOssp(null); setForm({ methodology_id:'', version:'', description:'' }); }}>취소</Btn>}
+            </div>
+          </div>
+        </Card>
       )}
 
       {tab==="phases" && (
         <>
           {!selectedOssp ? (
             <Card style={{ padding:32, textAlign:"center" }}>
-              <div style={{ color:T.muted, fontSize:13 }}>OSSP 목록에서 방법론을 선택하세요.</div>
-              <Btn variant="ghost" onClick={()=>setTab('ossp')} style={{ marginTop:12 }}>← OSSP 목록으로</Btn>
+              <div style={{ color:T.muted, fontSize:13 }}>OSSP 등록 탭에서 방법론을 선택하세요.</div>
+              <Btn variant="ghost" onClick={()=>setTab('ossp')} style={{ marginTop:12 }}>← OSSP 등록으로</Btn>
             </Card>
           ) : (
             <>
