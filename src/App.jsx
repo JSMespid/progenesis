@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 const T = {
   bg: "#0A0C10", surface: "#111318", border: "#1E2230",
@@ -59,11 +59,11 @@ function Select({ label, value, onChange, options }) {
   );
 }
 
-function Spinner() {
+function Spinner({ text="AI 생성 중…" }) {
   return (
     <div style={{ display:"flex", alignItems:"center", gap:10, color:T.muted, fontSize:13 }}>
       <div style={{ width:18, height:18, border:`2px solid ${T.border}`, borderTop:`2px solid ${T.accent}`, borderRadius:"50%", animation:"spin 0.8s linear infinite" }} />
-      AI 생성 중…
+      {text}
     </div>
   );
 }
@@ -85,6 +85,7 @@ export default function ProGenesis() {
   const [page, setPage] = useState("dashboard");
   const [projects, setProjects] = useState([]);
   const [currentProject, setCurrentProject] = useState(null);
+  const [loadingProjects, setLoadingProjects] = useState(true);
   const [wizardStep, setWizardStep] = useState(0);
   const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", startDate:"", endDate:"", pm:"" });
   const [selectedOSSP, setSelectedOSSP] = useState(null);
@@ -97,16 +98,45 @@ export default function ProGenesis() {
 
   const nav = (p) => { setPage(p); setGenError(null); };
 
+  // DB에서 프로젝트 불러오기
+  useEffect(() => {
+    fetchProjects();
+  }, []);
+
+  async function fetchProjects() {
+    setLoadingProjects(true);
+    try {
+      const res = await fetch('/api/projects');
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        const mapped = data.map(p => ({
+          id: p.id,
+          name: p.name,
+          client: p.client,
+          type: p.type,
+          startDate: p.start_date,
+          endDate: p.end_date,
+          pm: p.pm,
+          status: p.status,
+          ossp: p.ossp,
+          tailoring: p.tailoring,
+          pdp: p.pdp,
+          wbs: p.wbs,
+          deliverables: p.deliverables,
+          createdAt: new Date(p.created_at).toLocaleDateString("ko-KR"),
+        }));
+        setProjects(mapped);
+      }
+    } catch(e) { console.error(e); }
+    setLoadingProjects(false);
+  }
+
   async function callClaude(prompt) {
     const res = await fetch("/api/chat", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body:JSON.stringify({
-        model:"claude-sonnet-4-20250514",
-        max_tokens:4000,
+      method:"POST", headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:4000,
         system:"You are a project management expert. Always respond with valid JSON only, no markdown, no preamble.",
-        messages:[{ role:"user", content:prompt }],
-      }),
+        messages:[{ role:"user", content:prompt }] }),
     });
     const data = await res.json();
     const text = data.content?.map(b=>b.text||"").join("")||"";
@@ -144,23 +174,49 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
     setGenerating(false);
   }
 
-  function finishProject() {
-    const p = { id:Date.now(), ...projectForm, ossp:selectedOSSP, tailoring, pdp:pdpData, wbs:wbsData, deliverables:deliverablesData, createdAt:new Date().toLocaleDateString("ko-KR"), status:"진행중" };
-    setProjects(prev=>[...prev, p]); setCurrentProject(p);
+  async function finishProject() {
+    const newProject = {
+      name: projectForm.name,
+      client: projectForm.client,
+      type: projectForm.type,
+      start_date: projectForm.startDate,
+      end_date: projectForm.endDate,
+      pm: projectForm.pm,
+      status: "진행중",
+      ossp: selectedOSSP,
+      tailoring,
+      pdp: pdpData,
+      wbs: wbsData,
+      deliverables: deliverablesData,
+    };
+    try {
+      await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newProject),
+      });
+      await fetchProjects();
+    } catch(e) { console.error(e); }
     setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",startDate:"",endDate:"",pm:"" });
     setSelectedOSSP(null); setTailoring({ doc_level:"표준",review_cycle:"격주",test_level:"통합",risk:"강화" });
     setPdpData(null); setWbsData(null); setDeliverablesData(null);
-    nav("project_detail");
+    nav("dashboard");
+  }
+
+  async function deleteProject(id) {
+    await fetch(`/api/projects?id=${id}`, { method: 'DELETE' });
+    await fetchProjects();
+    nav("dashboard");
   }
 
   const pages = {
-    dashboard: <Dashboard projects={projects} nav={nav} setCurrentProject={setCurrentProject} />,
+    dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={nav} setCurrentProject={setCurrentProject} />,
     new_project: <NewProjectWizard step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
       pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError}
       onGeneratePDP={generatePDP} onGenerateWBS={generateWBS} onGenerateDeliverables={generateDeliverables}
       onFinish={finishProject} nav={nav} />,
-    project_detail: <ProjectDetail project={currentProject} nav={nav} />,
+    project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} />,
     ossp: <OSSPPage nav={nav} />,
   };
 
@@ -196,7 +252,7 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
   );
 }
 
-function Dashboard({ projects, nav, setCurrentProject }) {
+function Dashboard({ projects, loading, nav, setCurrentProject }) {
   const stats = [
     { label:"전체 프로젝트", value:projects.length, color:T.accent },
     { label:"PDP 생성", value:projects.filter(p=>p.pdp).length, color:T.green },
@@ -218,7 +274,9 @@ function Dashboard({ projects, nav, setCurrentProject }) {
             <h2 style={{ fontSize:15, fontWeight:600 }}>프로젝트 목록</h2>
             <Btn onClick={()=>nav("new_project")}>+ 새 프로젝트</Btn>
           </div>
-          {projects.length===0 ? (
+          {loading ? (
+            <div style={{ textAlign:"center", padding:"44px 0" }}><Spinner text="프로젝트 불러오는 중…" /></div>
+          ) : projects.length===0 ? (
             <div style={{ textAlign:"center", padding:"44px 0", color:T.muted }}>
               <div style={{ fontSize:32, marginBottom:10 }}>◈</div>
               <div style={{ fontSize:13, marginBottom:16 }}>아직 등록된 프로젝트가 없습니다.</div>
@@ -439,7 +497,7 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
             <div style={{ display:"flex", gap:8, alignItems:"center" }}>
               <Badge color={T.green}>✓ 산출물 생성 완료</Badge>
-              <span style={{ fontSize:11, color:T.muted }}>총 {deliverablesData.summary?.totalDocs}건 · 필수 {deliverablesData.summary?.mandatoryCount}건 · 예상 {deliverablesData.summary?.estimatedDays}일</span>
+              <span style={{ fontSize:11, color:T.muted }}>총 {deliverablesData.summary?.totalDocs}건 · 필수 {deliverablesData.summary?.mandatoryCount}건</span>
             </div>
             <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
           </div>
@@ -454,21 +512,21 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
           <div style={{ display:"flex", flexDirection:"column", gap:8, maxHeight:260, overflow:"auto" }}>
             {deliverablesData.categories?.map(cat=>(
               <div key={cat.id} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:11, overflow:"hidden" }}>
-                <div onClick={()=>setExpandedCat(expandedCat===cat.id?null:cat.id)} style={{ display:"flex", alignItems:"center", gap:9, padding:"11px 14px", cursor:"pointer", borderBottom:expandedCat===cat.id?`1px solid ${T.border}`:"none" }}>
+                <div onClick={()=>setExpandedCat(expandedCat===cat.id?null:cat.id)} style={{ display:"flex", alignItems:"center", gap:9, padding:"11px 14px", cursor:"pointer" }}>
                   <span style={{ fontSize:16 }}>{cat.icon}</span>
                   <span style={{ fontWeight:600, fontSize:13, flex:1 }}>{cat.name}</span>
                   <span style={{ fontSize:11, color:T.muted }}>{cat.documents?.length}건</span>
                   <span style={{ color:T.muted, fontSize:11 }}>{expandedCat===cat.id?"▲":"▼"}</span>
                 </div>
                 {expandedCat===cat.id && (
-                  <div style={{ padding:"7px 14px 11px" }}>
+                  <div style={{ padding:"7px 14px 11px", borderTop:`1px solid ${T.border}` }}>
                     {cat.documents?.map(doc=>(
                       <div key={doc.id} style={{ display:"flex", alignItems:"flex-start", gap:9, padding:"7px 0", borderBottom:`1px solid ${T.border}` }}>
                         <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
-                        <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div><div style={{ fontSize:10, color:T.muted, marginTop:3 }}>목차: {doc.template}</div></div>
+                        <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
                         <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:3, flexShrink:0 }}>
                           <Badge color={doc.priority==="필수"?T.red:doc.priority==="권장"?T.amber:T.muted}>{doc.priority}</Badge>
-                          <span style={{ fontSize:10, color:T.muted }}>{doc.estimatedPages}p · {doc.owner}</span>
+                          <span style={{ fontSize:10, color:T.muted }}>{doc.estimatedPages}p</span>
                         </div>
                       </div>
                     ))}
@@ -506,8 +564,9 @@ function StepReview({ form, ossp, pdpData, wbsData, deliverablesData }) {
   );
 }
 
-function ProjectDetail({ project, nav }) {
+function ProjectDetail({ project, nav, onDelete }) {
   const [tab, setTab] = useState("overview");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   if (!project) return <div style={{ padding:40, color:T.muted }}>프로젝트를 선택하세요.</div>;
   return (
     <div style={{ padding:"32px 36px", maxWidth:1000 }}>
@@ -515,6 +574,13 @@ function ProjectDetail({ project, nav }) {
         <button onClick={()=>nav("dashboard")} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:20 }}>←</button>
         <div style={{ flex:1 }}><h1 style={{ fontSize:20, fontWeight:700 }}>{project.name}</h1><p style={{ fontSize:12, color:T.muted }}>{project.client} · {project.ossp?.label} · PM: {project.pm}</p></div>
         <Badge color={T.accent}>{project.status}</Badge>
+        {confirmDelete
+          ? <div style={{ display:"flex", gap:8 }}>
+              <Btn variant="danger" onClick={()=>onDelete(project.id)}>확인 삭제</Btn>
+              <Btn variant="ghost" onClick={()=>setConfirmDelete(false)}>취소</Btn>
+            </div>
+          : <Btn variant="ghost" onClick={()=>setConfirmDelete(true)} style={{ color:T.red }}>삭제</Btn>
+        }
       </div>
       <div style={{ display:"flex", gap:3, marginBottom:20, background:T.surface, borderRadius:11, padding:3, border:`1px solid ${T.border}` }}>
         {[["overview","개요"],["pdp","PDP 계획서"],["wbs","WBS"],["deliverables","산출물 목록"]].map(([id,label])=>(
