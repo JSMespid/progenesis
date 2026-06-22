@@ -121,7 +121,7 @@ export default function ProGenesis() {
   async function callClaude(prompt) {
     const res = await fetch("/api/chat", {
       method:"POST", headers:{ "Content-Type":"application/json" },
-      body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:4000,
+      body:JSON.stringify({ model:"claude-opus-4-8", max_tokens:4000,
         system:"You are a project management expert. Always respond with valid JSON only, no markdown, no preamble.",
         messages:[{ role:"user", content:prompt }] }),
     });
