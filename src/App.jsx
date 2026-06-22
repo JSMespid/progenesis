@@ -119,17 +119,27 @@ export default function ProGenesis() {
   }
 
   async function callClaude(prompt) {
-    const res = await fetch("/api/chat", {
-      method:"POST", headers:{ "Content-Type":"application/json" },
-      body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:4000,
-        system:"You are a project management expert. Always respond with valid JSON only, no markdown, no preamble.",
-        messages:[{ role:"user", content:prompt }] }),
-    });
-    const data = await res.json();
-    const text = data.content?.map(b=>b.text||"").join("")||"";
-    return JSON.parse(text.replace(/```json|```/g,"").trim());
+  const res = await fetch("/api/chat", {
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({ model:"claude-opus-4-8", max_tokens:4000,
+      system:"You are a project management expert. Always respond with valid JSON only, no markdown, no preamble.",
+      messages:[{ role:"user", content:prompt }] }),
+  });
+
+  const data = await res.json();
+
+  // 에러 응답 방어: Anthropic/서버가 에러를 주면 content가 없음
+  if (!res.ok || data.error || !data.content) {
+    const msg = data?.detail?.error?.message || data?.error?.message || data?.error || `요청 실패 (status ${res.status})`;
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
   }
 
+  const text = data.content?.map(b=>b.text||"").join("")||"";
+  if (!text.trim()) throw new Error("AI 응답이 비어 있습니다.");
+
+  return JSON.parse(text.replace(/```json|```/g,"").trim());
+  }
+  
   async function generatePDP() {
     setGenerating(true); setGenError(null); setPdpData(null);
     try {
