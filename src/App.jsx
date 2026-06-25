@@ -108,7 +108,10 @@ export default function ProGenesis() {
       const data = await res.json();
       if (Array.isArray(data)) {
         setCustomOSSP(data.map(o => ({
-          id: o.id, label: o.label, desc: o.description || '',
+          id: o.id,
+          label: o.name,                 // UI는 label 사용 → DB의 name 매핑
+          version: o.version || '',
+          desc: o.description || '',
           phases: Array.isArray(o.phases) ? o.phases : [],
           custom: true,
         })));
@@ -116,16 +119,18 @@ export default function ProGenesis() {
     } catch (e) { console.error(e); }
   }
 
-  async function addOSSP({ label, description, phases }) {
+  async function addOSSP({ name, version, description, phases }) {
     const res = await fetch('/api/ossp', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label, description, phases }),
+      body: JSON.stringify({ name, version, description, phases }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || '등록에 실패했습니다.');
     }
+    const created = await res.json();
     await fetchOSSP();
+    return created;   // 생성된 OSSP(id 포함) 반환 → 파일 업로드에 사용
   }
 
   async function deleteOSSP(id) {
@@ -673,15 +678,129 @@ function ProjectDetail({ project, nav, onDelete }) {
   );
 }
 
+const OSSP_ASSET_CATEGORIES = [
+  "개요서","절차서","산출물템플릿","기법",
+  "체크리스트","테일러링가이드","산출물흐름도","교육교재",
+];
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(",")[1]);
+    r.onerror = () => reject(new Error("파일 읽기 실패"));
+    r.readAsDataURL(file);
+  });
+}
+
+// 한 OSSP의 8가지 자산 파일 관리 패널
+function OSSPAssets({ osspId }) {
+  const [files, setFiles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(null);   // 업로드 중인 category
+  const [err, setErr] = useState(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/ossp-files?ossp_id=${osspId}`);
+      const data = await res.json();
+      setFiles(Array.isArray(data) ? data : []);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, [osspId]);
+
+  async function upload(category, file) {
+    if (!file) return;
+    setBusy(category); setErr(null);
+    try {
+      const data_base64 = await fileToBase64(file);
+      const res = await fetch("/api/ossp-files", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ossp_id: osspId, category,
+          file_name: file.name, file_type: file.type, data_base64,
+        }),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(()=>({}));
+        throw new Error(e.error || "업로드 실패");
+      }
+      await load();
+    } catch (e) { setErr(e.message); }
+    setBusy(null);
+  }
+
+  async function download(f) {
+    try {
+      const res = await fetch(`/api/ossp-files?path=${encodeURIComponent(f.file_url)}`);
+      const data = await res.json();
+      if (data.url) window.open(data.url, "_blank");
+      else setErr("다운로드 링크 발급 실패");
+    } catch (e) { setErr(e.message); }
+  }
+
+  async function removeFile(f) {
+    if (!confirm(`'${f.file_name}'을(를) 삭제할까요?`)) return;
+    try {
+      await fetch(`/api/ossp-files?id=${f.id}&path=${encodeURIComponent(f.file_url)}`, { method: "DELETE" });
+      await load();
+    } catch (e) { setErr(e.message); }
+  }
+
+  const byCat = {};
+  files.forEach(f => { (byCat[f.category] = byCat[f.category] || []).push(f); });
+
+  return (
+    <div style={{ marginTop:14, paddingTop:14, borderTop:`1px solid ${T.border}` }}>
+      <div style={{ fontSize:12, fontWeight:700, color:T.muted, marginBottom:10 }}>표준 프로세스 자산 (8종)</div>
+      {err && <div style={{ color:T.red, fontSize:11, marginBottom:8 }}>{err}</div>}
+      {loading ? <Spinner text="자산 불러오는 중…" /> : (
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10 }}>
+          {OSSP_ASSET_CATEGORIES.map(cat => (
+            <div key={cat} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 12px" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                <span style={{ fontSize:12, fontWeight:600 }}>{cat}</span>
+                <label style={{ fontSize:10, color:T.accent, cursor:"pointer", fontWeight:600 }}>
+                  {busy===cat ? "업로드 중…" : "+ 파일"}
+                  <input type="file" style={{ display:"none" }} disabled={busy===cat}
+                    onChange={e=>{ upload(cat, e.target.files[0]); e.target.value=""; }} />
+                </label>
+              </div>
+              {(byCat[cat]||[]).length === 0 ? (
+                <div style={{ fontSize:10, color:T.muted }}>등록된 파일 없음</div>
+              ) : (
+                <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                  {(byCat[cat]||[]).map(f => (
+                    <div key={f.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:6 }}>
+                      <span onClick={()=>download(f)} title={f.file_name}
+                        style={{ fontSize:11, color:T.accent, cursor:"pointer", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>
+                        {f.file_name}
+                      </span>
+                      <span onClick={()=>removeFile(f)} style={{ fontSize:11, color:T.red, cursor:"pointer", flexShrink:0 }}>×</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OSSPPage({ nav, customOSSP=[], onAdd, onDelete }) {
   const [showForm, setShowForm] = useState(false);
   const [label, setLabel] = useState("");
+  const [version, setVersion] = useState("");
   const [desc, setDesc] = useState("");
   const [phaseText, setPhaseText] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState(null);  // 펼쳐진 OSSP id
 
-  function reset() { setLabel(""); setDesc(""); setPhaseText(""); setError(null); }
+  function reset() { setLabel(""); setVersion(""); setDesc(""); setPhaseText(""); setError(null); }
 
   async function submit() {
     const phases = phaseText.split(",").map(s=>s.trim()).filter(Boolean);
@@ -689,45 +808,55 @@ function OSSPPage({ nav, customOSSP=[], onAdd, onDelete }) {
     if (phases.length === 0) { setError("단계를 1개 이상 입력하세요. (쉼표로 구분)"); return; }
     setSaving(true); setError(null);
     try {
-      await onAdd({ label: label.trim(), description: desc.trim(), phases });
+      await onAdd({ name: label.trim(), version: version.trim(), description: desc.trim(), phases });
       reset(); setShowForm(false);
     } catch(e) { setError(e.message); }
     setSaving(false);
   }
 
-  const renderCard = (o, deletable) => (
-    <Card key={o.id} style={{ padding:18 }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
-        <div>
-          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
-            <span style={{ fontSize:16, fontWeight:700 }}>{o.label}</span>
-            {deletable && <Badge color={T.green}>사내</Badge>}
+  const renderCard = (o, deletable) => {
+    const isOpen = expanded === o.id;
+    return (
+      <Card key={o.id} style={{ padding:18 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
+          <div>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
+              <span style={{ fontSize:16, fontWeight:700 }}>{o.label}</span>
+              {o.version && <Badge color={T.accent}>{o.version}</Badge>}
+              {deletable && <Badge color={T.green}>사내</Badge>}
+            </div>
+            <div style={{ fontSize:12, color:T.muted }}>{o.desc}</div>
           </div>
-          <div style={{ fontSize:12, color:T.muted }}>{o.desc}</div>
-        </div>
-        <div style={{ display:"flex", gap:8 }}>
-          <Btn variant="outline" onClick={()=>nav("new_project")} style={{ fontSize:11, padding:"5px 10px" }}>시작</Btn>
-          {deletable && (
-            <Btn variant="outline" onClick={()=>{ if(confirm(`'${o.label}'을(를) 삭제할까요?`)) onDelete(o.id); }} style={{ fontSize:11, padding:"5px 10px", color:T.red, borderColor:T.red+"55" }}>삭제</Btn>
-          )}
-        </div>
-      </div>
-      <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-        {o.phases.map((ph,i)=>(
-          <div key={ph+i} style={{ display:"flex", alignItems:"center", gap:4 }}>
-            <div style={{ padding:"4px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, fontSize:11 }}><span style={{ color:T.accent, marginRight:4 }}>{i+1}.</span>{ph}</div>
-            {i<o.phases.length-1 && <span style={{ color:T.border, fontSize:10 }}>→</span>}
+          <div style={{ display:"flex", gap:8 }}>
+            {deletable && (
+              <Btn variant="outline" onClick={()=>setExpanded(isOpen ? null : o.id)} style={{ fontSize:11, padding:"5px 10px" }}>
+                {isOpen ? "자산 닫기" : "자산 관리"}
+              </Btn>
+            )}
+            <Btn variant="outline" onClick={()=>nav("new_project")} style={{ fontSize:11, padding:"5px 10px" }}>시작</Btn>
+            {deletable && (
+              <Btn variant="outline" onClick={()=>{ if(confirm(`'${o.label}'을(를) 삭제할까요? 등록된 파일도 함께 삭제됩니다.`)) onDelete(o.id); }} style={{ fontSize:11, padding:"5px 10px", color:T.red, borderColor:T.red+"55" }}>삭제</Btn>
+            )}
           </div>
-        ))}
-      </div>
-    </Card>
-  );
+        </div>
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+          {o.phases.map((ph,i)=>(
+            <div key={ph+i} style={{ display:"flex", alignItems:"center", gap:4 }}>
+              <div style={{ padding:"4px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, fontSize:11 }}><span style={{ color:T.accent, marginRight:4 }}>{i+1}.</span>{ph}</div>
+              {i<o.phases.length-1 && <span style={{ color:T.border, fontSize:10 }}>→</span>}
+            </div>
+          ))}
+        </div>
+        {deletable && isOpen && <OSSPAssets osspId={o.id} />}
+      </Card>
+    );
+  };
 
   return (
     <div style={{ padding:"16px", maxWidth:900, margin:"0 auto" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
         <button onClick={()=>nav("dashboard")} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:20 }}>←</button>
-        <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>OSSP 라이브러리</h1><p style={{ fontSize:11, color:T.muted }}>지원되는 개발 방법론 및 단계 구성</p></div>
+        <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>OSSP 라이브러리</h1><p style={{ fontSize:11, color:T.muted }}>조직 표준 프로세스 및 자산 구성</p></div>
         <Btn variant="primary" onClick={()=>{ setShowForm(v=>!v); reset(); }} style={{ fontSize:12, padding:"7px 14px" }}>{showForm ? "취소" : "+ OSSP 등록"}</Btn>
       </div>
 
@@ -735,7 +864,8 @@ function OSSPPage({ nav, customOSSP=[], onAdd, onDelete }) {
         <Card style={{ padding:18, marginBottom:18, border:`1px solid ${T.accent}55` }}>
           <div style={{ fontSize:14, fontWeight:700, marginBottom:14 }}>회사 OSSP 등록</div>
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-            <Input label="이름" value={label} onChange={setLabel} placeholder="예: 사내 표준 V-Model" />
+            <Input label="이름" value={label} onChange={setLabel} placeholder="예: 정보공학 기반 SI 개발 방법론" />
+            <Input label="버전" value={version} onChange={setVersion} placeholder="예: V1.0" />
             <Input label="설명" value={desc} onChange={setDesc} placeholder="예: 검증 중심 단계별 개발" />
             <Input label="단계 (쉼표로 구분)" value={phaseText} onChange={setPhaseText} placeholder="요구분석, 설계, 구현, 단위테스트, 통합테스트, 인수" />
             {phaseText.trim() && (
@@ -743,6 +873,7 @@ function OSSPPage({ nav, customOSSP=[], onAdd, onDelete }) {
                 {phaseText.split(",").map(s=>s.trim()).filter(Boolean).map((ph,i)=><Badge key={i}>{i+1}. {ph}</Badge>)}
               </div>
             )}
+            <div style={{ fontSize:11, color:T.muted }}>※ 등록 후 카드의 '자산 관리'에서 개요서·절차서·템플릿 등 8종 파일을 올릴 수 있습니다.</div>
             {error && <div style={{ color:T.red, fontSize:12 }}>{error}</div>}
             <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
               <Btn variant="primary" onClick={submit} disabled={saving} style={{ fontSize:12, padding:"8px 16px" }}>{saving ? "저장 중…" : "저장"}</Btn>
