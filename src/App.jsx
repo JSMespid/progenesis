@@ -90,6 +90,7 @@ export default function ProGenesis() {
   const [wizardStep, setWizardStep] = useState(0);
   const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", startDate:"", endDate:"", pm:"" });
   const [selectedOSSP, setSelectedOSSP] = useState(null);
+  const [customOSSP, setCustomOSSP] = useState([]);
   const [tailoring, setTailoring] = useState({ doc_level:"표준", review_cycle:"격주", test_level:"통합", risk:"강화" });
   const [pdpData, setPdpData] = useState(null);
   const [wbsData, setWbsData] = useState(null);
@@ -99,7 +100,38 @@ export default function ProGenesis() {
 
   const nav = (p) => { setPage(p); setGenError(null); setMenuOpen(false); };
 
-  useEffect(() => { fetchProjects(); }, []);
+  useEffect(() => { fetchProjects(); fetchOSSP(); }, []);
+
+  async function fetchOSSP() {
+    try {
+      const res = await fetch('/api/ossp');
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setCustomOSSP(data.map(o => ({
+          id: o.id, label: o.label, desc: o.description || '',
+          phases: Array.isArray(o.phases) ? o.phases : [],
+          custom: true,
+        })));
+      }
+    } catch (e) { console.error(e); }
+  }
+
+  async function addOSSP({ label, description, phases }) {
+    const res = await fetch('/api/ossp', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label, description, phases }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || '등록에 실패했습니다.');
+    }
+    await fetchOSSP();
+  }
+
+  async function deleteOSSP(id) {
+    await fetch(`/api/ossp?id=${id}`, { method: 'DELETE' });
+    await fetchOSSP();
+  }
 
   async function fetchProjects() {
     setLoadingProjects(true);
@@ -199,9 +231,9 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
       pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError}
       onGeneratePDP={generatePDP} onGenerateWBS={generateWBS} onGenerateDeliverables={generateDeliverables}
-      onFinish={finishProject} nav={nav} />,
+      onFinish={finishProject} nav={nav} customOSSP={customOSSP} />,
     project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} />,
-    ossp: <OSSPPage nav={nav} />,
+    ossp: <OSSPPage nav={nav} customOSSP={customOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
   };
 
   const navItems = [{id:"dashboard",icon:"⊞",label:"대시보드"},{id:"new_project",icon:"+",label:"새 프로젝트"},{id:"ossp",icon:"◈",label:"OSSP 라이브러리"}];
@@ -333,7 +365,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject }) {
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onGenerateWBS, onGenerateDeliverables, onFinish, nav }) {
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onGenerateWBS, onGenerateDeliverables, onFinish, nav, customOSSP }) {
   const steps = ["기본정보","OSSP","테일러링","PDP","WBS","산출물","완료"];
   const canNext = [form.name&&form.client&&form.startDate&&form.endDate&&form.pm, !!selectedOSSP, true, !!pdpData, !!wbsData, !!deliverablesData, true];
   return (
@@ -355,7 +387,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       </div>
       <Card style={{ padding:20, minHeight:300, marginBottom:16 }}>
         {step===0 && <StepInfo form={form} setForm={setForm} />}
-        {step===1 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} />}
+        {step===1 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} />}
         {step===2 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===3 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} />}
         {step===4 && <StepWBS wbsData={wbsData} generating={generating} genError={genError} onGenerate={onGenerateWBS} />}
@@ -387,15 +419,19 @@ function StepInfo({ form, setForm }) {
   );
 }
 
-function StepOSSP({ selected, setSelected }) {
+function StepOSSP({ selected, setSelected, customOSSP=[] }) {
+  const options = [...OSSP_OPTIONS, ...customOSSP];
   return (
     <div>
       <h2 style={{ fontSize:15, fontWeight:600, marginBottom:6 }}>OSSP 방법론 선택</h2>
       <p style={{ fontSize:12, color:T.muted, marginBottom:16 }}>프로젝트에 적합한 개발 방법론을 선택하세요.</p>
       <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-        {OSSP_OPTIONS.map(o=>(
+        {options.map(o=>(
           <div key={o.id} onClick={()=>setSelected(o)} style={{ padding:16, borderRadius:12, border:`2px solid ${selected?.id===o.id?T.accent:T.border}`, background:selected?.id===o.id?T.accentGlow:T.bg, cursor:"pointer", transition:"all .2s" }}>
-            <div style={{ fontWeight:700, fontSize:14, marginBottom:4, color:selected?.id===o.id?T.accent:T.text }}>{o.label}</div>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+              <span style={{ fontWeight:700, fontSize:14, color:selected?.id===o.id?T.accent:T.text }}>{o.label}</span>
+              {o.custom && <Badge color={T.green}>사내</Badge>}
+            </div>
             <div style={{ fontSize:11, color:T.muted, marginBottom:10 }}>{o.desc}</div>
             <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>{o.phases.map(ph=><Badge key={ph} color={selected?.id===o.id?T.accent:T.muted}>{ph}</Badge>)}</div>
           </div>
@@ -637,30 +673,93 @@ function ProjectDetail({ project, nav, onDelete }) {
   );
 }
 
-function OSSPPage({ nav }) {
+function OSSPPage({ nav, customOSSP=[], onAdd, onDelete }) {
+  const [showForm, setShowForm] = useState(false);
+  const [label, setLabel] = useState("");
+  const [desc, setDesc] = useState("");
+  const [phaseText, setPhaseText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  function reset() { setLabel(""); setDesc(""); setPhaseText(""); setError(null); }
+
+  async function submit() {
+    const phases = phaseText.split(",").map(s=>s.trim()).filter(Boolean);
+    if (!label.trim()) { setError("이름을 입력하세요."); return; }
+    if (phases.length === 0) { setError("단계를 1개 이상 입력하세요. (쉼표로 구분)"); return; }
+    setSaving(true); setError(null);
+    try {
+      await onAdd({ label: label.trim(), description: desc.trim(), phases });
+      reset(); setShowForm(false);
+    } catch(e) { setError(e.message); }
+    setSaving(false);
+  }
+
+  const renderCard = (o, deletable) => (
+    <Card key={o.id} style={{ padding:18 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
+        <div>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
+            <span style={{ fontSize:16, fontWeight:700 }}>{o.label}</span>
+            {deletable && <Badge color={T.green}>사내</Badge>}
+          </div>
+          <div style={{ fontSize:12, color:T.muted }}>{o.desc}</div>
+        </div>
+        <div style={{ display:"flex", gap:8 }}>
+          <Btn variant="outline" onClick={()=>nav("new_project")} style={{ fontSize:11, padding:"5px 10px" }}>시작</Btn>
+          {deletable && (
+            <Btn variant="outline" onClick={()=>{ if(confirm(`'${o.label}'을(를) 삭제할까요?`)) onDelete(o.id); }} style={{ fontSize:11, padding:"5px 10px", color:T.red, borderColor:T.red+"55" }}>삭제</Btn>
+          )}
+        </div>
+      </div>
+      <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+        {o.phases.map((ph,i)=>(
+          <div key={ph+i} style={{ display:"flex", alignItems:"center", gap:4 }}>
+            <div style={{ padding:"4px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, fontSize:11 }}><span style={{ color:T.accent, marginRight:4 }}>{i+1}.</span>{ph}</div>
+            {i<o.phases.length-1 && <span style={{ color:T.border, fontSize:10 }}>→</span>}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+
   return (
     <div style={{ padding:"16px", maxWidth:900, margin:"0 auto" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
         <button onClick={()=>nav("dashboard")} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:20 }}>←</button>
-        <div><h1 style={{ fontSize:17, fontWeight:700 }}>OSSP 라이브러리</h1><p style={{ fontSize:11, color:T.muted }}>지원되는 개발 방법론 및 단계 구성</p></div>
+        <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>OSSP 라이브러리</h1><p style={{ fontSize:11, color:T.muted }}>지원되는 개발 방법론 및 단계 구성</p></div>
+        <Btn variant="primary" onClick={()=>{ setShowForm(v=>!v); reset(); }} style={{ fontSize:12, padding:"7px 14px" }}>{showForm ? "취소" : "+ OSSP 등록"}</Btn>
       </div>
+
+      {showForm && (
+        <Card style={{ padding:18, marginBottom:18, border:`1px solid ${T.accent}55` }}>
+          <div style={{ fontSize:14, fontWeight:700, marginBottom:14 }}>회사 OSSP 등록</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            <Input label="이름" value={label} onChange={setLabel} placeholder="예: 사내 표준 V-Model" />
+            <Input label="설명" value={desc} onChange={setDesc} placeholder="예: 검증 중심 단계별 개발" />
+            <Input label="단계 (쉼표로 구분)" value={phaseText} onChange={setPhaseText} placeholder="요구분석, 설계, 구현, 단위테스트, 통합테스트, 인수" />
+            {phaseText.trim() && (
+              <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                {phaseText.split(",").map(s=>s.trim()).filter(Boolean).map((ph,i)=><Badge key={i}>{i+1}. {ph}</Badge>)}
+              </div>
+            )}
+            {error && <div style={{ color:T.red, fontSize:12 }}>{error}</div>}
+            <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
+              <Btn variant="primary" onClick={submit} disabled={saving} style={{ fontSize:12, padding:"8px 16px" }}>{saving ? "저장 중…" : "저장"}</Btn>
+            </div>
+          </div>
+        </Card>
+      )}
+
       <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-        {OSSP_OPTIONS.map(o=>(
-          <Card key={o.id} style={{ padding:18 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
-              <div><div style={{ fontSize:16, fontWeight:700, marginBottom:3 }}>{o.label}</div><div style={{ fontSize:12, color:T.muted }}>{o.desc}</div></div>
-              <Btn variant="outline" onClick={()=>nav("new_project")} style={{ fontSize:11, padding:"5px 10px" }}>시작</Btn>
-            </div>
-            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-              {o.phases.map((ph,i)=>(
-                <div key={ph} style={{ display:"flex", alignItems:"center", gap:4 }}>
-                  <div style={{ padding:"4px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, fontSize:11 }}><span style={{ color:T.accent, marginRight:4 }}>{i+1}.</span>{ph}</div>
-                  {i<o.phases.length-1 && <span style={{ color:T.border, fontSize:10 }}>→</span>}
-                </div>
-              ))}
-            </div>
-          </Card>
-        ))}
+        {customOSSP.length > 0 && (
+          <>
+            <div style={{ fontSize:12, fontWeight:600, color:T.muted, marginTop:4 }}>회사 등록 OSSP</div>
+            {customOSSP.map(o=>renderCard(o, true))}
+            <div style={{ fontSize:12, fontWeight:600, color:T.muted, marginTop:8 }}>기본 제공</div>
+          </>
+        )}
+        {OSSP_OPTIONS.map(o=>renderCard(o, false))}
       </div>
     </div>
   );
