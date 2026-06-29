@@ -38,7 +38,7 @@ export default async function handler(req, res) {
       return res.status(200).json(data);
     }
 
-    // ── 서명 URL 발급: GET ?path=... (비공개 버킷 다운로드용) ──────
+    // ── 서명 URL 발급: GET ?path=...&name=... (비공개 버킷 다운로드용) ──
     if (req.method === 'GET' && req.query.path) {
       const r = await fetch(
         `${SUPABASE_URL}/storage/v1/object/sign/${BUCKET}/${req.query.path}`,
@@ -56,7 +56,9 @@ export default async function handler(req, res) {
       if (data.error || !data.signedURL) {
         return res.status(400).json({ error: data.error || '서명 URL 발급 실패' });
       }
-      return res.status(200).json({ url: `${SUPABASE_URL}/storage/v1${data.signedURL}` });
+      // 원본(한글) 파일명으로 다운로드되도록 download 파라미터 부착
+      const dl = req.query.name ? `&download=${encodeURIComponent(req.query.name)}` : '';
+      return res.status(200).json({ url: `${SUPABASE_URL}/storage/v1${data.signedURL}${dl}` });
     }
 
     // ── 업로드: POST { ossp_id, category, file_name, file_type, data_base64 } ──
@@ -71,9 +73,12 @@ export default async function handler(req, res) {
 
       // base64 → 바이너리
       const buffer = Buffer.from(data_base64, 'base64');
-      // 충돌 방지용 경로: ossp_id/타임스탬프_파일명
-      const safeName = file_name.replace(/[^\w.\-가-힣]/g, '_');
-      const storagePath = `${ossp_id}/${Date.now()}_${safeName}`;
+      // Storage key는 ASCII만 허용 → 확장자만 보존하고 랜덤 키 사용.
+      // 한글 원본 파일명은 DB(file_name)에만 저장하여 표시/다운로드에 사용.
+      const dot = file_name.lastIndexOf('.');
+      const ext = dot > -1 ? file_name.slice(dot).toLowerCase().replace(/[^.\w]/g, '') : '';
+      const rand = Math.random().toString(36).slice(2, 10);
+      const storagePath = `${ossp_id}/${Date.now()}_${rand}${ext}`;
 
       // Storage 업로드
       const up = await fetch(
