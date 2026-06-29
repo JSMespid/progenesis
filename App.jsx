@@ -692,6 +692,58 @@ function fileToBase64(file) {
   });
 }
 
+// 드롭된 항목(파일/폴더)을 재귀적으로 읽어 File 배열로 변환.
+// 폴더 내부 파일에는 상대경로를 _relPath로 기록한다.
+function readEntry(entry, path = "") {
+  return new Promise((resolve) => {
+    if (entry.isFile) {
+      entry.file(
+        (file) => {
+          try { file._relPath = path + file.name; } catch (_) {}
+          resolve([file]);
+        },
+        () => resolve([])
+      );
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const all = [];
+      const readBatch = () => {
+        reader.readEntries(async (entries) => {
+          if (!entries.length) {
+            const nested = await Promise.all(
+              all.map((e) => readEntry(e, path + entry.name + "/"))
+            );
+            resolve(nested.flat());
+          } else {
+            all.push(...entries);
+            readBatch();   // 폴더에 항목이 많으면 여러 번 호출해야 함
+          }
+        }, () => resolve([]));
+      };
+      readBatch();
+    } else {
+      resolve([]);
+    }
+  });
+}
+
+// DataTransfer에서 파일+폴더를 모두 수집
+async function collectDroppedFiles(dataTransfer) {
+  const items = dataTransfer.items;
+  // webkitGetAsEntry 지원 시 폴더까지 재귀 수집
+  if (items && items.length && items[0].webkitGetAsEntry) {
+    const entries = [];
+    for (let i = 0; i < items.length; i++) {
+      const entry = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+      if (entry) entries.push(entry);
+    }
+    const groups = await Promise.all(entries.map((e) => readEntry(e)));
+    return groups.flat();
+  }
+  // 미지원 브라우저: 평면 파일 목록만
+  return Array.from(dataTransfer.files || []);
+}
+
 // 한 OSSP의 8가지 자산 파일 관리 패널
 function OSSPAssets({ osspId }) {
   const [files, setFiles] = useState([]);
@@ -699,6 +751,20 @@ function OSSPAssets({ osspId }) {
   const [busy, setBusy] = useState(null);   // 업로드 중인 category
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [err, setErr] = useState(null);
+  const [dragCat, setDragCat] = useState(null);  // 드래그 오버 중인 category
+
+  async function onDrop(category, e) {
+    e.preventDefault();
+    setDragCat(null);
+    if (busy) return;
+    try {
+      const collected = await collectDroppedFiles(e.dataTransfer);
+      if (collected.length === 0) { setErr("올릴 파일을 찾지 못했습니다."); return; }
+      await uploadMany(category, collected);
+    } catch (ex) {
+      setErr(ex.message || "드롭 처리 실패");
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -722,9 +788,11 @@ function OSSPAssets({ osspId }) {
       const file = arr[i];
       try {
         const data_base64 = await fileToBase64(file);
-        // 폴더 업로드 시 상대경로(webkitRelativePath)를 파일명 앞에 붙여 보존
-        const rel = file.webkitRelativePath && file.webkitRelativePath !== file.name
-          ? file.webkitRelativePath : file.name;
+        // 상대경로 보존: + 폴더 버튼(webkitRelativePath) 또는 드롭(_relPath)
+        const rel = (file._relPath && file._relPath !== file.name)
+          ? file._relPath
+          : (file.webkitRelativePath && file.webkitRelativePath !== file.name
+              ? file.webkitRelativePath : file.name);
         const res = await fetch("/api/ossp-files", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -774,7 +842,15 @@ function OSSPAssets({ osspId }) {
       {loading ? <Spinner text="자산 불러오는 중…" /> : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10 }}>
           {OSSP_ASSET_CATEGORIES.map(cat => (
-            <div key={cat} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 12px" }}>
+            <div key={cat}
+              onDragOver={e=>{ e.preventDefault(); if(!busy) setDragCat(cat); }}
+              onDragLeave={e=>{ e.preventDefault(); setDragCat(c=>c===cat?null:c); }}
+              onDrop={e=>onDrop(cat, e)}
+              style={{
+                background: dragCat===cat ? T.accentGlow : T.bg,
+                border:`1px ${dragCat===cat ? "dashed" : "solid"} ${dragCat===cat ? T.accent : T.border}`,
+                borderRadius:8, padding:"10px 12px", transition:"all .15s",
+              }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                 <span style={{ fontSize:12, fontWeight:600 }}>{cat}</span>
                 {busy===cat ? (
@@ -797,8 +873,10 @@ function OSSPAssets({ osspId }) {
                   </span>
                 )}
               </div>
-              {(byCat[cat]||[]).length === 0 ? (
-                <div style={{ fontSize:10, color:T.muted }}>등록된 파일 없음</div>
+              {dragCat===cat ? (
+                <div style={{ fontSize:11, color:T.accent, fontWeight:600, padding:"6px 0" }}>여기에 놓으면 업로드됩니다</div>
+              ) : (byCat[cat]||[]).length === 0 ? (
+                <div style={{ fontSize:10, color:T.muted }}>등록된 파일 없음 · 파일·폴더를 끌어다 놓으세요</div>
               ) : (
                 <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
                   {(byCat[cat]||[]).map(f => (
