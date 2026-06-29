@@ -697,6 +697,7 @@ function OSSPAssets({ osspId }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null);   // 업로드 중인 category
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [err, setErr] = useState(null);
 
   async function load() {
@@ -710,25 +711,40 @@ function OSSPAssets({ osspId }) {
   }
   useEffect(() => { load(); }, [osspId]);
 
-  async function upload(category, file) {
-    if (!file) return;
+  // 여러 파일을 순차 업로드 (폴더 업로드 포함)
+  async function uploadMany(category, fileList) {
+    const arr = Array.from(fileList || []).filter(f => f && f.size >= 0);
+    if (arr.length === 0) return;
     setBusy(category); setErr(null);
-    try {
-      const data_base64 = await fileToBase64(file);
-      const res = await fetch("/api/ossp-files", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ossp_id: osspId, category,
-          file_name: file.name, file_type: file.type, data_base64,
-        }),
-      });
-      if (!res.ok) {
-        const e = await res.json().catch(()=>({}));
-        throw new Error(e.error || "업로드 실패");
+    setProgress({ done: 0, total: arr.length });
+    const failed = [];
+    for (let i = 0; i < arr.length; i++) {
+      const file = arr[i];
+      try {
+        const data_base64 = await fileToBase64(file);
+        // 폴더 업로드 시 상대경로(webkitRelativePath)를 파일명 앞에 붙여 보존
+        const rel = file.webkitRelativePath && file.webkitRelativePath !== file.name
+          ? file.webkitRelativePath : file.name;
+        const res = await fetch("/api/ossp-files", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ossp_id: osspId, category,
+            file_name: rel, file_type: file.type, data_base64,
+          }),
+        });
+        if (!res.ok) {
+          const e = await res.json().catch(()=>({}));
+          throw new Error(e.error || "업로드 실패");
+        }
+      } catch (e) {
+        failed.push(`${file.name}: ${e.message}`);
       }
-      await load();
-    } catch (e) { setErr(e.message); }
+      setProgress({ done: i + 1, total: arr.length });
+    }
+    if (failed.length) setErr(`${failed.length}개 실패 — ${failed.slice(0,3).join(" / ")}${failed.length>3?" …":""}`);
+    await load();
     setBusy(null);
+    setProgress({ done: 0, total: 0 });
   }
 
   async function download(f) {
@@ -761,11 +777,25 @@ function OSSPAssets({ osspId }) {
             <div key={cat} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 12px" }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                 <span style={{ fontSize:12, fontWeight:600 }}>{cat}</span>
-                <label style={{ fontSize:10, color:T.accent, cursor:"pointer", fontWeight:600 }}>
-                  {busy===cat ? "업로드 중…" : "+ 파일"}
-                  <input type="file" style={{ display:"none" }} disabled={busy===cat}
-                    onChange={e=>{ upload(cat, e.target.files[0]); e.target.value=""; }} />
-                </label>
+                {busy===cat ? (
+                  <span style={{ fontSize:10, color:T.accent, fontWeight:600 }}>
+                    업로드 중… {progress.done}/{progress.total}
+                  </span>
+                ) : (
+                  <span style={{ display:"flex", gap:8 }}>
+                    <label style={{ fontSize:10, color:T.accent, cursor:"pointer", fontWeight:600 }}>
+                      + 파일
+                      <input type="file" multiple style={{ display:"none" }} disabled={!!busy}
+                        onChange={e=>{ uploadMany(cat, e.target.files); e.target.value=""; }} />
+                    </label>
+                    <label style={{ fontSize:10, color:T.muted, cursor:"pointer", fontWeight:600 }}>
+                      + 폴더
+                      <input type="file" multiple style={{ display:"none" }} disabled={!!busy}
+                        ref={el=>{ if(el){ el.webkitdirectory=true; el.directory=true; } }}
+                        onChange={e=>{ uploadMany(cat, e.target.files); e.target.value=""; }} />
+                    </label>
+                  </span>
+                )}
               </div>
               {(byCat[cat]||[]).length === 0 ? (
                 <div style={{ fontSize:10, color:T.muted }}>등록된 파일 없음</div>
