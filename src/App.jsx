@@ -178,7 +178,19 @@ export default function ProGenesis() {
   const text = data.content?.map(b=>b.text||"").join("")||"";
   if (!text.trim()) throw new Error("AI 응답이 비어 있습니다.");
 
-  return JSON.parse(text.replace(/```json|```/g,"").trim());
+  // JSON 파싱 방어: 모델이 마크다운/설명을 섞어도 JSON 블록만 추출
+  const cleaned = text.replace(/```json|```/g,"").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // 첫 '{'부터 짝이 맞는 마지막 '}'까지만 잘라서 재시도
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start > -1 && end > start) {
+      try { return JSON.parse(cleaned.slice(start, end + 1)); } catch (_) {}
+    }
+    throw new Error("AI 응답을 JSON으로 해석할 수 없습니다.");
+  }
   }
   
   async function recommendSDLC() {
