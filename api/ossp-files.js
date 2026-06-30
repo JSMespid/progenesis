@@ -106,14 +106,28 @@ export default async function handler(req, res) {
             },
           }
         );
-        const data = await r.json();
-        if (data.error || !data.url) {
-          return res.status(400).json({ error: data.error || '업로드 URL 발급 실패' });
+        const rawText = await r.text();
+        let data = {};
+        try { data = rawText ? JSON.parse(rawText) : {}; } catch { /* keep rawText */ }
+
+        // 발급 실패: Supabase 원문을 그대로 노출(에러 객체에 message가 없을 수 있음)
+        if (!r.ok) {
+          const msg = data.message || data.error || rawText || `발급 실패 (status ${r.status})`;
+          return res.status(400).json({ error: `업로드 URL 발급 실패: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` });
         }
-        // data.url 예: /object/upload/sign/ossp-files/<path>?token=...
+
+        // 응답 필드는 Supabase 버전에 따라 url 또는 signedUrl
+        const signedPath = data.url || data.signedUrl || data.signedURL;
+        if (!signedPath) {
+          return res.status(400).json({ error: `업로드 URL 발급 실패: 예상치 못한 응답 ${rawText.slice(0, 200)}` });
+        }
+        // signedPath 예: /object/upload/sign/ossp-files/<path>?token=...
+        const fullUrl = signedPath.startsWith('http')
+          ? signedPath
+          : `${SUPABASE_URL}/storage/v1${signedPath.startsWith('/') ? '' : '/'}${signedPath}`;
         return res.status(200).json({
           storage_path: storagePath,
-          upload_url: `${SUPABASE_URL}/storage/v1${data.url}`,
+          upload_url: fullUrl,
           token: data.token || null,
         });
       }
