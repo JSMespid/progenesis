@@ -683,6 +683,70 @@ const OSSP_ASSET_CATEGORIES = [
   "체크리스트","테일러링가이드","산출물흐름도","교육교재",
 ];
 
+// 평평한 파일 목록(file_name에 "폴더/하위/파일.ext" 경로 포함 가능)을
+// 폴더 트리 구조로 변환한다.
+function buildFileTree(files) {
+  const root = { folders: {}, files: [] };
+  for (const f of files) {
+    const parts = String(f.file_name || "").split("/");
+    const fileName = parts.pop();           // 마지막은 실제 파일명
+    let node = root;
+    for (const part of parts) {             // 중간 경로는 폴더
+      if (!part) continue;
+      node.folders[part] = node.folders[part] || { folders: {}, files: [] };
+      node = node.folders[part];
+    }
+    node.files.push({ ...f, _displayName: fileName });
+  }
+  return root;
+}
+
+// 폴더 트리를 접고 펴며 렌더링. 폴더 경로별 펼침 상태는 상위에서 관리.
+function FileTree({ node, depth, openMap, toggle, onDownload, onRemove, pathKey="" }) {
+  const folderNames = Object.keys(node.folders).sort((a,b)=>a.localeCompare(b,'ko'));
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+      {folderNames.map(name => {
+        const childPath = pathKey ? `${pathKey}/${name}` : name;
+        const isOpen = openMap[childPath] !== false;  // 기본 펼침
+        const child = node.folders[name];
+        const count = countFiles(child);
+        return (
+          <div key={childPath}>
+            <div onClick={()=>toggle(childPath)}
+              style={{ display:"flex", alignItems:"center", gap:4, cursor:"pointer",
+                paddingLeft: depth*12, fontSize:11, color:T.text, fontWeight:600 }}>
+              <span style={{ color:T.muted, fontSize:9 }}>{isOpen ? "▼" : "▶"}</span>
+              <span style={{ color:T.amber }}>📁</span>
+              <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{name}</span>
+              <span style={{ color:T.muted, fontWeight:400, fontSize:9 }}>({count})</span>
+            </div>
+            {isOpen && (
+              <FileTree node={child} depth={depth+1} openMap={openMap} toggle={toggle}
+                onDownload={onDownload} onRemove={onRemove} pathKey={childPath} />
+            )}
+          </div>
+        );
+      })}
+      {node.files.map(f => (
+        <div key={f.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:6, paddingLeft: depth*12 + 14 }}>
+          <span onClick={()=>onDownload(f)} title={f.file_name}
+            style={{ fontSize:11, color:T.accent, cursor:"pointer", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>
+            {f._displayName}
+          </span>
+          <span onClick={()=>onRemove(f)} style={{ fontSize:11, color:T.red, cursor:"pointer", flexShrink:0 }}>×</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function countFiles(node) {
+  let n = node.files.length;
+  for (const k of Object.keys(node.folders)) n += countFiles(node.folders[k]);
+  return n;
+}
+
 // 드롭된 항목(파일/폴더)을 재귀적으로 읽어 File 배열로 변환.
 // 폴더 내부 파일에는 상대경로를 _relPath로 기록한다.
 function readEntry(entry, path = "") {
@@ -743,6 +807,8 @@ function OSSPAssets({ osspId }) {
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [err, setErr] = useState(null);
   const [dragCat, setDragCat] = useState(null);  // 드래그 오버 중인 category
+  const [openMap, setOpenMap] = useState({});    // 폴더 경로별 펼침 상태
+  const toggleFolder = (path) => setOpenMap(m => ({ ...m, [path]: m[path] === false ? true : false }));
 
   async function onDrop(category, e) {
     e.preventDefault();
@@ -894,17 +960,15 @@ function OSSPAssets({ osspId }) {
               ) : (byCat[cat]||[]).length === 0 ? (
                 <div style={{ fontSize:10, color:T.muted }}>등록된 파일 없음 · 파일·폴더를 끌어다 놓으세요</div>
               ) : (
-                <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-                  {(byCat[cat]||[]).map(f => (
-                    <div key={f.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:6 }}>
-                      <span onClick={()=>download(f)} title={f.file_name}
-                        style={{ fontSize:11, color:T.accent, cursor:"pointer", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>
-                        {f.file_name}
-                      </span>
-                      <span onClick={()=>removeFile(f)} style={{ fontSize:11, color:T.red, cursor:"pointer", flexShrink:0 }}>×</span>
-                    </div>
-                  ))}
-                </div>
+                <FileTree
+                  node={buildFileTree(byCat[cat]||[])}
+                  depth={0}
+                  openMap={openMap}
+                  toggle={toggleFolder}
+                  onDownload={download}
+                  onRemove={removeFile}
+                  pathKey={cat}
+                />
               )}
             </div>
           ))}
