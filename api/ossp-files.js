@@ -95,12 +95,13 @@ export default async function handler(req, res) {
         }
         const storagePath = makeStoragePath(ossp_id, file_name);
         // Supabase Storage 서명된 업로드 URL 발급
+        // 주의: 본문이 없으므로 Content-Type: application/json 을 보내면 안 됨
+        //       (Supabase가 "Body cannot be empty" 로 거부함)
         const r = await fetch(
           `${SUPABASE_URL}/storage/v1/object/upload/sign/${BUCKET}/${storagePath}`,
           {
             method: 'POST',
             headers: {
-              'Content-Type': 'application/json',
               'apikey': SERVICE_KEY,
               'Authorization': `Bearer ${SERVICE_KEY}`,
             },
