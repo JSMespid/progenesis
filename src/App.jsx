@@ -248,10 +248,10 @@ export default function ProGenesis() {
     setLoadingProjects(false);
   }
 
-  async function callClaude(prompt, maxTokens=8000) {
+  async function callClaude(prompt, maxTokens=8000, model="claude-haiku-4-5-20251001") {
   const res = await fetch("/api/chat", {
     method:"POST", headers:{ "Content-Type":"application/json" },
-    body:JSON.stringify({ model:"claude-opus-4-8", max_tokens:maxTokens,
+    body:JSON.stringify({ model, max_tokens:maxTokens,
       system:"You are a project management expert. Always respond with valid JSON only, no markdown, no preamble. Keep string values concise to ensure the JSON is complete and not truncated.",
       messages:[{ role:"user", content:prompt }] }),
   });
