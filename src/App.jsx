@@ -669,7 +669,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===1 && <StepSDLC factors={sdlcFactors} setFactors={setSdlcFactors} selected={selectedSDLC} setSelected={setSelectedSDLC} recommendation={sdlcRecommendation} recommending={recommending} genError={genError} onRecommend={onRecommendSDLC} />}
         {step===2 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} sdlc={selectedSDLC} />}
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
-        {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} />}
+        {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} generating={generating} genError={genError} onGenerate={onGenerateWBS} />}
         {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
@@ -954,30 +954,153 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
   );
 }
 
-function StepPDP({ pdpData, generating, genError, onGenerate }) {
+function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, ossp, sdlc, form }) {
+  const scale = tailoring?.scale || "중형";
+  const method = tailoring?.method || "UML";
+  const excluded = tailoring?.excluded || {};
+  const applied = classifyDeliverables(scale, method);
+  const includedOptionalCodes = applied.filter(d=>!d.required && !excluded[d.code]).map(d=>d.code);
+  const PHASE_ORDER = ["요구정의","분석","설계","구축","운영전환"];
+
+  // 적용/제외 산출물 분류
+  const appliedList = applied.filter(d => d.required || !excluded[d.code]);
+  const excludedList = applied.filter(d => !d.required && excluded[d.code]);
+  const grouped = {};
+  appliedList.forEach(d => { (grouped[d.phase] = grouped[d.phase] || []).push(d); });
+
+  const docNo = `PDP-${(form?.client||"").replace(/\s/g,"").slice(0,4).toUpperCase()||"PRJ"}-${new Date().getFullYear()}`;
+  const today = new Date().toLocaleDateString("ko-KR");
+
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
-        <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>PDP 자동 생성</h2><p style={{ fontSize:11, color:T.muted }}>AI가 프로젝트 개발 계획서를 작성합니다.</p></div>
+        <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>PDP (테일러링결과서) 생성</h2><p style={{ fontSize:11, color:T.muted }}>OSSP를 테일러링가이드 기준으로 테일러링한 결과를 정식 문서로 작성합니다.</p></div>
         {!pdpData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ AI 생성</Btn>}
       </div>
-      {generating && <Spinner />}
+      {generating && <Spinner text="테일러링결과서 작성 중…" />}
       {genError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9 }}>{genError}</div>}
       {pdpData && (
-        <div style={{ display:"flex", flexDirection:"column", gap:10, animation:"fadeIn .4s" }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-            <Badge color={T.green}>✓ PDP 생성 완료</Badge>
+        <div style={{ display:"flex", flexDirection:"column", gap:0, animation:"fadeIn .4s" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+            <Badge color={T.green}>✓ 생성 완료</Badge>
             <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
           </div>
-          <Card style={{ padding:14, background:T.bg }}><div style={{ fontSize:11, color:T.muted, marginBottom:4, fontWeight:600 }}>목적</div><div style={{ fontSize:12, color:T.text, lineHeight:1.7 }}>{pdpData.overview?.purpose}</div></Card>
-          <Card style={{ padding:14, background:T.bg }}>
-            <div style={{ fontSize:11, color:T.muted, marginBottom:8, fontWeight:600 }}>일정 단계</div>
-            {pdpData.schedule?.phases?.map((ph,i)=><div key={i} style={{ fontSize:11, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}><span style={{ color:T.accent, marginRight:6 }}>■</span>{ph.phase} <span style={{ color:T.muted }}>({ph.start?.slice(5)}~{ph.end?.slice(5)})</span></div>)}
-          </Card>
+
+          {/* 문서 본체 (테일러링결과서 양식) */}
+          <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:20, maxHeight:520, overflowY:"auto" }}>
+            {/* 표지 */}
+            <div style={{ textAlign:"center", paddingBottom:16, borderBottom:`2px solid ${T.accent}` }}>
+              <div style={{ fontSize:18, fontWeight:700, letterSpacing:1 }}>프로젝트 정의 프로세스 (PDP)</div>
+              <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>테일러링결과서 · Tailoring Result</div>
+              <div style={{ fontSize:13, fontWeight:600, color:T.accent, marginTop:10 }}>{form?.name}</div>
+            </div>
+
+            {/* 문서 메타 */}
+            <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse", margin:"14px 0" }}>
+              <tbody>
+                {[["문서번호",docNo,"버전","V1.0"],
+                  ["고객사",form?.client||"-","작성일",today],
+                  ["기준 OSSP",ossp?.label||"-","SDLC",sdlc?.label||"-"]].map((row,i)=>(
+                  <tr key={i}>
+                    <td style={cellHead}>{row[0]}</td><td style={cell}>{row[1]}</td>
+                    <td style={cellHead}>{row[2]}</td><td style={cell}>{row[3]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* 승인란 */}
+            <div style={{ fontSize:12, fontWeight:700, margin:"14px 0 6px" }}>승인</div>
+            <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse" }}>
+              <tbody>
+                <tr>{["작성자","검토자","승인자"].map(r=><td key={r} style={{...cellHead, textAlign:"center"}}>{r}</td>)}</tr>
+                <tr>{["작성자","검토자","승인자"].map(r=><td key={r} style={{...cell, height:36, textAlign:"center", color:T.muted}}>(서명)</td>)}</tr>
+                <tr>{["작성자","검토자","승인자"].map(r=><td key={r} style={{...cell, textAlign:"center", color:T.muted}}>일자: ____</td>)}</tr>
+              </tbody>
+            </table>
+
+            {/* 1. 프로젝트 개요 */}
+            <SectionTitle n="1" title="프로젝트 개요" />
+            <div style={{ fontSize:12, color:T.text, lineHeight:1.7, marginBottom:6 }}>{pdpData.overview?.purpose}</div>
+            {pdpData.overview?.scope && <div style={{ fontSize:11, color:T.muted, lineHeight:1.6 }}><b>범위:</b> {pdpData.overview.scope}</div>}
+
+            {/* 2. 테일러링 기준 */}
+            <SectionTitle n="2" title="테일러링 기준" />
+            <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse" }}>
+              <tbody>
+                <tr><td style={cellHead}>프로젝트 규모</td><td style={cell}>{scale}</td><td style={cellHead}>설계방식</td><td style={cell}>{method}</td></tr>
+                <tr><td style={cellHead}>규모 판정 기준</td><td style={cell} colSpan={3}>투입 MM 기준 — (초)대형 600 초과 / 중형 125 초과 / 소형 125 이하</td></tr>
+              </tbody>
+            </table>
+
+            {/* 3. 산출물 테일러링 매트릭스 */}
+            <SectionTitle n="3" title={`산출물 테일러링 매트릭스 (적용 ${appliedList.length}건)`} />
+            <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
+              <thead>
+                <tr>{["단계","코드","산출물명","적용","설계방식"].map(h=><td key={h} style={{...cellHead, textAlign:"center"}}>{h}</td>)}</tr>
+              </thead>
+              <tbody>
+                {PHASE_ORDER.filter(ph=>grouped[ph]?.length).map(ph=>(
+                  grouped[ph].map((d,i)=>(
+                    <tr key={d.code}>
+                      {i===0 && <td style={{...cell, fontWeight:600, verticalAlign:"top"}} rowSpan={grouped[ph].length}>{ph}</td>}
+                      <td style={{...cell, fontFamily:"monospace"}}>{d.code}</td>
+                      <td style={cell}>{d.name}</td>
+                      <td style={{...cell, textAlign:"center"}}>
+                        <Badge color={d.required?T.accent:T.amber}>{d.required?"필수":"선택"}</Badge>
+                      </td>
+                      <td style={{...cell, textAlign:"center", color:T.muted}}>{d.method}</td>
+                    </tr>
+                  ))
+                ))}
+              </tbody>
+            </table>
+
+            {/* 4. 제외 산출물 */}
+            {excludedList.length > 0 && (
+              <>
+                <SectionTitle n="4" title={`제외 산출물 (${excludedList.length}건)`} />
+                <div style={{ fontSize:11, color:T.muted, lineHeight:1.7 }}>
+                  {excludedList.map(d=>`${d.code} ${d.name}`).join(" · ")}
+                </div>
+              </>
+            )}
+
+            {/* 5. 일정 */}
+            <SectionTitle n={excludedList.length>0?"5":"4"} title="추진 일정" />
+            {pdpData.schedule?.phases?.map((ph,i)=>(
+              <div key={i} style={{ fontSize:11, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
+                <span style={{ color:T.accent, marginRight:6 }}>■</span>{ph.phase}
+                <span style={{ color:T.muted }}> ({ph.start?.slice(5)}~{ph.end?.slice(5)})</span>
+                {ph.deliverable && <span style={{ color:T.muted }}> · {ph.deliverable}</span>}
+              </div>
+            ))}
+
+            {/* 6. 리스크 */}
+            {pdpData.risks?.length > 0 && (
+              <>
+                <SectionTitle n={excludedList.length>0?"6":"5"} title="주요 리스크" />
+                {pdpData.risks.map((r,i)=>(
+                  <div key={i} style={{ fontSize:11, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
+                    <Badge color={r.level==="상"?T.red:r.level==="중"?T.amber:T.muted}>{r.level}</Badge>
+                    <span style={{ marginLeft:6 }}>{r.description}</span>
+                    {r.mitigation && <div style={{ color:T.muted, fontSize:10, marginTop:2 }}>↳ {r.mitigation}</div>}
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>
   );
+}
+
+// 테일러링결과서 표 셀 스타일
+const cell = { border:`1px solid ${T.border}`, padding:"5px 8px", color:T.text };
+const cellHead = { border:`1px solid ${T.border}`, padding:"5px 8px", background:T.surface, color:T.muted, fontWeight:600, whiteSpace:"nowrap" };
+function SectionTitle({ n, title }) {
+  return <div style={{ fontSize:12.5, fontWeight:700, margin:"16px 0 8px", paddingBottom:4, borderBottom:`1px solid ${T.border}` }}>{n}. {title}</div>;
 }
 
 function StepWBS({ wbsData, generating, genError, onGenerate }) {
