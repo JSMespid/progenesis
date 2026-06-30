@@ -244,6 +244,49 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
     setGenerating(false);
   }
 
+  // ── 위저드 임시저장 (localStorage) ─────────────────────────────
+  const DRAFT_KEY = "progenesis_wizard_draft";
+
+  function saveDraft() {
+    try {
+      const draft = {
+        wizardStep, projectForm, selectedOSSP,
+        sdlcFactors, selectedSDLC, sdlcRecommendation,
+        tailoring, pdpData, wbsData, deliverablesData,
+        savedAt: new Date().toISOString(),
+      };
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+      return true;
+    } catch (e) { console.error(e); return false; }
+  }
+
+  function loadDraft() {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) { console.error(e); return null; }
+  }
+
+  function clearDraft() {
+    try { localStorage.removeItem(DRAFT_KEY); } catch (e) { console.error(e); }
+  }
+
+  function restoreDraft() {
+    const d = loadDraft();
+    if (!d) return;
+    setWizardStep(d.wizardStep || 0);
+    if (d.projectForm) setProjectForm(d.projectForm);
+    setSelectedOSSP(d.selectedOSSP || null);
+    if (d.sdlcFactors) setSdlcFactors(d.sdlcFactors);
+    setSelectedSDLC(d.selectedSDLC || null);
+    setSdlcRecommendation(d.sdlcRecommendation || null);
+    if (d.tailoring) setTailoring(d.tailoring);
+    setPdpData(d.pdpData || null);
+    setWbsData(d.wbsData || null);
+    setDeliverablesData(d.deliverablesData || null);
+  }
+
   async function finishProject() {
     const newProject = {
       name:projectForm.name, client:projectForm.client, type:projectForm.type,
@@ -262,6 +305,7 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
     setSelectedSDLC(null); setSdlcRecommendation(null);
     setSdlcFactors({ req_clarity:"보통", req_volatility:"보통", delivery:"단계적", risk:"보통", regulation:"보통", team:"집중" });
     setPdpData(null); setWbsData(null); setDeliverablesData(null);
+    clearDraft();   // 완료된 프로젝트의 임시저장본 제거
     nav("dashboard");
   }
 
@@ -280,7 +324,8 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
       onFinish={finishProject} nav={nav} customOSSP={customOSSP}
       sdlcFactors={sdlcFactors} setSdlcFactors={setSdlcFactors}
       selectedSDLC={selectedSDLC} setSelectedSDLC={setSelectedSDLC}
-      sdlcRecommendation={sdlcRecommendation} recommending={recommending} onRecommendSDLC={recommendSDLC} />,
+      sdlcRecommendation={sdlcRecommendation} recommending={recommending} onRecommendSDLC={recommendSDLC}
+      onSaveDraft={saveDraft} loadDraft={loadDraft} onRestoreDraft={restoreDraft} onClearDraft={clearDraft} />,
     project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} />,
     ossp: <OSSPPage nav={nav} customOSSP={customOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
   };
@@ -414,7 +459,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject }) {
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onGenerateWBS, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC }) {
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onGenerateWBS, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
   const steps = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   const canNext = [
     form.name&&form.client&&form.startDate&&form.endDate&&form.pm,  // 0 기본정보
@@ -426,12 +471,46 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
     !!deliverablesData,                                             // 6 산출물
     true,                                                           // 7 완료
   ];
+  const [saveMsg, setSaveMsg] = useState("");
+  // 진입 시 임시저장본이 있으면 복원 안내. 이미 입력 중이면(폼에 값 있음) 안내 생략.
+  const [draftInfo, setDraftInfo] = useState(() => {
+    const d = loadDraft ? loadDraft() : null;
+    return d && !form.name ? d : null;
+  });
+
+  function handleSave() {
+    if (onSaveDraft && onSaveDraft()) {
+      setSaveMsg("임시저장됨");
+      setTimeout(()=>setSaveMsg(""), 2000);
+    }
+  }
   return (
     <div style={{ padding:"16px", maxWidth:960, margin:"0 auto" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
         <button onClick={()=>nav("dashboard")} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:20 }}>←</button>
-        <div><h1 style={{ fontSize:17, fontWeight:700 }}>새 프로젝트 생성</h1><p style={{ fontSize:11, color:T.muted }}>STEP {step+1}/{steps.length} — {steps[step]}</p></div>
+        <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>새 프로젝트 생성</h1><p style={{ fontSize:11, color:T.muted }}>STEP {step+1}/{steps.length} — {steps[step]}</p></div>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          {saveMsg && <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>✓ {saveMsg}</span>}
+          <Btn variant="outline" onClick={handleSave} style={{ fontSize:12, padding:"6px 12px" }}>임시저장</Btn>
+        </div>
       </div>
+
+      {/* 임시저장본 복원 안내 */}
+      {draftInfo && (
+        <Card style={{ padding:14, marginBottom:16, border:`1px solid ${T.accent}55`, background:T.bg }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
+            <div style={{ fontSize:12, color:T.text }}>
+              저장된 작성 내용이 있습니다
+              {draftInfo.savedAt && <span style={{ color:T.muted }}> ({new Date(draftInfo.savedAt).toLocaleString("ko-KR")})</span>}
+              . 이어서 작성하시겠어요?
+            </div>
+            <div style={{ display:"flex", gap:6 }}>
+              <Btn variant="primary" onClick={()=>{ onRestoreDraft && onRestoreDraft(); setDraftInfo(null); }} style={{ fontSize:11, padding:"5px 10px" }}>이어서 작성</Btn>
+              <Btn variant="ghost" onClick={()=>{ onClearDraft && onClearDraft(); setDraftInfo(null); }} style={{ fontSize:11, padding:"5px 10px" }}>새로 시작</Btn>
+            </div>
+          </div>
+        </Card>
+      )}
       {/* 진행 표시 */}
       <div style={{ display:"flex", gap:0, marginBottom:24, position:"relative" }}>
         <div style={{ position:"absolute", top:11, left:11, right:11, height:2, background:T.border, zIndex:0 }} />
