@@ -737,12 +737,17 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       <div style={{ display:"flex", gap:0, marginBottom:24, position:"relative" }}>
         <div style={{ position:"absolute", top:11, left:11, right:11, height:2, background:T.border, zIndex:0 }} />
         <div style={{ position:"absolute", top:11, left:11, height:2, background:T.accent, zIndex:1, transition:"width .4s", width:`${(step/(steps.length-1))*(100-20/steps.length)}%` }} />
-        {steps.map((s,i)=>(
-          <div key={s} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4, position:"relative", zIndex:2 }}>
-            <div style={{ width:22, height:22, borderRadius:"50%", background:i<step?T.accent:i===step?T.accent:T.surface, border:`2px solid ${i<=step?T.accent:T.border}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:i<=step?"#fff":T.muted }}>{i<step?"✓":i+1}</div>
-            <span style={{ fontSize:9, color:i===step?T.accent:T.muted, fontWeight:i===step?600:400, textAlign:"center" }}>{s}</span>
-          </div>
-        ))}
+        {steps.map((s,i)=>{
+          // 이동 허용: 과거/현재 단계는 항상, 미래 단계는 그 직전까지 모든 단계의 완료조건을 만족할 때만
+          const canJump = i <= step || canNext.slice(0, i).every(Boolean);
+          return (
+            <div key={s} onClick={()=>{ if(i!==step && canJump) setStep(i); }}
+              style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4, position:"relative", zIndex:2, cursor:canJump?"pointer":"not-allowed" }}>
+              <div style={{ width:22, height:22, borderRadius:"50%", background:i<=step?T.accent:T.surface, border:`2px solid ${i<=step?T.accent:T.border}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:i<=step?"#fff":T.muted, transition:"all .15s" }}>{i<step?"✓":i+1}</div>
+              <span style={{ fontSize:9, color:i===step?T.accent:T.muted, fontWeight:i===step?600:400, textAlign:"center" }}>{s}</span>
+            </div>
+          );
+        })}
       </div>
       <Card style={{ padding:20, minHeight:300, marginBottom:16 }}>
         {step===0 && <StepInfo form={form} setForm={setForm} />}
