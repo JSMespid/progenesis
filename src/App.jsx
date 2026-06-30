@@ -683,15 +683,6 @@ const OSSP_ASSET_CATEGORIES = [
   "체크리스트","테일러링가이드","산출물흐름도","교육교재",
 ];
 
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result.split(",")[1]);
-    r.onerror = () => reject(new Error("파일 읽기 실패"));
-    r.readAsDataURL(file);
-  });
-}
-
 // 드롭된 항목(파일/폴더)을 재귀적으로 읽어 File 배열로 변환.
 // 폴더 내부 파일에는 상대경로를 _relPath로 기록한다.
 function readEntry(entry, path = "") {
@@ -778,6 +769,8 @@ function OSSPAssets({ osspId }) {
   useEffect(() => { load(); }, [osspId]);
 
   // 여러 파일을 순차 업로드 (폴더 업로드 포함)
+  // 직접 업로드 방식: 서명 URL 발급 → Supabase Storage로 직접 PUT → 메타데이터 commit.
+  // 파일 바이너리가 Vercel 함수를 거치지 않으므로 4.5MB 한도(413)를 우회한다.
   async function uploadMany(category, fileList) {
     const arr = Array.from(fileList || []).filter(f => f && f.size >= 0);
     if (arr.length === 0) return;
@@ -787,22 +780,45 @@ function OSSPAssets({ osspId }) {
     for (let i = 0; i < arr.length; i++) {
       const file = arr[i];
       try {
-        const data_base64 = await fileToBase64(file);
         // 상대경로 보존: + 폴더 버튼(webkitRelativePath) 또는 드롭(_relPath)
         const rel = (file._relPath && file._relPath !== file.name)
           ? file._relPath
           : (file.webkitRelativePath && file.webkitRelativePath !== file.name
               ? file.webkitRelativePath : file.name);
-        const res = await fetch("/api/ossp-files", {
+
+        // 1) 서명된 업로드 URL 발급
+        const signRes = await fetch("/api/ossp-files", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "sign-upload", ossp_id: osspId, category, file_name: rel }),
+        });
+        if (!signRes.ok) {
+          const e = await signRes.json().catch(()=>({}));
+          throw new Error(e.error || "업로드 URL 발급 실패");
+        }
+        const { storage_path, upload_url } = await signRes.json();
+
+        // 2) Supabase Storage로 파일 직접 PUT (Vercel 함수 우회)
+        const putRes = await fetch(upload_url, {
+          method: "PUT",
+          headers: { "Content-Type": file.type || "application/octet-stream" },
+          body: file,
+        });
+        if (!putRes.ok) {
+          const t = await putRes.text().catch(()=> "");
+          throw new Error(`Storage 업로드 실패 (${putRes.status}) ${t.slice(0,120)}`);
+        }
+
+        // 3) 메타데이터 기록
+        const commitRes = await fetch("/api/ossp-files", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            ossp_id: osspId, category,
-            file_name: rel, file_type: file.type, data_base64,
+            action: "commit", ossp_id: osspId, category,
+            file_name: rel, storage_path, file_type: file.type, file_size: file.size,
           }),
         });
-        if (!res.ok) {
-          const e = await res.json().catch(()=>({}));
-          throw new Error(e.error || "업로드 실패");
+        if (!commitRes.ok) {
+          const e = await commitRes.json().catch(()=>({}));
+          throw new Error(e.error || "메타데이터 저장 실패");
         }
       } catch (e) {
         failed.push(`${file.name}: ${e.message}`);
