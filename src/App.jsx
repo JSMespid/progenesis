@@ -170,7 +170,64 @@ const TAILORING_RULES = [
   { id:"risk", label:"위험 관리", options:["기본","강화","최고"] },
 ];
 
+function LoginGate({ onSuccess }) {
+  const [id, setId] = useState("");
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (!id || !pw) { setErr("아이디와 비밀번호를 입력하세요."); return; }
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch("/api/login", {
+        method:"POST", headers:{ "Content-Type":"application/json" },
+        body:JSON.stringify({ id, pw }),
+      });
+      const data = await res.json().catch(()=>({}));
+      if (res.ok && data.ok) { onSuccess(data.token); }
+      else { setErr(data.error || "로그인에 실패했습니다."); }
+    } catch(e){ setErr(e.message); }
+    setBusy(false);
+  }
+
+  return (
+    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center",
+      background:T.bg, color:T.text, fontFamily:"'DM Sans','Apple SD Gothic Neo',sans-serif", padding:16 }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap'); *{box-sizing:border-box;margin:0;padding:0} @keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <div style={{ width:"100%", maxWidth:360, background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, padding:32 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
+          <div style={{ width:40, height:40, borderRadius:10, background:T.accent, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, fontSize:18, color:"#fff" }}>P</div>
+          <div>
+            <div style={{ fontSize:18, fontWeight:700 }}>ProGenesis</div>
+            <div style={{ fontSize:11, color:T.muted }}>v2.1 · AI Platform</div>
+          </div>
+        </div>
+        <div style={{ fontSize:13, fontWeight:600, marginBottom:14 }}>로그인</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          <input value={id} onChange={e=>setId(e.target.value)} placeholder="아이디"
+            onKeyDown={e=>{ if(e.key==="Enter") submit(); }}
+            style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:"11px 14px", color:T.text, fontSize:14, fontFamily:"inherit", outline:"none" }} />
+          <input value={pw} onChange={e=>setPw(e.target.value)} placeholder="비밀번호" type="password"
+            onKeyDown={e=>{ if(e.key==="Enter") submit(); }}
+            style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:"11px 14px", color:T.text, fontSize:14, fontFamily:"inherit", outline:"none" }} />
+          {err && <div style={{ color:T.red, fontSize:12 }}>{err}</div>}
+          <Btn onClick={submit} disabled={busy} style={{ marginTop:4, justifyContent:"center" }}>
+            {busy ? "확인 중…" : "로그인"}
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ProGenesis() {
+  const AUTH_KEY = "progenesis_auth";
+  const [authed, setAuthed] = useState(() => {
+    try { return !!localStorage.getItem(AUTH_KEY); } catch { return false; }
+  });
+  const logout = () => { try { localStorage.removeItem(AUTH_KEY); } catch {} setAuthed(false); };
+
   const [page, setPage] = useState("dashboard");
   const [projects, setProjects] = useState([]);
   const [currentProject, setCurrentProject] = useState(null);
@@ -464,6 +521,11 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
     {id:"best_practice",icon:"★",label:"Best Practice 산출물"},
   ];
 
+  // 로그인 전이면 로그인 화면만 표시
+  if (!authed) {
+    return <LoginGate onSuccess={(token)=>{ try { localStorage.setItem(AUTH_KEY, token||"1"); } catch {} setAuthed(true); }} />;
+  }
+
   return (
     <div style={{ display:"flex", flexDirection:"column", minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"'DM Sans','Apple SD Gothic Neo',sans-serif" }}>
       <style>{`
@@ -496,6 +558,9 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
           <div style={{ padding:"10px 12px", borderTop:`1px solid ${T.border}`, marginTop:4, fontSize:12, color:T.muted }}>
             전체 프로젝트 <span style={{ color:T.accent, fontWeight:700 }}>{projects.length}건</span>
           </div>
+          <button onClick={logout} style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 12px", borderRadius:10, background:"transparent", color:T.muted, border:"none", cursor:"pointer", fontSize:14, fontFamily:"inherit", width:"100%" }}>
+            <span>⏻</span> 로그아웃
+          </button>
         </div>
       )}
 
@@ -518,6 +583,9 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
           <div style={{ padding:"16px 20px", borderTop:`1px solid ${T.border}` }}>
             <div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>전체 프로젝트</div>
             <div style={{ fontSize:24, fontWeight:700 }}>{projects.length}<span style={{ fontSize:13, color:T.muted, fontWeight:400 }}> 건</span></div>
+            <button onClick={logout} style={{ marginTop:12, display:"flex", alignItems:"center", gap:6, padding:"7px 10px", borderRadius:8, background:"transparent", color:T.muted, border:`1px solid ${T.border}`, cursor:"pointer", fontSize:12, fontFamily:"inherit", width:"100%" }}>
+              <span>⏻</span> 로그아웃
+            </button>
           </div>
         </aside>
 
