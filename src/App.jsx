@@ -267,19 +267,30 @@ export default function ProGenesis() {
   const text = data.content?.map(b=>b.text||"").join("")||"";
   if (!text.trim()) throw new Error("AI 응답이 비어 있습니다.");
 
-  // JSON 파싱 방어: 모델이 마크다운/설명을 섞어도 JSON 블록만 추출
+  // JSON 파싱 방어: 모델이 마크다운/설명을 섞거나 응답이 잘려도 최대한 복구
   const cleaned = text.replace(/```json|```/g,"").trim();
   try {
     return JSON.parse(cleaned);
-  } catch {
-    // 첫 '{'부터 짝이 맞는 마지막 '}'까지만 잘라서 재시도
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    if (start > -1 && end > start) {
-      try { return JSON.parse(cleaned.slice(start, end + 1)); } catch (_) {}
-    }
-    throw new Error("AI 응답을 JSON으로 해석할 수 없습니다.");
+  } catch (_) {}
+
+  // 1) 첫 '{'부터 마지막 '}'까지 추출 재시도
+  const start = cleaned.indexOf("{");
+  let end = cleaned.lastIndexOf("}");
+  if (start > -1 && end > start) {
+    try { return JSON.parse(cleaned.slice(start, end + 1)); } catch (_) {}
   }
+  // 2) 응답이 중간에 잘린 경우: 열린 괄호 수만큼 닫아 복구 시도
+  if (start > -1) {
+    const frag = cleaned.slice(start);
+    const opens = (frag.match(/{/g)||[]).length;
+    const closes = (frag.match(/}/g)||[]).length;
+    if (opens > closes) {
+      const repaired = frag.replace(/,\s*$/,"") + "}".repeat(opens - closes);
+      try { return JSON.parse(repaired); } catch (_) {}
+    }
+  }
+  // 3) 그래도 실패하면 원문 앞부분을 포함해 원인 파악을 돕는다
+  throw new Error("AI 응답을 JSON으로 해석할 수 없습니다. 응답 일부: " + cleaned.slice(0, 120));
   }
   
   async function recommendSDLC() {
@@ -305,8 +316,19 @@ JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)",
   async function generatePDP() {
     setGenerating(true); setGenError(null); setPdpData(null);
     try {
-      const result = await callClaude(`프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, SDLC: ${selectedSDLC?.label||"미지정"}, OSSP: ${selectedOSSP?.label}, 기간: ${projectForm.startDate}~${projectForm.endDate}, PM: ${projectForm.pm}, 테일러링: ${JSON.stringify(tailoring)}
-PDP JSON: {"overview":{"purpose":"string","scope":"string","objectives":["string"]},"organization":{"pm":"string","roles":[{"role":"string","name":"string","responsibility":"string"}]},"schedule":{"phases":[{"phase":"string","start":"YYYY-MM-DD","end":"YYYY-MM-DD","deliverable":"string"}]},"risks":[{"id":"string","description":"string","level":"상|중|하","mitigation":"string"}],"quality":{"metrics":[{"metric":"string","target":"string"}]}}`);
+      // 테일러링으로 확정된 산출물을 단계별로 요약 (PDP의 일정·범위 근거로 사용)
+      const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML")
+        .filter(d => d.required || !(tailoring.excluded||{})[d.code]);
+      const byPhase = {};
+      applied.forEach(d => { (byPhase[d.phase] = byPhase[d.phase] || []).push(d.name); });
+      const tailoringSummary = Object.entries(byPhase)
+        .map(([ph, names]) => `${ph}: ${names.join(", ")}`).join(" / ");
+
+      const result = await callClaude(`프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, SDLC: ${selectedSDLC?.label||"미지정"}, OSSP: ${selectedOSSP?.label}, 기간: ${projectForm.startDate}~${projectForm.endDate}, PM: ${projectForm.pm}
+프로젝트 규모: ${tailoring.scale||"중형"}, 설계방식: ${tailoring.method||"UML"}
+테일러링 확정 산출물(단계별): ${tailoringSummary}
+위 테일러링 기준(규모·설계방식·단계별 산출물)을 반영하여 PDP를 작성하라. schedule.phases는 위 단계 구성에 맞추고, 각 단계의 deliverable에는 해당 단계의 대표 산출물을 기재하라.
+PDP JSON만 출력(설명·마크다운 금지): {"overview":{"purpose":"string","scope":"string","objectives":["string"]},"organization":{"pm":"string","roles":[{"role":"string","name":"string","responsibility":"string"}]},"schedule":{"phases":[{"phase":"string","start":"YYYY-MM-DD","end":"YYYY-MM-DD","deliverable":"string"}]},"risks":[{"id":"string","description":"string","level":"상|중|하","mitigation":"string"}],"quality":{"metrics":[{"metric":"string","target":"string"}]}}`);
       setPdpData(result);
     } catch(e) { setGenError("PDP 생성 실패: "+e.message); }
     setGenerating(false);
@@ -412,7 +434,8 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
   }
 
   const pages = {
-    dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={nav} setCurrentProject={setCurrentProject} />,
+    dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={nav} setCurrentProject={setCurrentProject}
+      draft={loadDraft()} onContinueDraft={()=>{ restoreDraft(); nav("new_project"); }} onDiscardDraft={()=>{ clearDraft(); setPage("dashboard"); }} />,
     new_project: <NewProjectWizard step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
       pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError}
@@ -493,13 +516,15 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
   );
 }
 
-function Dashboard({ projects, loading, nav, setCurrentProject }) {
+function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinueDraft, onDiscardDraft }) {
+  const hasDraft = draft && (draft.projectForm?.name || draft.selectedSDLC || draft.selectedOSSP);
   const stats = [
     { label:"전체 프로젝트", value:projects.length, color:T.accent },
     { label:"PDP 생성", value:projects.filter(p=>p.pdp).length, color:T.green },
     { label:"WBS 생성", value:projects.filter(p=>p.wbs).length, color:T.amber },
     { label:"초기 산출물", value:projects.filter(p=>p.deliverables).length, color:"#C084FC" },
   ];
+  const STEP_LABELS = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   return (
     <div style={{ padding:"20px 16px", maxWidth:1100, margin:"0 auto" }}>
       <div style={{ marginBottom:20 }}>
@@ -516,7 +541,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject }) {
         </div>
         {loading ? (
           <div style={{ textAlign:"center", padding:"32px 0" }}><Spinner text="프로젝트 불러오는 중…" /></div>
-        ) : projects.length===0 ? (
+        ) : (projects.length===0 && !hasDraft) ? (
           <div style={{ textAlign:"center", padding:"32px 0", color:T.muted }}>
             <div style={{ fontSize:28, marginBottom:8 }}>◈</div>
             <div style={{ fontSize:13, marginBottom:14 }}>아직 등록된 프로젝트가 없습니다.</div>
@@ -524,6 +549,26 @@ function Dashboard({ projects, loading, nav, setCurrentProject }) {
           </div>
         ) : (
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {/* 작성 중(임시저장) 항목 */}
+            {hasDraft && (
+              <div onClick={onContinueDraft}
+                style={{ padding:"12px 14px", background:T.bg, borderRadius:10, border:`1px dashed ${T.amber}88`, cursor:"pointer" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
+                  <div style={{ fontWeight:600, fontSize:14 }}>{draft.projectForm?.name || "(제목 미입력)"}</div>
+                  <Badge color={T.amber}>작성 중</Badge>
+                </div>
+                <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>
+                  {draft.projectForm?.client || "고객사 미입력"}
+                  {draft.selectedSDLC?.label && ` · ${draft.selectedSDLC.label}`}
+                  {typeof draft.wizardStep === "number" && ` · ${STEP_LABELS[draft.wizardStep]||""} 단계`}
+                  {draft.savedAt && ` · ${new Date(draft.savedAt).toLocaleString("ko-KR")} 저장`}
+                </div>
+                <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                  <Btn variant="primary" onClick={(e)=>{ e.stopPropagation(); onContinueDraft(); }} style={{ fontSize:11, padding:"4px 10px" }}>이어서 작성</Btn>
+                  <Btn variant="ghost" onClick={(e)=>{ e.stopPropagation(); if(confirm("작성 중인 내용을 삭제할까요?")) onDiscardDraft(); }} style={{ fontSize:11, padding:"4px 10px" }}>삭제</Btn>
+                </div>
+              </div>
+            )}
             {projects.map(p=>(
               <div key={p.id} onClick={()=>{ setCurrentProject(p); nav("project_detail"); }}
                 style={{ padding:"12px 14px", background:T.bg, borderRadius:10, border:`1px solid ${T.border}`, cursor:"pointer" }}>
