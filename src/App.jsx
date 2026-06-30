@@ -702,7 +702,7 @@ function buildFileTree(files) {
 }
 
 // 폴더 트리를 접고 펴며 렌더링. 폴더 경로별 펼침 상태는 상위에서 관리.
-function FileTree({ node, depth, openMap, toggle, onDownload, onRemove, pathKey="" }) {
+function FileTree({ node, depth, openMap, toggle, onDownload, onRemove, selected, onToggleSelect, onBulkSelect, pathKey="" }) {
   const folderNames = Object.keys(node.folders).sort((a,b)=>a.localeCompare(b,'ko'));
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
@@ -711,25 +711,39 @@ function FileTree({ node, depth, openMap, toggle, onDownload, onRemove, pathKey=
         const isOpen = openMap[childPath] !== false;  // 기본 펼침
         const child = node.folders[name];
         const count = countFiles(child);
+        const ids = collectFileIds(child);
+        const allChecked = ids.length > 0 && ids.every(id => selected[id]);
+        const someChecked = ids.some(id => selected[id]) && !allChecked;
         return (
           <div key={childPath}>
-            <div onClick={()=>toggle(childPath)}
-              style={{ display:"flex", alignItems:"center", gap:4, cursor:"pointer",
+            <div style={{ display:"flex", alignItems:"center", gap:4,
                 paddingLeft: depth*12, fontSize:11, color:T.text, fontWeight:600 }}>
-              <span style={{ color:T.muted, fontSize:9 }}>{isOpen ? "▼" : "▶"}</span>
-              <span style={{ color:T.amber }}>📁</span>
-              <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{name}</span>
-              <span style={{ color:T.muted, fontWeight:400, fontSize:9 }}>({count})</span>
+              <input type="checkbox" checked={allChecked}
+                ref={el=>{ if(el) el.indeterminate = someChecked; }}
+                onChange={e=>onBulkSelect(ids, e.target.checked)}
+                onClick={e=>e.stopPropagation()}
+                style={{ cursor:"pointer", width:13, height:13, flexShrink:0 }} />
+              <span onClick={()=>toggle(childPath)} style={{ display:"flex", alignItems:"center", gap:4, cursor:"pointer", overflow:"hidden" }}>
+                <span style={{ color:T.muted, fontSize:9 }}>{isOpen ? "▼" : "▶"}</span>
+                <span style={{ color:T.amber }}>📁</span>
+                <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{name}</span>
+                <span style={{ color:T.muted, fontWeight:400, fontSize:9 }}>({count})</span>
+              </span>
             </div>
             {isOpen && (
               <FileTree node={child} depth={depth+1} openMap={openMap} toggle={toggle}
-                onDownload={onDownload} onRemove={onRemove} pathKey={childPath} />
+                onDownload={onDownload} onRemove={onRemove}
+                selected={selected} onToggleSelect={onToggleSelect} onBulkSelect={onBulkSelect}
+                pathKey={childPath} />
             )}
           </div>
         );
       })}
       {node.files.map(f => (
-        <div key={f.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:6, paddingLeft: depth*12 + 14 }}>
+        <div key={f.id} style={{ display:"flex", alignItems:"center", gap:6, paddingLeft: depth*12 + 14 }}>
+          <input type="checkbox" checked={!!selected[f.id]}
+            onChange={()=>onToggleSelect(f.id)}
+            style={{ cursor:"pointer", width:13, height:13, flexShrink:0 }} />
           <span onClick={()=>onDownload(f)} title={f.file_name}
             style={{ fontSize:11, color:T.accent, cursor:"pointer", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>
             {f._displayName}
@@ -745,6 +759,13 @@ function countFiles(node) {
   let n = node.files.length;
   for (const k of Object.keys(node.folders)) n += countFiles(node.folders[k]);
   return n;
+}
+
+// 한 폴더(노드) 하위의 모든 파일 id를 수집 (폴더 일괄 선택용)
+function collectFileIds(node) {
+  let ids = node.files.map(f => f.id);
+  for (const k of Object.keys(node.folders)) ids = ids.concat(collectFileIds(node.folders[k]));
+  return ids;
 }
 
 // 드롭된 항목(파일/폴더)을 재귀적으로 읽어 File 배열로 변환.
@@ -808,6 +829,7 @@ function OSSPAssets({ osspId }) {
   const [err, setErr] = useState(null);
   const [dragCat, setDragCat] = useState(null);  // 드래그 오버 중인 category
   const [openMap, setOpenMap] = useState({});    // 폴더 경로별 펼침 상태
+  const [selected, setSelected] = useState({});  // 선택된 파일 id 맵 (다중 삭제용)
   const toggleFolder = (path) => setOpenMap(m => ({ ...m, [path]: m[path] === false ? true : false }));
 
   async function onDrop(category, e) {
@@ -914,12 +936,46 @@ function OSSPAssets({ osspId }) {
     } catch (e) { setErr(e.message); }
   }
 
+  // 선택된 여러 파일을 한 번에 삭제
+  async function removeMany(fileList) {
+    const arr = (fileList || []).filter(Boolean);
+    if (arr.length === 0) return;
+    if (!confirm(`선택한 ${arr.length}개 파일을 삭제할까요?`)) return;
+    setErr(null);
+    const failed = [];
+    for (const f of arr) {
+      try {
+        await fetch(`/api/ossp-files?id=${f.id}&path=${encodeURIComponent(f.file_url)}`, { method: "DELETE" });
+      } catch (e) { failed.push(`${f.file_name}: ${e.message}`); }
+    }
+    if (failed.length) setErr(`${failed.length}개 삭제 실패 — ${failed.slice(0,3).join(" / ")}${failed.length>3?" …":""}`);
+    setSelected({});
+    await load();
+  }
+
+  // 선택 토글
+  const toggleSelect = (id) => setSelected(s => ({ ...s, [id]: !s[id] }));
+  // 특정 파일 묶음을 한꺼번에 선택/해제 (폴더 체크박스용)
+  const setSelectBulk = (ids, value) =>
+    setSelected(s => { const n = { ...s }; ids.forEach(id => { n[id] = value; }); return n; });
+
   const byCat = {};
   files.forEach(f => { (byCat[f.category] = byCat[f.category] || []).push(f); });
 
+  const selectedFiles = files.filter(f => selected[f.id]);
+
   return (
     <div style={{ marginTop:14, paddingTop:14, borderTop:`1px solid ${T.border}` }}>
-      <div style={{ fontSize:12, fontWeight:700, color:T.muted, marginBottom:10 }}>표준 프로세스 자산 (8종)</div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+        <div style={{ fontSize:12, fontWeight:700, color:T.muted }}>표준 프로세스 자산 (8종)</div>
+        {selectedFiles.length > 0 && (
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ fontSize:11, color:T.accent, fontWeight:600 }}>{selectedFiles.length}개 선택됨</span>
+            <Btn variant="ghost" onClick={()=>setSelected({})} style={{ fontSize:11, padding:"4px 10px" }}>선택 해제</Btn>
+            <Btn variant="danger" onClick={()=>removeMany(selectedFiles)} style={{ fontSize:11, padding:"4px 10px" }}>선택 삭제</Btn>
+          </div>
+        )}
+      </div>
       {err && <div style={{ color:T.red, fontSize:11, marginBottom:8 }}>{err}</div>}
       {loading ? <Spinner text="자산 불러오는 중…" /> : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10 }}>
@@ -967,6 +1023,9 @@ function OSSPAssets({ osspId }) {
                   toggle={toggleFolder}
                   onDownload={download}
                   onRemove={removeFile}
+                  selected={selected}
+                  onToggleSelect={toggleSelect}
+                  onBulkSelect={setSelectBulk}
                   pathKey={cat}
                 />
               )}
