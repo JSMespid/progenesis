@@ -248,11 +248,11 @@ export default function ProGenesis() {
     setLoadingProjects(false);
   }
 
-  async function callClaude(prompt) {
+  async function callClaude(prompt, maxTokens=8000) {
   const res = await fetch("/api/chat", {
     method:"POST", headers:{ "Content-Type":"application/json" },
-    body:JSON.stringify({ model:"claude-opus-4-8", max_tokens:4000,
-      system:"You are a project management expert. Always respond with valid JSON only, no markdown, no preamble.",
+    body:JSON.stringify({ model:"claude-opus-4-8", max_tokens:maxTokens,
+      system:"You are a project management expert. Always respond with valid JSON only, no markdown, no preamble. Keep string values concise to ensure the JSON is complete and not truncated.",
       messages:[{ role:"user", content:prompt }] }),
   });
 
@@ -328,7 +328,8 @@ JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)",
 프로젝트 규모: ${tailoring.scale||"중형"}, 설계방식: ${tailoring.method||"UML"}
 테일러링 확정 산출물(단계별): ${tailoringSummary}
 위 테일러링 기준(규모·설계방식·단계별 산출물)을 반영하여 PDP를 작성하라. schedule.phases는 위 단계 구성에 맞추고, 각 단계의 deliverable에는 해당 단계의 대표 산출물을 기재하라.
-PDP JSON만 출력(설명·마크다운 금지): {"overview":{"purpose":"string","scope":"string","objectives":["string"]},"organization":{"pm":"string","roles":[{"role":"string","name":"string","responsibility":"string"}]},"schedule":{"phases":[{"phase":"string","start":"YYYY-MM-DD","end":"YYYY-MM-DD","deliverable":"string"}]},"risks":[{"id":"string","description":"string","level":"상|중|하","mitigation":"string"}],"quality":{"metrics":[{"metric":"string","target":"string"}]}}`);
+분량 제한(응답 잘림 방지): objectives 최대 4개, roles 최대 5개, risks 최대 5개, metrics 최대 5개. 각 문자열은 간결하게.
+PDP JSON만 출력(설명·마크다운 금지): {"overview":{"purpose":"string","scope":"string","objectives":["string"]},"organization":{"pm":"string","roles":[{"role":"string","name":"string","responsibility":"string"}]},"schedule":{"phases":[{"phase":"string","start":"YYYY-MM-DD","end":"YYYY-MM-DD","deliverable":"string"}]},"risks":[{"id":"string","description":"string","level":"상|중|하","mitigation":"string"}],"quality":{"metrics":[{"metric":"string","target":"string"}]}}`, 8000);
       setPdpData(result);
     } catch(e) { setGenError("PDP 생성 실패: "+e.message); }
     setGenerating(false);
@@ -338,7 +339,7 @@ PDP JSON만 출력(설명·마크다운 금지): {"overview":{"purpose":"string"
     setGenerating(true); setGenError(null); setWbsData(null);
     try {
       const result = await callClaude(`프로젝트: ${projectForm.name}, OSSP: ${selectedOSSP?.label}(${selectedOSSP?.phases?.join(",")}), 기간: ${projectForm.startDate}~${projectForm.endDate}
-WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string","phase":"string","subtasks":[{"id":"string","wbsCode":"string","task":"string","duration":"string","assignee":"string","status":"대기|진행|완료"}],"duration":"string"}]}`);
+WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string","phase":"string","subtasks":[{"id":"string","wbsCode":"string","task":"string","duration":"string","assignee":"string","status":"대기|진행|완료"}],"duration":"string"}]}`, 8000);
       setWbsData(result);
     } catch(e) { setGenError("WBS 생성 실패: "+e.message); }
     setGenerating(false);
@@ -356,7 +357,7 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
 방법론 테일러링 가이드 기준 적용 산출물(${applied.length}개): ${appliedList}
 위 적용 산출물을 우선 반영하여 산출물 패키지를 구성하라. code는 위 목록의 코드를 사용하라.
 {"categories":[{"id":"string","name":"string","icon":"이모지","documents":[{"id":"string","name":"string","code":"string","purpose":"string","template":"목차1;목차2;목차3","priority":"필수|권장|선택","estimatedPages":5,"owner":"string"}]}],"summary":{"totalDocs":15,"mandatoryCount":10,"estimatedDays":14}}
-4개 카테고리: 착수문서(🚀), 계획문서(📋), 기술문서(🔧), 품질/위험문서(🛡). 각 3~5개 문서.`);
+4개 카테고리: 착수문서(🚀), 계획문서(📋), 기술문서(🔧), 품질/위험문서(🛡). 각 3~5개 문서.`, 8000);
       setDeliverablesData(result);
     } catch(e) { setGenError("산출물 생성 실패: "+e.message); }
     setGenerating(false);
