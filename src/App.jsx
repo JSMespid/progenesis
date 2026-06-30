@@ -448,9 +448,21 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
       onSaveDraft={saveDraft} loadDraft={loadDraft} onRestoreDraft={restoreDraft} onClearDraft={clearDraft} />,
     project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} />,
     ossp: <OSSPPage nav={nav} customOSSP={customOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
+    regulation: <LibraryPage nav={nav} kind="regulation"
+      title="규제 (Regulation / Compliance)" subtitle="프로젝트가 준수해야 할 규제·컴플라이언스 자산"
+      categories={["법령/규정","감독규정","인증/심사기준","보안/개인정보","산업표준","기타"]} />,
+    best_practice: <LibraryPage nav={nav} kind="best_practice"
+      title="Best Practice 산출물" subtitle="모범 산출물 사례 라이브러리"
+      categories={["요구정의","분석","설계","구축","운영전환","공통/기타"]} />,
   };
 
-  const navItems = [{id:"dashboard",icon:"⊞",label:"대시보드"},{id:"new_project",icon:"+",label:"새 프로젝트"},{id:"ossp",icon:"◈",label:"OSSP 라이브러리"}];
+  const navItems = [
+    {id:"dashboard",icon:"⊞",label:"대시보드"},
+    {id:"new_project",icon:"+",label:"새 프로젝트"},
+    {id:"ossp",icon:"◈",label:"OSSP 라이브러리"},
+    {id:"regulation",icon:"§",label:"규제 (Regulation)"},
+    {id:"best_practice",icon:"★",label:"Best Practice 산출물"},
+  ];
 
   return (
     <div style={{ display:"flex", flexDirection:"column", minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"'DM Sans','Apple SD Gothic Neo',sans-serif" }}>
@@ -1639,6 +1651,166 @@ function OSSPAssets({ osspId }) {
                   onBulkSelect={setSelectBulk}
                   pathKey={cat}
                 />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 규제 / Best Practice 공용 파일 라이브러리 (kind로 구분)
+// OSSP 자산 관리와 동일한 직접 업로드·폴더 트리·다중삭제 로직을 재사용.
+function LibraryPage({ nav, kind, title, subtitle, categories }) {
+  const [files, setFiles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(null);          // 업로드 중인 category
+  const [progress, setProgress] = useState({ done:0, total:0 });
+  const [err, setErr] = useState(null);
+  const [dragCat, setDragCat] = useState(null);
+  const [openMap, setOpenMap] = useState({});
+  const [selected, setSelected] = useState({});
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/library-files?kind=${kind}`);
+      setFiles(await res.json());
+    } catch(e){ setErr(e.message); }
+    setLoading(false);
+  }
+  useEffect(()=>{ load(); /* eslint-disable-next-line */ }, [kind]);
+
+  async function uploadMany(category, fileList) {
+    const arr = Array.from(fileList || []).filter(f => f && f.size >= 0);
+    if (arr.length === 0) return;
+    setBusy(category); setErr(null);
+    setProgress({ done:0, total:arr.length });
+    const failed = [];
+    for (let i=0;i<arr.length;i++){
+      const file = arr[i];
+      try {
+        const rel = (file._relPath && file._relPath !== file.name)
+          ? file._relPath
+          : (file.webkitRelativePath && file.webkitRelativePath !== file.name ? file.webkitRelativePath : file.name);
+        const signRes = await fetch("/api/library-files", {
+          method:"POST", headers:{ "Content-Type":"application/json" },
+          body:JSON.stringify({ action:"sign-upload", kind, category, file_name:rel }),
+        });
+        if (!signRes.ok){ const e=await signRes.json().catch(()=>({})); throw new Error(e.error||"업로드 URL 발급 실패"); }
+        const { storage_path, upload_url } = await signRes.json();
+        const putRes = await fetch(upload_url, { method:"PUT", headers:{ "Content-Type":file.type||"application/octet-stream" }, body:file });
+        if (!putRes.ok){ const t=await putRes.text().catch(()=>""); throw new Error(`Storage 업로드 실패 (${putRes.status}) ${t.slice(0,120)}`); }
+        const commitRes = await fetch("/api/library-files", {
+          method:"POST", headers:{ "Content-Type":"application/json" },
+          body:JSON.stringify({ action:"commit", kind, category, file_name:rel, storage_path, file_type:file.type, file_size:file.size }),
+        });
+        if (!commitRes.ok){ const e=await commitRes.json().catch(()=>({})); throw new Error(e.error||"메타데이터 저장 실패"); }
+      } catch(e){ failed.push(`${file.name}: ${e.message}`); }
+      setProgress({ done:i+1, total:arr.length });
+    }
+    if (failed.length) setErr(`${failed.length}개 실패 — ${failed.slice(0,3).join(" / ")}${failed.length>3?" …":""}`);
+    await load(); setBusy(null); setProgress({ done:0, total:0 });
+  }
+
+  async function onDrop(category, e){
+    e.preventDefault(); setDragCat(null);
+    if (busy) return;
+    const collected = await collectDroppedFiles(e.dataTransfer);
+    if (collected.length) uploadMany(category, collected);
+  }
+
+  async function download(f){
+    try {
+      const res = await fetch(`/api/library-files?path=${encodeURIComponent(f.file_url)}&name=${encodeURIComponent(f.file_name.split("/").pop())}`);
+      const { url } = await res.json();
+      if (url) window.open(url, "_blank");
+    } catch(e){ setErr(e.message); }
+  }
+
+  async function removeFile(f){
+    if (!confirm(`'${f.file_name}'을(를) 삭제할까요?`)) return;
+    try { await fetch(`/api/library-files?id=${f.id}&path=${encodeURIComponent(f.file_url)}`, { method:"DELETE" }); await load(); }
+    catch(e){ setErr(e.message); }
+  }
+
+  async function removeMany(fileList){
+    const arr = (fileList||[]).filter(Boolean);
+    if (arr.length===0) return;
+    if (!confirm(`선택한 ${arr.length}개 파일을 삭제할까요?`)) return;
+    setErr(null); const failed=[];
+    for (const f of arr){
+      try { await fetch(`/api/library-files?id=${f.id}&path=${encodeURIComponent(f.file_url)}`, { method:"DELETE" }); }
+      catch(e){ failed.push(`${f.file_name}: ${e.message}`); }
+    }
+    if (failed.length) setErr(`${failed.length}개 삭제 실패`);
+    setSelected({}); await load();
+  }
+
+  const toggleFolder = (p) => setOpenMap(m=>({ ...m, [p]: m[p]===false ? true : false }));
+  const toggleSelect = (id) => setSelected(s=>({ ...s, [id]: !s[id] }));
+  const setSelectBulk = (ids,v) => setSelected(s=>{ const n={...s}; ids.forEach(id=>{n[id]=v;}); return n; });
+
+  const byCat = {};
+  files.forEach(f => { (byCat[f.category] = byCat[f.category] || []).push(f); });
+  const selectedFiles = files.filter(f => selected[f.id]);
+
+  return (
+    <div style={{ padding:"16px", maxWidth:1100, margin:"0 auto" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
+        <button onClick={()=>nav("dashboard")} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:20 }}>←</button>
+        <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>{title}</h1><p style={{ fontSize:11, color:T.muted }}>{subtitle}</p></div>
+      </div>
+
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+        <div style={{ fontSize:12, fontWeight:700, color:T.muted }}>카테고리 ({categories.length})</div>
+        {selectedFiles.length > 0 && (
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ fontSize:11, color:T.accent, fontWeight:600 }}>{selectedFiles.length}개 선택됨</span>
+            <Btn variant="ghost" onClick={()=>setSelected({})} style={{ fontSize:11, padding:"4px 10px" }}>선택 해제</Btn>
+            <Btn variant="danger" onClick={()=>removeMany(selectedFiles)} style={{ fontSize:11, padding:"4px 10px" }}>선택 삭제</Btn>
+          </div>
+        )}
+      </div>
+      {err && <div style={{ color:T.red, fontSize:11, marginBottom:8 }}>{err}</div>}
+
+      {loading ? <Spinner text="라이브러리 불러오는 중…" /> : (
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10 }}>
+          {categories.map(cat=>(
+            <div key={cat}
+              onDragOver={e=>{ e.preventDefault(); if(!busy) setDragCat(cat); }}
+              onDragLeave={e=>{ e.preventDefault(); setDragCat(c=>c===cat?null:c); }}
+              onDrop={e=>onDrop(cat, e)}
+              style={{ background: dragCat===cat ? T.accentGlow : T.bg,
+                border:`1px ${dragCat===cat?"dashed":"solid"} ${dragCat===cat?T.accent:T.border}`,
+                borderRadius:8, padding:"10px 12px", transition:"all .15s" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                <span style={{ fontSize:12, fontWeight:600 }}>{cat}</span>
+                {busy===cat ? (
+                  <span style={{ fontSize:10, color:T.accent, fontWeight:600 }}>업로드 중… {progress.done}/{progress.total}</span>
+                ) : (
+                  <span style={{ display:"flex", gap:8 }}>
+                    <label style={{ fontSize:10, color:T.accent, cursor:"pointer", fontWeight:600 }}>+ 파일
+                      <input type="file" multiple style={{ display:"none" }} disabled={!!busy}
+                        onChange={e=>{ uploadMany(cat, e.target.files); e.target.value=""; }} />
+                    </label>
+                    <label style={{ fontSize:10, color:T.muted, cursor:"pointer", fontWeight:600 }}>+ 폴더
+                      <input type="file" multiple style={{ display:"none" }} disabled={!!busy}
+                        ref={el=>{ if(el){ el.webkitdirectory=true; el.directory=true; } }}
+                        onChange={e=>{ uploadMany(cat, e.target.files); e.target.value=""; }} />
+                    </label>
+                  </span>
+                )}
+              </div>
+              {dragCat===cat ? (
+                <div style={{ fontSize:11, color:T.accent, fontWeight:600, padding:"6px 0" }}>여기에 놓으면 업로드됩니다</div>
+              ) : (byCat[cat]||[]).length === 0 ? (
+                <div style={{ fontSize:10, color:T.muted }}>등록된 파일 없음 · 파일·폴더를 끌어다 놓으세요</div>
+              ) : (
+                <FileTree node={buildFileTree(byCat[cat]||[])} depth={0} openMap={openMap} toggle={toggleFolder}
+                  onDownload={download} onRemove={removeFile}
+                  selected={selected} onToggleSelect={toggleSelect} onBulkSelect={setSelectBulk} pathKey={cat} />
               )}
             </div>
           ))}
