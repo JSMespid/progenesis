@@ -91,6 +91,10 @@ export default function ProGenesis() {
   const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", startDate:"", endDate:"", pm:"" });
   const [selectedOSSP, setSelectedOSSP] = useState(null);
   const [customOSSP, setCustomOSSP] = useState([]);
+  const [sdlcFactors, setSdlcFactors] = useState({ req_clarity:"보통", req_volatility:"보통", delivery:"단계적", risk:"보통", regulation:"보통", team:"집중" });
+  const [selectedSDLC, setSelectedSDLC] = useState(null);
+  const [sdlcRecommendation, setSdlcRecommendation] = useState(null);  // { recommended, reason, alternatives }
+  const [recommending, setRecommending] = useState(false);
   const [tailoring, setTailoring] = useState({ doc_level:"표준", review_cycle:"격주", test_level:"통합", risk:"강화" });
   const [pdpData, setPdpData] = useState(null);
   const [wbsData, setWbsData] = useState(null);
@@ -177,10 +181,30 @@ export default function ProGenesis() {
   return JSON.parse(text.replace(/```json|```/g,"").trim());
   }
   
+  async function recommendSDLC() {
+    setRecommending(true); setGenError(null); setSdlcRecommendation(null);
+    try {
+      const result = await callClaude(`당신은 PMBOK 8판에 정통한 프로젝트 관리 전문가입니다. 아래 프로젝트 특성에 맞는 SDLC(소프트웨어 개발 생애주기) 모델을 추천하세요.
+프로젝트 유형: ${projectForm.type}
+요구사항 명확성: ${sdlcFactors.req_clarity}
+요구사항 변동성: ${sdlcFactors.req_volatility}
+인도(딜리버리) 방식: ${sdlcFactors.delivery}
+리스크 수준: ${sdlcFactors.risk}
+규제/컴플라이언스: ${sdlcFactors.regulation}
+팀 구성: ${sdlcFactors.team}
+후보 모델: Waterfall(폭포수), V-Model, Iterative(반복형), Incremental(점진형), Spiral(나선형), Agile/Scrum, DevOps
+PMBOK의 예측형↔적응형 스펙트럼과 요구 변동성·인도 빈도·리스크·규제·팀 분산도를 근거로 판단하세요.
+JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)","label":"string","approach":"예측형|적응형|하이브리드"},"reason":"string(한국어 2~3문장, PMBOK 요인 근거 명시)","alternatives":[{"id":"string","label":"string","note":"string(언제 이 대안이 더 나은지 한국어 1문장)"}]}`);
+      setSdlcRecommendation(result);
+      if (result?.recommended) setSelectedSDLC(result.recommended);
+    } catch(e) { setGenError("SDLC 추천 실패: "+e.message); }
+    setRecommending(false);
+  }
+
   async function generatePDP() {
     setGenerating(true); setGenError(null); setPdpData(null);
     try {
-      const result = await callClaude(`프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, OSSP: ${selectedOSSP?.label}, 기간: ${projectForm.startDate}~${projectForm.endDate}, PM: ${projectForm.pm}, 테일러링: ${JSON.stringify(tailoring)}
+      const result = await callClaude(`프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, SDLC: ${selectedSDLC?.label||"미지정"}, OSSP: ${selectedOSSP?.label}, 기간: ${projectForm.startDate}~${projectForm.endDate}, PM: ${projectForm.pm}, 테일러링: ${JSON.stringify(tailoring)}
 PDP JSON: {"overview":{"purpose":"string","scope":"string","objectives":["string"]},"organization":{"pm":"string","roles":[{"role":"string","name":"string","responsibility":"string"}]},"schedule":{"phases":[{"phase":"string","start":"YYYY-MM-DD","end":"YYYY-MM-DD","deliverable":"string"}]},"risks":[{"id":"string","description":"string","level":"상|중|하","mitigation":"string"}],"quality":{"metrics":[{"metric":"string","target":"string"}]}}`);
       setPdpData(result);
     } catch(e) { setGenError("PDP 생성 실패: "+e.message); }
@@ -212,7 +236,10 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
     const newProject = {
       name:projectForm.name, client:projectForm.client, type:projectForm.type,
       start_date:projectForm.startDate, end_date:projectForm.endDate, pm:projectForm.pm,
-      status:"진행중", ossp:selectedOSSP, tailoring, pdp:pdpData, wbs:wbsData, deliverables:deliverablesData,
+      status:"진행중", ossp:selectedOSSP,
+      // sdlc 전용 컬럼 없이 tailoring(JSON)에 함께 보존 → DB 스키마 변경 불필요
+      tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors },
+      pdp:pdpData, wbs:wbsData, deliverables:deliverablesData,
     };
     try {
       await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(newProject) });
@@ -220,6 +247,8 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
     } catch(e) { console.error(e); }
     setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",startDate:"",endDate:"",pm:"" });
     setSelectedOSSP(null); setTailoring({ doc_level:"표준",review_cycle:"격주",test_level:"통합",risk:"강화" });
+    setSelectedSDLC(null); setSdlcRecommendation(null);
+    setSdlcFactors({ req_clarity:"보통", req_volatility:"보통", delivery:"단계적", risk:"보통", regulation:"보통", team:"집중" });
     setPdpData(null); setWbsData(null); setDeliverablesData(null);
     nav("dashboard");
   }
@@ -236,7 +265,10 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
       pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError}
       onGeneratePDP={generatePDP} onGenerateWBS={generateWBS} onGenerateDeliverables={generateDeliverables}
-      onFinish={finishProject} nav={nav} customOSSP={customOSSP} />,
+      onFinish={finishProject} nav={nav} customOSSP={customOSSP}
+      sdlcFactors={sdlcFactors} setSdlcFactors={setSdlcFactors}
+      selectedSDLC={selectedSDLC} setSelectedSDLC={setSelectedSDLC}
+      sdlcRecommendation={sdlcRecommendation} recommending={recommending} onRecommendSDLC={recommendSDLC} />,
     project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} />,
     ossp: <OSSPPage nav={nav} customOSSP={customOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
   };
@@ -370,9 +402,18 @@ function Dashboard({ projects, loading, nav, setCurrentProject }) {
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onGenerateWBS, onGenerateDeliverables, onFinish, nav, customOSSP }) {
-  const steps = ["기본정보","OSSP","테일러링","PDP","WBS","산출물","완료"];
-  const canNext = [form.name&&form.client&&form.startDate&&form.endDate&&form.pm, !!selectedOSSP, true, !!pdpData, !!wbsData, !!deliverablesData, true];
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onGenerateWBS, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC }) {
+  const steps = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
+  const canNext = [
+    form.name&&form.client&&form.startDate&&form.endDate&&form.pm,  // 0 기본정보
+    !!selectedSDLC,                                                  // 1 SDLC
+    !!selectedOSSP,                                                  // 2 OSSP
+    true,                                                           // 3 테일러링
+    !!pdpData,                                                      // 4 PDP
+    !!wbsData,                                                      // 5 WBS
+    !!deliverablesData,                                             // 6 산출물
+    true,                                                           // 7 완료
+  ];
   return (
     <div style={{ padding:"16px", maxWidth:960, margin:"0 auto" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
@@ -392,12 +433,13 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       </div>
       <Card style={{ padding:20, minHeight:300, marginBottom:16 }}>
         {step===0 && <StepInfo form={form} setForm={setForm} />}
-        {step===1 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} />}
-        {step===2 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
-        {step===3 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} />}
-        {step===4 && <StepWBS wbsData={wbsData} generating={generating} genError={genError} onGenerate={onGenerateWBS} />}
-        {step===5 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} />}
-        {step===6 && <StepReview form={form} ossp={selectedOSSP} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
+        {step===1 && <StepSDLC factors={sdlcFactors} setFactors={setSdlcFactors} selected={selectedSDLC} setSelected={setSelectedSDLC} recommendation={sdlcRecommendation} recommending={recommending} genError={genError} onRecommend={onRecommendSDLC} />}
+        {step===2 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} sdlc={selectedSDLC} />}
+        {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
+        {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} />}
+        {step===5 && <StepWBS wbsData={wbsData} generating={generating} genError={genError} onGenerate={onGenerateWBS} />}
+        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} />}
+        {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
       <div style={{ display:"flex", justifyContent:"space-between" }}>
         <Btn variant="ghost" onClick={()=>step>0?setStep(s=>s-1):nav("dashboard")}>← 이전</Btn>
@@ -424,18 +466,128 @@ function StepInfo({ form, setForm }) {
   );
 }
 
-function StepOSSP({ selected, setSelected, customOSSP=[] }) {
-  const options = [...OSSP_OPTIONS, ...customOSSP];
+// SDLC 모델 목록 (구체 모델 수준)
+const SDLC_MODELS = [
+  { id:"waterfall",   label:"Waterfall (폭포수)",   approach:"예측형",   desc:"요구가 명확하고 변동이 적은 순차 개발" },
+  { id:"v-model",     label:"V-Model (검증형)",      approach:"예측형",   desc:"단계별 검증·확인을 중시(규제·안전 중요)" },
+  { id:"iterative",   label:"Iterative (반복형)",    approach:"하이브리드", desc:"핵심부터 만들고 반복 보완" },
+  { id:"incremental", label:"Incremental (점진형)",  approach:"하이브리드", desc:"기능 묶음을 점진적으로 인도" },
+  { id:"spiral",      label:"Spiral (나선형)",       approach:"하이브리드", desc:"리스크가 큰 대형/불확실 프로젝트" },
+  { id:"agile",       label:"Agile/Scrum",          approach:"적응형",   desc:"요구 변동이 크고 잦은 인도가 필요" },
+  { id:"devops",      label:"DevOps",               approach:"적응형",   desc:"지속적 통합·배포·운영 자동화" },
+];
+
+const SDLC_FACTORS = [
+  { id:"req_clarity",    label:"요구사항 명확성",   options:["낮음","보통","높음"] },
+  { id:"req_volatility", label:"요구사항 변동성",   options:["낮음","보통","높음"] },
+  { id:"delivery",       label:"인도 방식",         options:["일괄","단계적","빈번"] },
+  { id:"risk",           label:"리스크 수준",       options:["낮음","보통","높음"] },
+  { id:"regulation",     label:"규제/컴플라이언스", options:["없음","보통","엄격"] },
+  { id:"team",           label:"팀 구성",           options:["집중","혼합","분산"] },
+];
+
+function StepSDLC({ factors, setFactors, selected, setSelected, recommendation, recommending, genError, onRecommend }) {
+  return (
+    <div>
+      <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>SDLC(개발 생애주기) 선택</h2>
+      <p style={{ fontSize:12, color:T.muted, marginBottom:16 }}>프로젝트 특성을 입력하면 PMBOK 기준으로 적합한 모델을 추천합니다. 최종 선택은 직접 확정하세요.</p>
+
+      {/* 프로젝트 특성 입력 */}
+      <div style={{ display:"flex", flexDirection:"column", gap:14, marginBottom:16 }}>
+        {SDLC_FACTORS.map(f=>(
+          <div key={f.id}>
+            <div style={{ fontSize:12, fontWeight:600, marginBottom:6 }}>{f.label}</div>
+            <div style={{ display:"flex", gap:8 }}>
+              {f.options.map(opt=>(
+                <button key={opt} onClick={()=>setFactors(s=>({...s,[f.id]:opt}))}
+                  style={{ flex:1, padding:"7px 0", borderRadius:8, fontSize:12, fontFamily:"inherit",
+                    background:factors[f.id]===opt?T.accent:T.bg, color:factors[f.id]===opt?"#fff":T.muted,
+                    border:`1px solid ${factors[f.id]===opt?T.accent:T.border}`, cursor:"pointer",
+                    fontWeight:factors[f.id]===opt?600:400 }}>{opt}</button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginBottom:16 }}>
+        <Btn onClick={onRecommend} disabled={recommending} style={{ fontSize:12, padding:"8px 14px" }}>
+          {recommending ? "분석 중…" : "⚡ AI 추천 받기"}
+        </Btn>
+      </div>
+      {recommending && <Spinner text="PMBOK 기준으로 분석 중…" />}
+      {genError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9, marginBottom:12 }}>{genError}</div>}
+
+      {/* 추천 근거 */}
+      {recommendation?.recommended && (
+        <div style={{ marginBottom:16, animation:"fadeIn .4s" }}>
+          <Card style={{ padding:14, background:T.bg, border:`1px solid ${T.accent}55` }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+              <Badge color={T.green}>AI 추천</Badge>
+              <span style={{ fontWeight:700, fontSize:14 }}>{recommendation.recommended.label}</span>
+              {recommendation.recommended.approach && <Badge color={T.accent}>{recommendation.recommended.approach}</Badge>}
+            </div>
+            <div style={{ fontSize:12, color:T.text, lineHeight:1.7 }}>{recommendation.reason}</div>
+            {recommendation.alternatives?.length > 0 && (
+              <div style={{ marginTop:10, paddingTop:10, borderTop:`1px solid ${T.border}` }}>
+                <div style={{ fontSize:11, color:T.muted, fontWeight:600, marginBottom:6 }}>대안</div>
+                {recommendation.alternatives.map((a,i)=>(
+                  <div key={i} style={{ fontSize:11, color:T.muted, marginBottom:4 }}>
+                    <span style={{ color:T.accent, fontWeight:600 }}>{a.label}</span> — {a.note}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* 최종 모델 선택 (사용자 확정) */}
+      <div style={{ fontSize:12, fontWeight:600, color:T.muted, marginBottom:8 }}>SDLC 모델 확정</div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10 }}>
+        {SDLC_MODELS.map(m=>{
+          const isRec = recommendation?.recommended?.id === m.id;
+          const isSel = selected?.id === m.id;
+          return (
+            <div key={m.id} onClick={()=>setSelected(m)}
+              style={{ padding:"12px 14px", borderRadius:10, cursor:"pointer", transition:"all .15s",
+                border:`2px solid ${isSel?T.accent:T.border}`, background:isSel?T.accentGlow:T.bg }}>
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:3, flexWrap:"wrap" }}>
+                <span style={{ fontWeight:700, fontSize:13, color:isSel?T.accent:T.text }}>{m.label}</span>
+                {isRec && <Badge color={T.green}>추천</Badge>}
+              </div>
+              <div style={{ fontSize:10, color:T.muted, marginBottom:4 }}>{m.desc}</div>
+              <Badge color={isSel?T.accent:T.muted}>{m.approach}</Badge>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StepOSSP({ selected, setSelected, customOSSP=[], sdlc }) {
+  // SDLC와 같은 접근(또는 같은 모델 id)을 가진 OSSP를 상단으로 정렬
+  const base = [...OSSP_OPTIONS, ...customOSSP];
+  const matchesSDLC = (o) => sdlc && (o.id === sdlc.id || (o.approach && o.approach === sdlc.approach));
+  const options = [...base].sort((a,b)=> (matchesSDLC(b)?1:0) - (matchesSDLC(a)?1:0));
   return (
     <div>
       <h2 style={{ fontSize:15, fontWeight:600, marginBottom:6 }}>OSSP 방법론 선택</h2>
-      <p style={{ fontSize:12, color:T.muted, marginBottom:16 }}>프로젝트에 적합한 개발 방법론을 선택하세요.</p>
+      <p style={{ fontSize:12, color:T.muted, marginBottom:12 }}>프로젝트에 적합한 개발 방법론을 선택하세요.</p>
+      {sdlc && (
+        <div style={{ fontSize:11, color:T.muted, marginBottom:16, padding:"8px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>
+          선택한 SDLC: <span style={{ color:T.accent, fontWeight:600 }}>{sdlc.label}</span>
+          {sdlc.approach && <span> ({sdlc.approach})</span>} — 이 방식에 어울리는 OSSP를 위쪽에 정렬했습니다.
+        </div>
+      )}
       <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
         {options.map(o=>(
           <div key={o.id} onClick={()=>setSelected(o)} style={{ padding:16, borderRadius:12, border:`2px solid ${selected?.id===o.id?T.accent:T.border}`, background:selected?.id===o.id?T.accentGlow:T.bg, cursor:"pointer", transition:"all .2s" }}>
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
               <span style={{ fontWeight:700, fontSize:14, color:selected?.id===o.id?T.accent:T.text }}>{o.label}</span>
               {o.custom && <Badge color={T.green}>사내</Badge>}
+              {matchesSDLC(o) && <Badge color={T.amber}>SDLC 적합</Badge>}
             </div>
             <div style={{ fontSize:11, color:T.muted, marginBottom:10 }}>{o.desc}</div>
             <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>{o.phases.map(ph=><Badge key={ph} color={selected?.id===o.id?T.accent:T.muted}>{ph}</Badge>)}</div>
@@ -574,11 +726,12 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
   );
 }
 
-function StepReview({ form, ossp, pdpData, wbsData, deliverablesData }) {
+function StepReview({ form, sdlc, ossp, pdpData, wbsData, deliverablesData }) {
   const items = [
     {label:"프로젝트명",value:form.name},{label:"고객사",value:form.client},
     {label:"유형",value:form.type},{label:"PM",value:form.pm},
-    {label:"기간",value:`${form.startDate}~${form.endDate}`},{label:"OSSP",value:ossp?.label},
+    {label:"기간",value:`${form.startDate}~${form.endDate}`},
+    {label:"SDLC",value:sdlc?.label},{label:"OSSP",value:ossp?.label},
     {label:"PDP",value:pdpData?"✓ 생성완료":"—"},{label:"WBS",value:wbsData?`✓ ${wbsData.tasks?.length}개 단계`:"—"},
     {label:"초기 산출물",value:deliverablesData?`✓ ${deliverablesData.summary?.totalDocs}건`:"—"},
   ];
