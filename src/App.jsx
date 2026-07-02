@@ -74,6 +74,36 @@ const OSSP_OPTIONS = [
   { id:"devops", label:"DevOps", desc:"지속적 통합·배포", phases:["계획","코딩","빌드","테스트","배포","운영","모니터링"] },
 ];
 
+// 기본 제공 방법론의 단계별 표준 산출물 프리셋 (PMBOK 8판 관점, QA 필수 산출물 포함)
+// key는 방법론 label과 일치해야 함 (DB 시딩 name과 동일)
+const BUILTIN_DELIVERABLES = {
+  "Waterfall": {
+    "요구분석": ["프로젝트 관리 계획서(PMP)", "요구사항 정의서", "요구사항 추적표(RTM)", "품질보증 계획서", "리스크 관리대장"],
+    "설계":     ["아키텍처 설계서", "상세 설계서", "인터페이스 설계서", "DB 설계서(ERD)"],
+    "구현":     ["프로그램 소스코드", "코딩 표준 준수 검토서", "단위테스트 결과서"],
+    "테스트":   ["통합테스트 계획서/결과서", "테스트 케이스·시나리오", "결함 관리 대장"],
+    "배포":     ["배포(이행) 계획서", "인수테스트 결과서", "사용자·운영자 매뉴얼", "릴리즈 노트"],
+    "유지보수": ["변경 요청서(CR)", "형상관리 대장", "교훈(Lessons Learned) 보고서"],
+  },
+  "Agile/Scrum": {
+    "스프린트 계획": ["스프린트 계획서", "스프린트 백로그", "완료 기준(DoD) 정의서"],
+    "백로그 관리":   ["제품 백로그", "사용자 스토리", "스토리 맵"],
+    "개발":          ["프로그램 소스코드", "단위테스트 코드", "번다운 차트"],
+    "리뷰":          ["스프린트 리뷰 결과서", "제품 증분(Increment) 데모 자료"],
+    "회고":          ["회고 결과서", "개선 액션 아이템 목록"],
+    "릴리즈":        ["릴리즈 계획서", "릴리즈 노트", "배포 체크리스트"],
+  },
+  "DevOps": {
+    "계획":     ["제품 로드맵", "SLO/SLA 정의서"],
+    "코딩":     ["프로그램 소스코드", "코드 리뷰(PR) 기록", "코딩 표준 가이드"],
+    "빌드":     ["CI 파이프라인 정의서", "빌드 결과 리포트"],
+    "테스트":   ["자동화 테스트 스위트", "테스트 커버리지 리포트"],
+    "배포":     ["CD 파이프라인 정의서", "배포 승인 기록", "롤백 절차서"],
+    "운영":     ["운영 매뉴얼(Runbook)", "장애 대응 절차서"],
+    "모니터링": ["모니터링 대시보드 정의서", "장애 회고 보고서(Postmortem)"],
+  },
+};
+
 // 방법론 테일러링 가이드 v2.0 — 산출물 매트릭스 (85개). M=필수, O=선택 / method: 공통·UML·IE
 const TAILORING_MATRIX = [
   {"code": "RD1101", "name": "현행 시스템 분석서", "phase": "요구정의", "method": "공통", "large": "O", "medium": "O", "small": "O"},
@@ -237,6 +267,7 @@ export default function ProGenesis() {
   const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", startDate:"", endDate:"", pm:"" });
   const [selectedOSSP, setSelectedOSSP] = useState(null);
   const [customOSSP, setCustomOSSP] = useState([]);
+  const [builtinOSSP, setBuiltinOSSP] = useState([]);   // DB에 시딩된 기본 제공 방법론 (자산 업로드용 UUID 보유)
   const [sdlcFactors, setSdlcFactors] = useState({ req_clarity:"보통", req_volatility:"보통", delivery:"단계적", risk:"보통", regulation:"보통", team:"집중" });
   const [selectedSDLC, setSelectedSDLC] = useState(null);
   const [sdlcRecommendation, setSdlcRecommendation] = useState(null);  // { recommended, reason, alternatives }
@@ -257,14 +288,17 @@ export default function ProGenesis() {
       const res = await fetch('/api/ossp');
       const data = await res.json();
       if (Array.isArray(data)) {
-        setCustomOSSP(data.map(o => ({
+        const mapped = data.map(o => ({
           id: o.id,
           label: o.name,                 // UI는 label 사용 → DB의 name 매핑
           version: o.version || '',
           desc: o.description || '',
           phases: Array.isArray(o.phases) ? o.phases : [],
-          custom: true,
-        })));
+          custom: !o.is_builtin,
+          builtin: !!o.is_builtin,       // 기본 제공 여부 (서버 자동 시딩)
+        }));
+        setCustomOSSP(mapped.filter(o => !o.builtin));   // 위저드 StepOSSP 중복 방지: 사내 OSSP만
+        setBuiltinOSSP(mapped.filter(o => o.builtin));
       }
     } catch (e) { console.error(e); }
   }
@@ -504,7 +538,7 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
       sdlcRecommendation={sdlcRecommendation} recommending={recommending} onRecommendSDLC={recommendSDLC}
       onSaveDraft={saveDraft} loadDraft={loadDraft} onRestoreDraft={restoreDraft} onClearDraft={clearDraft} />,
     project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} />,
-    ossp: <OSSPPage nav={nav} customOSSP={customOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
+    ossp: <OSSPPage nav={nav} customOSSP={customOSSP} builtinOSSP={builtinOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
     regulation: <LibraryPage nav={nav} kind="regulation"
       title="규제 (Regulation / Compliance)" subtitle="프로젝트가 준수해야 할 규제·컴플라이언스 자산"
       categories={["법령/규정","감독규정","인증/심사기준","보안/개인정보","산업표준","기타"]} />,
@@ -1517,6 +1551,32 @@ async function collectDroppedFiles(dataTransfer) {
 }
 
 // 한 OSSP의 8가지 자산 파일 관리 패널
+// 기본 제공 방법론의 단계별 표준 산출물 목록 (읽기 전용 프리셋)
+function BuiltinDeliverables({ label }) {
+  const groups = BUILTIN_DELIVERABLES[label];
+  if (!groups) return null;
+  const total = Object.values(groups).reduce((n, arr) => n + arr.length, 0);
+  return (
+    <div style={{ marginTop:14, paddingTop:14, borderTop:`1px solid ${T.border}` }}>
+      <div style={{ fontSize:12, fontWeight:700, color:T.muted, marginBottom:10 }}>
+        기본 산출물 <span style={{ fontWeight:400 }}>({total}종 · 표준 제공)</span>
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+        {Object.entries(groups).map(([phase, items]) => (
+          <div key={phase} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"8px 12px" }}>
+            <div style={{ fontSize:11, fontWeight:700, color:T.accent, marginBottom:6 }}>{phase}</div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+              {items.map(d => (
+                <span key={d} style={{ fontSize:11, padding:"3px 8px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:6, color:T.text }}>{d}</span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function OSSPAssets({ osspId }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1893,7 +1953,7 @@ function LibraryPage({ nav, kind, title, subtitle, categories }) {
   );
 }
 
-function OSSPPage({ nav, customOSSP=[], onAdd, onDelete }) {
+function OSSPPage({ nav, customOSSP=[], builtinOSSP=[], onAdd, onDelete }) {
   const [showForm, setShowForm] = useState(false);
   const [label, setLabel] = useState("");
   const [version, setVersion] = useState("");
@@ -1917,8 +1977,10 @@ function OSSPPage({ nav, customOSSP=[], onAdd, onDelete }) {
     setSaving(false);
   }
 
-  const renderCard = (o, deletable) => {
+  const renderCard = (o, kind) => {          // kind: "custom" | "builtin"
+    const deletable = kind === "custom";
     const isOpen = expanded === o.id;
+    const hasDbId = kind === "custom" || o.builtin === true;  // DB UUID 보유 → 파일 업로드 가능
     return (
       <Card key={o.id} style={{ padding:18 }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
@@ -1926,16 +1988,14 @@ function OSSPPage({ nav, customOSSP=[], onAdd, onDelete }) {
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
               <span style={{ fontSize:16, fontWeight:700 }}>{o.label}</span>
               {o.version && <Badge color={T.accent}>{o.version}</Badge>}
-              {deletable && <Badge color={T.green}>사내</Badge>}
+              {deletable ? <Badge color={T.green}>사내</Badge> : <Badge color={T.muted}>기본</Badge>}
             </div>
             <div style={{ fontSize:12, color:T.muted }}>{o.desc}</div>
           </div>
           <div style={{ display:"flex", gap:8 }}>
-            {deletable && (
-              <Btn variant="outline" onClick={()=>setExpanded(isOpen ? null : o.id)} style={{ fontSize:11, padding:"5px 10px" }}>
-                {isOpen ? "자산 닫기" : "자산 관리"}
-              </Btn>
-            )}
+            <Btn variant="outline" onClick={()=>setExpanded(isOpen ? null : o.id)} style={{ fontSize:11, padding:"5px 10px" }}>
+              {isOpen ? "자산 닫기" : "자산 관리"}
+            </Btn>
             <Btn variant="outline" onClick={()=>nav("new_project")} style={{ fontSize:11, padding:"5px 10px" }}>시작</Btn>
             {deletable && (
               <Btn variant="outline" onClick={()=>{ if(confirm(`'${o.label}'을(를) 삭제할까요? 등록된 파일도 함께 삭제됩니다.`)) onDelete(o.id); }} style={{ fontSize:11, padding:"5px 10px", color:T.red, borderColor:T.red+"55" }}>삭제</Btn>
@@ -1950,7 +2010,14 @@ function OSSPPage({ nav, customOSSP=[], onAdd, onDelete }) {
             </div>
           ))}
         </div>
-        {deletable && isOpen && <OSSPAssets osspId={o.id} />}
+        {isOpen && (
+          <>
+            {kind === "builtin" && <BuiltinDeliverables label={o.label} />}
+            {hasDbId
+              ? <OSSPAssets osspId={o.id} />
+              : <div style={{ marginTop:12, fontSize:11, color:T.muted }}>※ 파일 업로드 준비 중입니다. 페이지를 새로고침하면 기본 방법론이 서버에 자동 등록됩니다.</div>}
+          </>
+        )}
       </Card>
     );
   };
@@ -1989,11 +2056,11 @@ function OSSPPage({ nav, customOSSP=[], onAdd, onDelete }) {
         {customOSSP.length > 0 && (
           <>
             <div style={{ fontSize:12, fontWeight:600, color:T.muted, marginTop:4 }}>회사 등록 OSSP</div>
-            {customOSSP.map(o=>renderCard(o, true))}
-            <div style={{ fontSize:12, fontWeight:600, color:T.muted, marginTop:8 }}>기본 제공</div>
+            {customOSSP.map(o=>renderCard(o, "custom"))}
           </>
         )}
-        {OSSP_OPTIONS.map(o=>renderCard(o, false))}
+        <div style={{ fontSize:12, fontWeight:600, color:T.muted, marginTop:8 }}>기본 제공</div>
+        {(builtinOSSP.length > 0 ? builtinOSSP : OSSP_OPTIONS).map(o=>renderCard(o, "builtin"))}
       </div>
     </div>
   );
