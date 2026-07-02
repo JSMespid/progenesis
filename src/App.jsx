@@ -1,4 +1,7 @@
 import { useState, useEffect } from "react";
+import { SDLC_FACTOR_CRITERIA } from './sdlcFactorCriteria';
+// 각 옵션 버튼 아래에:
+// <div className="...">{SDLC_FACTOR_CRITERIA[factorKey].options[optionLabel]}</div>
 
 const T = {
   bg: "#0A0C10", surface: "#111318", border: "#1E2230",
