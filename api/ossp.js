@@ -3,7 +3,7 @@
 // ossp: id, name, version, description, is_active, methodology_id, created_at
 // ossp_phases: id, ossp_id, code, name, order_num, created_at
 
-import { SEED_TEMPLATES, SEED_CATEGORY, SEED_DOCX_MIME } from './_seed_assets.js';
+import { SEED_TEMPLATES, SEED_DOCX_MIME } from './_seed_assets.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const ANON_KEY = process.env.SUPABASE_ANON_KEY;
@@ -41,20 +41,22 @@ async function uploadToStorage(storagePath, buffer) {
   if (!r.ok) throw new Error(`storage ${r.status}`);
 }
 
-// 기본 제공 방법론에 기본 산출물 템플릿(54종)을 자동 시딩.
-// 해당 ossp_id에 파일이 하나도 없을 때만 수행 → 멱등, 사용자가 이미 올린 경우 건너뜀.
+// 기본 제공 방법론에 기본 자산(템플릿·절차서·체크리스트 등)을 자동 시딩.
+// (방법론, 카테고리) 단위로 해당 카테고리에 파일이 하나도 없을 때만 수행 → 멱등.
+// 이미 사용자가 올렸거나 이전에 시딩된 카테고리는 건너뛰고, 새로 추가된 카테고리만 채운다.
 async function seedBuiltinTemplates(builtinRows) {
   const rows = (builtinRows || []).filter(o => o && o.id);
   if (rows.length === 0) return;
 
-  // 방법론별 기존 파일 유무 확인 (1회 조회)
+  // 방법론×카테고리별 기존 파일 유무 확인 (1회 조회)
   const ids = rows.map(o => o.id).join(',');
-  const existing = await db(`/ossp_files?select=ossp_id&ossp_id=in.(${ids})&limit=1000`);
-  const hasFiles = new Set((Array.isArray(existing) ? existing : []).map(f => f.ossp_id));
+  const existing = await db(`/ossp_files?select=ossp_id,category&ossp_id=in.(${ids})&limit=10000`);
+  const seededKeys = new Set((Array.isArray(existing) ? existing : []).map(f => `${f.ossp_id}|${f.category}`));
 
   for (const o of rows) {
-    if (hasFiles.has(o.id)) continue;   // 이미 파일 있음 → 시딩 생략
-    const templates = SEED_TEMPLATES.filter(t => t.method === o.name);
+    const templates = SEED_TEMPLATES.filter(t =>
+      t.method === o.name && !seededKeys.has(`${o.id}|${t.category}`)
+    );
     if (templates.length === 0) continue;
 
     // 동시 8개씩 Storage 업로드 후 메타데이터 일괄 insert
@@ -68,7 +70,7 @@ async function seedBuiltinTemplates(builtinRows) {
         await uploadToStorage(storagePath, buf);
         return {
           ossp_id: o.id,
-          category: SEED_CATEGORY,
+          category: t.category,
           file_name: t.file_name,
           file_url: storagePath,
           file_type: SEED_DOCX_MIME,
