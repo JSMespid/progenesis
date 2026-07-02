@@ -1,9 +1,9 @@
-// sdlcFactorCriteria.js
+// sdlcFactorCriteria.js  (v2 — App.jsx의 SDLC_FACTORS id와 키 일치)
 // SDLC 선정 요인별 판정 기준 (PMBOK 8판 개발접근법 선정 요인 준거)
-// 용도: ① 버튼 서브텍스트/툴팁 표시  ② AI 추천 프롬프트에 동일 기준 주입
+// 용도: ① 버튼 아래 기준 표시  ② AI 추천 프롬프트에 동일 기준 주입
 
 export const SDLC_FACTOR_CRITERIA = {
-  clarity: {
+  req_clarity: {
     label: '요구사항 명확성',
     help: '착수 시점에 요구사항이 얼마나 정의·승인되어 있는가',
     options: {
@@ -12,7 +12,7 @@ export const SDLC_FACTOR_CRITERIA = {
       높음: '요구사항이 문서로 상세 정의·승인됨. 검증 가능한 수준',
     },
   },
-  volatility: {
+  req_volatility: {
     label: '요구사항 변동성',
     help: '프로젝트 기간 중 요구가 바뀔 가능성',
     options: {
@@ -39,7 +39,7 @@ export const SDLC_FACTOR_CRITERIA = {
       높음: '신기술·대규모 연계·무중단 전환. 실패 시 서비스 영향 중대',
     },
   },
-  compliance: {
+  regulation: {
     label: '규제/컴플라이언스',
     help: '법정 요건·인증·감리의 강도',
     options: {
