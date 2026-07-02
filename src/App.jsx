@@ -1,7 +1,5 @@
 import { useState, useEffect } from "react";
-import { SDLC_FACTOR_CRITERIA } from './sdlcFactorCriteria';
-// 각 옵션 버튼 아래에:
-// <div className="...">{SDLC_FACTOR_CRITERIA[factorKey].options[optionLabel]}</div>
+import { SDLC_FACTOR_CRITERIA, criteriaToPromptText } from './sdlcFactorCriteria';
 
 const T = {
   bg: "#0A0C10", surface: "#111318", border: "#1E2230",
@@ -398,6 +396,8 @@ export default function ProGenesis() {
 리스크 수준: ${sdlcFactors.risk}
 규제/컴플라이언스: ${sdlcFactors.regulation}
 팀 구성: ${sdlcFactors.team}
+각 특성 값의 판정 기준(사용자가 이 정의를 보고 선택했음):
+${criteriaToPromptText()}
 후보 모델: Waterfall(폭포수), V-Model, Iterative(반복형), Incremental(점진형), Spiral(나선형), Agile/Scrum, DevOps
 PMBOK의 예측형↔적응형 스펙트럼과 요구 변동성·인도 빈도·리스크·규제·팀 분산도를 근거로 판단하세요.
 JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)","label":"string","approach":"예측형|적응형|하이브리드"},"reason":"string(한국어 2~3문장, PMBOK 요인 근거 명시)","alternatives":[{"id":"string","label":"string","note":"string(언제 이 대안이 더 나은지 한국어 1문장)"}]}`);
@@ -847,22 +847,36 @@ function StepSDLC({ factors, setFactors, selected, setSelected, recommendation, 
       <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>SDLC(개발 생애주기) 선택</h2>
       <p style={{ fontSize:12, color:T.muted, marginBottom:16 }}>프로젝트 특성을 입력하면 PMBOK 기준으로 적합한 모델을 추천합니다. 최종 선택은 직접 확정하세요.</p>
 
-      {/* 프로젝트 특성 입력 */}
+      {/* 프로젝트 특성 입력 — 각 버튼 아래에 판정 기준 표시 */}
       <div style={{ display:"flex", flexDirection:"column", gap:14, marginBottom:16 }}>
-        {SDLC_FACTORS.map(f=>(
-          <div key={f.id}>
-            <div style={{ fontSize:12, fontWeight:600, marginBottom:6 }}>{f.label}</div>
-            <div style={{ display:"flex", gap:8 }}>
-              {f.options.map(opt=>(
-                <button key={opt} onClick={()=>setFactors(s=>({...s,[f.id]:opt}))}
-                  style={{ flex:1, padding:"7px 0", borderRadius:8, fontSize:12, fontFamily:"inherit",
-                    background:factors[f.id]===opt?T.accent:T.bg, color:factors[f.id]===opt?"#fff":T.muted,
-                    border:`1px solid ${factors[f.id]===opt?T.accent:T.border}`, cursor:"pointer",
-                    fontWeight:factors[f.id]===opt?600:400 }}>{opt}</button>
-              ))}
+        {SDLC_FACTORS.map(f=>{
+          const crit = SDLC_FACTOR_CRITERIA[f.id];
+          return (
+            <div key={f.id}>
+              <div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{f.label}</div>
+              {crit?.help && <div style={{ fontSize:10, color:T.muted, marginBottom:6 }}>{crit.help}</div>}
+              <div style={{ display:"flex", gap:8, alignItems:"stretch" }}>
+                {f.options.map(opt=>{
+                  const on = factors[f.id]===opt;
+                  return (
+                    <div key={opt} style={{ flex:1, display:"flex", flexDirection:"column", gap:4 }}>
+                      <button onClick={()=>setFactors(s=>({...s,[f.id]:opt}))}
+                        style={{ width:"100%", padding:"7px 0", borderRadius:8, fontSize:12, fontFamily:"inherit",
+                          background:on?T.accent:T.bg, color:on?"#fff":T.muted,
+                          border:`1px solid ${on?T.accent:T.border}`, cursor:"pointer",
+                          fontWeight:on?600:400 }}>{opt}</button>
+                      {crit?.options?.[opt] && (
+                        <div style={{ fontSize:9.5, color:on?T.text:T.muted, lineHeight:1.5, padding:"0 2px" }}>
+                          {crit.options[opt]}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div style={{ marginBottom:16 }}>
