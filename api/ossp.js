@@ -3,6 +3,8 @@
 // ossp: id, name, version, description, is_active, methodology_id, created_at
 // ossp_phases: id, ossp_id, code, name, order_num, created_at
 
+import { SEED_TEMPLATES, SEED_CATEGORY, SEED_DOCX_MIME } from './_seed_assets.js';
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || ANON_KEY;
@@ -15,6 +17,69 @@ const BUILTIN_OSSP = [
   { name: 'Agile/Scrum', description: '반복·점진적 개발',   phases: ['스프린트 계획','백로그 관리','개발','리뷰','회고','릴리즈'] },
   { name: 'DevOps',      description: '지속적 통합·배포',   phases: ['계획','코딩','빌드','테스트','배포','운영','모니터링'] },
 ];
+
+const FILE_BUCKET = 'ossp-files';
+
+// ASCII 전용 Storage 경로 (한글 원본명은 ossp_files.file_name에만 보존)
+function seedStoragePath(ossp_id) {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `${ossp_id}/seed_${Date.now()}_${rand}.docx`;
+}
+
+// Storage 업로드 (service key 직접 PUT)
+async function uploadToStorage(storagePath, buffer) {
+  const r = await fetch(`${SUPABASE_URL}/storage/v1/object/${FILE_BUCKET}/${storagePath}`, {
+    method: 'POST',
+    headers: {
+      'apikey': SERVICE_KEY,
+      'Authorization': `Bearer ${SERVICE_KEY}`,
+      'Content-Type': SEED_DOCX_MIME,
+      'x-upsert': 'true',
+    },
+    body: buffer,
+  });
+  if (!r.ok) throw new Error(`storage ${r.status}`);
+}
+
+// 기본 제공 방법론에 기본 산출물 템플릿(54종)을 자동 시딩.
+// 해당 ossp_id에 파일이 하나도 없을 때만 수행 → 멱등, 사용자가 이미 올린 경우 건너뜀.
+async function seedBuiltinTemplates(builtinRows) {
+  const rows = (builtinRows || []).filter(o => o && o.id);
+  if (rows.length === 0) return;
+
+  // 방법론별 기존 파일 유무 확인 (1회 조회)
+  const ids = rows.map(o => o.id).join(',');
+  const existing = await db(`/ossp_files?select=ossp_id&ossp_id=in.(${ids})&limit=1000`);
+  const hasFiles = new Set((Array.isArray(existing) ? existing : []).map(f => f.ossp_id));
+
+  for (const o of rows) {
+    if (hasFiles.has(o.id)) continue;   // 이미 파일 있음 → 시딩 생략
+    const templates = SEED_TEMPLATES.filter(t => t.method === o.name);
+    if (templates.length === 0) continue;
+
+    // 동시 8개씩 Storage 업로드 후 메타데이터 일괄 insert
+    const metaRows = [];
+    const CONCURRENCY = 8;
+    for (let i = 0; i < templates.length; i += CONCURRENCY) {
+      const batch = templates.slice(i, i + CONCURRENCY);
+      const results = await Promise.allSettled(batch.map(async (t) => {
+        const buf = Buffer.from(t.b64, 'base64');
+        const storagePath = seedStoragePath(o.id);
+        await uploadToStorage(storagePath, buf);
+        return {
+          ossp_id: o.id,
+          category: SEED_CATEGORY,
+          file_name: t.file_name,
+          file_url: storagePath,
+          file_type: SEED_DOCX_MIME,
+          file_size: buf.length,
+        };
+      }));
+      results.forEach(r => { if (r.status === 'fulfilled') metaRows.push(r.value); });
+    }
+    if (metaRows.length > 0) await db('/ossp_files', 'POST', metaRows);
+  }
+}
 
 async function db(path, method = 'GET', body = null) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
@@ -59,6 +124,12 @@ export default async function handler(req, res) {
         }
         if (seeded) osspList = await db('/ossp?order=created_at.asc');
       }
+
+      // 기본 제공 방법론에 기본 산출물 템플릿 자동 시딩 (파일 없을 때만, 실패해도 목록 반환에는 영향 없음)
+      try {
+        const builtinRows = (Array.isArray(osspList) ? osspList : []).filter(o => o && o.is_builtin === true);
+        await seedBuiltinTemplates(builtinRows);
+      } catch (e) { console.error('seed templates:', e); }
 
       const phases = await db('/ossp_phases?order=order_num.asc,created_at.asc');
       const byOssp = {};
