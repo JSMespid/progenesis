@@ -1,11 +1,12 @@
 // src/TailoringGuideModal.jsx
-// 테일러링 화면에서 "방법론 테일러링 가이드 v2.0 기준" 클릭 시
-// 가이드 전문(목적 / 규모 분류 기준 / M-O 매트릭스)을 보여주는 모달.
-// 기존 TAILORING_MATRIX 상수를 그대로 prop으로 받아 렌더링하므로 별도 데이터 파일 불필요.
+// 테일러링 화면에서 가이드 링크 클릭 시 해당 방법론의 테일러링 가이드 전문
+// (목적 / 규모 분류 기준 / M-O 매트릭스)을 보여주는 모달.
+// guide prop(src/tailoringGuides.js의 TAILORING_GUIDES 항목)을 받아 방법론별로 렌더링.
+// guide 없이 matrix만 넘기던 이전 호출 방식도 하위 호환 지원.
 
 import React, { useEffect, useMemo, useState } from "react";
 
-/* ── 가이드 원문: 프로젝트 규모에 따른 분류 (방법론 테일러링 가이드 v2.0, p.82) ── */
+/* ── 프로젝트 규모에 따른 분류 (방법론 테일러링 가이드 v2.0, p.82 / 전 방법론 공통 규모 기준) ── */
 const SIZE_CRITERIA = [
   { 구분: "초대형", 기간: "11개월 이상", 인원: "60명 이상", mm: "600MM 초과", 용역: "50억 이상", 매출: "100억 이상", infra: "50억 이상" },
   { 구분: "대형",   기간: "7개월 이상",  인원: "45명 이상", mm: "300MM 초과", 용역: "25억~50억",  매출: "50억~100억", infra: "25억~50억" },
@@ -20,8 +21,10 @@ const SIZE_NOTES = [
   "'공통 Infra' 부분의 적용 기준은 투입 MM가 아닌 해당 프로젝트 Infra(장비) 부분의 매출액임",
 ];
 
-/* ── TAILORING_MATRIX 항목 필드명 정규화 ──
-   프로젝트의 실제 필드명이 다르면 이 함수만 수정하면 됩니다. */
+const DEFAULT_PURPOSE =
+  "프로젝트 유형 또는 특성에 따라 프로젝트에서 수행되어야 할 태스크와 산출물 선정 작업을 지원하기 위한 기준을 제시하고 방법론 테일러링을 가이드한다. 본 가이드는 조직 표준 프로세스(OSSP)를 프로젝트 정의 프로세스(PDP)로 테일러링할 때의 기준으로 사용된다.";
+
+/* ── 매트릭스 항목 필드명 정규화 ── */
 function normalizeEntry(e) {
   const sz = e.size || e.sizes || {};
   return {
@@ -41,6 +44,7 @@ const S = {
   modal: { background: "#12151c", border: "1px solid #2a2f3a", borderRadius: 12, width: "min(960px, 96vw)", maxHeight: "90vh", display: "flex", flexDirection: "column", color: "#e6e9ef" },
   header: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid #2a2f3a" },
   title: { fontSize: 16, fontWeight: 700 },
+  subtitle: { fontSize: 11.5, color: "#8892a4", marginTop: 2 },
   closeBtn: { background: "transparent", border: "1px solid #3a4150", color: "#aab2c0", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontSize: 13 },
   body: { overflowY: "auto", padding: 20 },
   sectionTitle: { fontSize: 14, fontWeight: 700, color: "#8ab4ff", margin: "18px 0 8px" },
@@ -66,8 +70,17 @@ function MOBadge({ v }) {
   return <span style={S.badgeNA}>—</span>;
 }
 
-export default function TailoringGuideModal({ matrix = [], onClose }) {
+export default function TailoringGuideModal({ guide, matrix = [], onClose }) {
   const [q, setQ] = useState("");
+
+  // guide가 있으면 그것을, 없으면(구버전 호출) matrix prop만으로 렌더링
+  const data = guide?.matrix || matrix;
+  const title = guide?.title || "방법론 테일러링 가이드 v2.0";
+  const subtitle = guide?.subtitle || "";
+  const purpose = guide?.purpose || DEFAULT_PURPOSE;
+  const hasDesignMethod = guide ? !!guide.hasDesignMethod : true;
+  const phaseOrder = guide?.phaseOrder || null;
+  const colCount = hasDesignMethod ? 6 : 5;
 
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose?.();
@@ -77,7 +90,7 @@ export default function TailoringGuideModal({ matrix = [], onClose }) {
   }, [onClose]);
 
   const grouped = useMemo(() => {
-    const rows = matrix.map(normalizeEntry).filter((r) => {
+    const rows = data.map(normalizeEntry).filter((r) => {
       if (!q.trim()) return true;
       const t = q.trim().toLowerCase();
       return r.id.toLowerCase().includes(t) || r.name.toLowerCase().includes(t) || String(r.phase).toLowerCase().includes(t);
@@ -87,29 +100,36 @@ export default function TailoringGuideModal({ matrix = [], onClose }) {
       if (!map.has(r.phase)) map.set(r.phase, []);
       map.get(r.phase).push(r);
     });
-    return [...map.entries()];
-  }, [matrix, q]);
+    const entries = [...map.entries()];
+    // 가이드의 단계 순서대로 정렬 (정의되지 않은 단계는 뒤로)
+    if (phaseOrder) {
+      entries.sort((a, b) => {
+        const ia = phaseOrder.indexOf(a[0]); const ib = phaseOrder.indexOf(b[0]);
+        return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+      });
+    }
+    return entries;
+  }, [data, q, phaseOrder]);
 
-  const total = matrix.length;
+  const total = data.length;
 
   return (
     <div style={S.overlay} onClick={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div style={S.modal} role="dialog" aria-modal="true" aria-label="방법론 테일러링 가이드">
+      <div style={S.modal} role="dialog" aria-modal="true" aria-label={title}>
         <div style={S.header}>
-          <div style={S.title}>방법론 테일러링 가이드 v2.0</div>
+          <div>
+            <div style={S.title}>{title}</div>
+            {subtitle && <div style={S.subtitle}>{subtitle}</div>}
+          </div>
           <button style={S.closeBtn} onClick={onClose}>닫기 ✕</button>
         </div>
 
         <div style={S.body}>
           {/* 1. 목적 */}
           <div style={{ ...S.sectionTitle, marginTop: 0 }}>1. 목적</div>
-          <p style={S.p}>
-            프로젝트 유형 또는 특성에 따라 프로젝트에서 수행되어야 할 태스크와 산출물 선정 작업을
-            지원하기 위한 기준을 제시하고 방법론 테일러링을 가이드한다. 본 가이드는 조직 표준
-            프로세스(OSSP)를 프로젝트 정의 프로세스(PDP)로 테일러링할 때의 기준으로 사용된다.
-          </p>
+          <p style={S.p}>{purpose}</p>
 
-          {/* 2. 규모 분류 기준 */}
+          {/* 2. 규모 분류 기준 (전 방법론 공통) */}
           <div style={S.sectionTitle}>2. 프로젝트 규모에 따른 분류</div>
           <table style={S.table}>
             <thead>
@@ -156,13 +176,13 @@ export default function TailoringGuideModal({ matrix = [], onClose }) {
                 <th style={S.th}>(초)대형</th>
                 <th style={S.th}>중형</th>
                 <th style={S.th}>소형</th>
-                <th style={S.th}>설계방식</th>
+                {hasDesignMethod && <th style={S.th}>설계방식</th>}
               </tr>
             </thead>
             <tbody>
               {grouped.map(([phase, rows]) => (
                 <React.Fragment key={phase}>
-                  <tr><td colSpan={6} style={S.phaseHead}>{phase}</td></tr>
+                  <tr><td colSpan={colCount} style={S.phaseHead}>{phase}</td></tr>
                   {rows.map((r) => (
                     <tr key={`${phase}-${r.id}-${r.name}`}>
                       <td style={{ ...S.td, color: "#8892a4", fontFamily: "monospace" }}>{r.id}</td>
@@ -170,15 +190,17 @@ export default function TailoringGuideModal({ matrix = [], onClose }) {
                       <td style={S.td}><MOBadge v={r.large} /></td>
                       <td style={S.td}><MOBadge v={r.medium} /></td>
                       <td style={S.td}><MOBadge v={r.small} /></td>
-                      <td style={S.td}>
-                        <span style={S.methodTag}>{r.method || "공통"}</span>
-                      </td>
+                      {hasDesignMethod && (
+                        <td style={S.td}>
+                          <span style={S.methodTag}>{r.method || "공통"}</span>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </React.Fragment>
               ))}
               {grouped.length === 0 && (
-                <tr><td colSpan={6} style={{ ...S.td, color: "#6a7284", padding: 20 }}>검색 결과가 없습니다.</td></tr>
+                <tr><td colSpan={colCount} style={{ ...S.td, color: "#6a7284", padding: 20 }}>검색 결과가 없습니다.</td></tr>
               )}
             </tbody>
           </table>
