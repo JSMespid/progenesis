@@ -1202,12 +1202,112 @@ function SectionTitle({ n, title }) {
   return <div style={{ fontSize:12.5, fontWeight:700, margin:"16px 0 8px", paddingBottom:4, borderBottom:`1px solid ${T.border}` }}>{n}. {title}</div>;
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// 근무일 달력 유틸 — 주말(토·일) + 사용자 지정 공휴일을 제외한 일정 계산.
+// CPM 전진 일정(선행 FS 관계, 근무일 기준 기간)의 자체 구현 (외부 코드 미사용)
+// ═══════════════════════════════════════════════════════════════════
+function fmtDate(d) { const z = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`; }
+function parseDate(s) { return new Date(s + "T00:00:00"); }
+function addDaysStr(s, n) { const d = parseDate(s); d.setDate(d.getDate() + n); return fmtDate(d); }
+function isWorkday(s, hol) { const w = parseDate(s).getDay(); return w !== 0 && w !== 6 && !hol.includes(s); }
+function nextWorkday(s, hol) { let x = s, g = 0; while (!isWorkday(x, hol) && g < 370) { x = addDaysStr(x, 1); g++; } return x; }
+// 시작일을 1일째로 세어 n번째 근무일을 반환 (공수 n일 → 종료일)
+function addWorkdays(s, n, hol) {
+  let x = nextWorkday(s, hol), c = 1, g = 0;
+  while (c < n && g < 3700) { x = addDaysStr(x, 1); if (isWorkday(x, hol)) c++; g++; }
+  return x;
+}
+// 두 날짜 사이(양끝 포함)의 근무일 수
+function countWorkdays(a, b, hol) {
+  if (!a || !b || b < a) return 0;
+  let x = a, c = 0, g = 0;
+  while (x <= b && g < 3700) { if (isWorkday(x, hol)) c++; x = addDaysStr(x, 1); g++; }
+  return c;
+}
+// 전진 일정 재계산: 선행(FS) 종료 다음 근무일 → 시작일, 시작일+공수 → 종료일. 연쇄 전파.
+function recalcSchedule(tasks, holidays) {
+  const all = []; tasks.forEach(t => (t.subtasks || []).forEach(s => all.push(s)));
+  const byCode = {}; all.forEach(s => { byCode[s.wbsCode] = s; });
+  const cap = all.length + 3;
+  for (let it = 0; it < cap; it++) {
+    let changed = false;
+    for (const s of all) {
+      if (s.pred) {
+        const fins = String(s.pred).split(",").map(x => byCode[x.trim()]).filter(p => p && p.finish).map(p => p.finish);
+        if (fins.length) {
+          const ns = nextWorkday(addDaysStr(fins.sort().slice(-1)[0], 1), holidays);
+          if (s.start !== ns) { s.start = ns; changed = true; }
+        }
+      }
+      if (s.start && !isWorkday(s.start, holidays)) {
+        const ns = nextWorkday(s.start, holidays);
+        if (ns !== s.start) { s.start = ns; changed = true; }
+      }
+      const eff = Number(s.effort) || 0;
+      if (s.start && eff > 0) {
+        const nf = addWorkdays(s.start, eff, holidays);
+        if (s.finish !== nf) { s.finish = nf; changed = true; }
+      }
+    }
+    if (!changed) break;
+  }
+  return tasks;
+}
+
+// 공휴일 지정용 월 달력 — 주말 색상 구분, 평일 클릭으로 공휴일 토글
+function HolidayCalendar({ holidays, onToggle }) {
+  const [ym, setYm] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
+  const startDow = new Date(ym.y, ym.m, 1).getDay();
+  const days = new Date(ym.y, ym.m + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let d = 1; d <= days; d++) cells.push(d);
+  const mv = (k) => setYm(({ y, m }) => { const d = new Date(y, m + k, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
+  const z = n => String(n).padStart(2, "0");
+  return (
+    <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: 12, width: 250, flexShrink: 0 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <button onClick={() => mv(-1)} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 14 }}>◀</button>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>{ym.y}년 {ym.m + 1}월</span>
+        <button onClick={() => mv(1)} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 14 }}>▶</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, textAlign: "center" }}>
+        {["일", "월", "화", "수", "목", "금", "토"].map((w, i) => (
+          <div key={w} style={{ fontSize: 10, fontWeight: 700, color: i === 0 ? T.red : i === 6 ? T.accent : T.muted, padding: "2px 0" }}>{w}</div>
+        ))}
+        {cells.map((d, i) => {
+          if (d === null) return <div key={"e" + i} />;
+          const ds = `${ym.y}-${z(ym.m + 1)}-${z(d)}`;
+          const dow = (startDow + d - 1) % 7;
+          const weekend = dow === 0 || dow === 6;
+          const isHol = holidays.includes(ds);
+          return (
+            <div key={ds} onClick={() => { if (!weekend) onToggle(ds); }}
+              title={weekend ? "주말 (비근무일)" : isHol ? "공휴일 (클릭 시 해제)" : "클릭하여 공휴일 지정"}
+              style={{ fontSize: 11, padding: "4px 0", borderRadius: 5, cursor: weekend ? "default" : "pointer",
+                background: isHol ? T.red + "33" : weekend ? T.subtle : "transparent",
+                color: isHol ? T.red : dow === 0 ? T.red + "99" : dow === 6 ? T.accent + "99" : T.text,
+                border: isHol ? `1px solid ${T.red}66` : "1px solid transparent", fontWeight: isHol ? 700 : 400 }}>
+              {d}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 9.5, color: T.muted, marginTop: 8, lineHeight: 1.6 }}>
+        평일을 클릭하면 <span style={{ color: T.red }}>공휴일</span>로 지정/해제됩니다. 주말(토·일)은 자동으로 비근무일 처리됩니다.
+      </div>
+    </div>
+  );
+}
+
 function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wbsSetup, setWbsSetup, tailoring, ossp }) {
   const guide = getGuideForOSSP(ossp);
   const scale = tailoring?.scale || "중형";
   const method = tailoring?.method || "UML";
   const excluded = tailoring?.excluded || {};
   const notes = tailoring?.notes || {};
+  const holidays = wbsSetup?.holidays || [];
+  const [showCal, setShowCal] = useState(false);
 
   // ── FBS: PDP(테일러링결과서)에서 적용 확정된 산출물 → 단계별 Activity ──
   const isApplied = (d) => {
@@ -1242,9 +1342,35 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
   const rowAllOn = (d) => leaves.length > 0 && leaves.every((_, li) => selected[selKey(d, li)]);
   const selectedCount = Object.values(selected).filter(Boolean).length;
 
+  // ── 공휴일 토글: 설정 저장 + 기존 일정 즉시 재계산 ──
+  const toggleHoliday = (ds) => {
+    const nh = holidays.includes(ds) ? holidays.filter(x => x !== ds) : [...holidays, ds].sort();
+    setWbsSetup(su => ({ ...su, holidays: nh }));
+    if (wbsData?.tasks) {
+      setWbsData(w => {
+        const tasks = w.tasks.map(t => ({ ...t, subtasks: (t.subtasks || []).map(s => ({ ...s })) }));
+        recalcSchedule(tasks, nh);
+        return { ...w, tasks, holidays: nh };
+      });
+    }
+  };
+
+  // ── 행 편집: 값 반영 후 전진 일정 재계산 (종료일 직접 수정 시 공수 역산) ──
+  const updateRow = (tid, sid, patch) => setWbsData(w => {
+    const tasks = w.tasks.map(t => ({ ...t, subtasks: (t.subtasks || []).map(s => ({ ...s })) }));
+    const t = tasks.find(x => x.id === tid);
+    const s = t?.subtasks.find(x => x.id === sid);
+    if (!s) return w;
+    Object.assign(s, patch);
+    if (patch.finish !== undefined && s.start) {
+      if (s.finish && s.finish < s.start) s.finish = s.start;
+      s.effort = countWorkdays(s.start, s.finish, holidays) || "";
+    }
+    recalcSchedule(tasks, holidays);
+    return { ...w, tasks, holidays };
+  });
+
   // ── WBS 생성 — 엑셀 매크로 'WBS자동생성'의 번호 체계 a.b.c.d.e 이식 ──
-  // a=단계, b=Activity(산출물 작성), c=PBS L1, d=PBS L2, e=PBS L3
-  // 중복 규칙: L1/L2는 동일 Activity 내 중복 생략(단, L2 "공통"은 허용), L3은 중복 허용
   function buildWBS() {
     const rows = [];
     let a = 0;
@@ -1270,7 +1396,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
             dd += 1; e = 0;
             rows.push({ level: 4, wbsCode: `${a}.${b}.${c}.${dd}`, name: leaf.l2, deliverable: d.name });
           }
-          if (leaf.l3 && dd > 0) {   // L3은 L2가 있는 경우에만 (매크로 전제와 동일)
+          if (leaf.l3 && dd > 0) {
             e += 1;
             rows.push({ level: 5, wbsCode: `${a}.${b}.${c}.${dd}.${e}`, name: leaf.l3, deliverable: d.name });
           }
@@ -1278,7 +1404,6 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
       }
     }
     if (!rows.length) return;
-    // 기존 wbsData 구조(tasks/subtasks)로 변환 — 저장·상세화면 호환
     const tasks = [];
     let cur = null;
     rows.forEach((r, idx) => {
@@ -1286,13 +1411,26 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
         cur = { id: `t${idx}`, wbsCode: r.wbsCode, phase: r.name, duration: "", subtasks: [] };
         tasks.push(cur);
       } else if (cur) {
-        cur.subtasks.push({ id: `s${idx}`, wbsCode: r.wbsCode, task: r.name, level: r.level, deliverable: r.deliverable, assignee: "", duration: "", status: "대기" });
+        cur.subtasks.push({ id: `s${idx}`, wbsCode: r.wbsCode, task: r.name, level: r.level, deliverable: r.deliverable,
+          assignee: "", pred: "", start: "", finish: "", effort: "", duration: "", status: "대기" });
       }
     });
-    setWbsData({ tasks, pbsText });
+    setWbsData({ tasks, pbsText, holidays });
   }
 
+  // 단계(요약) 행 롤업: 하위 작업의 시작 최소 ~ 종료 최대 · 공수 합계
+  const rollup = (t) => {
+    const ss = (t.subtasks || []).map(s => s.start).filter(Boolean).sort();
+    const ff = (t.subtasks || []).map(s => s.finish).filter(Boolean).sort();
+    const eff = (t.subtasks || []).reduce((n, s) => n + (Number(s.effort) || 0), 0);
+    return { start: ss[0] || "", finish: ff.slice(-1)[0] || "", eff };
+  };
+
   const th = { ...cellHead, textAlign: "center", fontSize: 10 };
+  const edInput = { width: "100%", boxSizing: "border-box", background: "transparent", border: "none",
+    borderBottom: `1px dashed ${T.border}`, color: T.text, fontSize: 10.5, fontFamily: "inherit", outline: "none", padding: "2px 2px" };
+  const edDate = { ...edInput, colorScheme: "dark", width: 112 };
+
   return (
     <div>
       <div style={{ marginBottom: 14 }}>
@@ -1331,7 +1469,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
             PBS를 먼저 입력하면 매트릭스가 표시됩니다.
           </div>
         ) : (
-          <div style={{ overflowX: "auto", maxHeight: 340, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 10 }}>
+          <div style={{ overflowX: "auto", maxHeight: 300, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 10 }}>
             <table style={{ borderCollapse: "collapse", fontSize: 10.5, minWidth: "100%" }}>
               <thead>
                 <tr>
@@ -1370,29 +1508,107 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
         )}
       </div>
 
-      {/* 3. 생성 결과 */}
+      {/* 3. 일정 계획 (생성 결과 편집) */}
       {wbsData?.tasks?.length > 0 && (
         <div style={{ animation: "fadeIn .4s" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <Badge color={T.green}>✓ WBS 생성 완료 — {wbsData.tasks.reduce((n, t) => n + 1 + (t.subtasks?.length || 0), 0)}개 항목</Badge>
-            <span style={{ fontSize: 10, color: T.muted }}>매트릭스 수정 후 "WBS 생성"을 다시 누르면 갱신됩니다</span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>③ 일정 계획</div>
+              <Badge color={T.green}>✓ {wbsData.tasks.reduce((n, t) => n + 1 + (t.subtasks?.length || 0), 0)}개 항목</Badge>
+              {holidays.length > 0 && <Badge color={T.red}>공휴일 {holidays.length}일</Badge>}
+            </div>
+            <Btn variant="outline" onClick={() => setShowCal(v => !v)} style={{ fontSize: 11, padding: "4px 10px" }}>
+              📅 {showCal ? "달력 닫기" : "달력 · 공휴일 설정"}
+            </Btn>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 300, overflow: "auto", border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 12px", background: T.bg }}>
-            {wbsData.tasks.map(t => (
-              <React.Fragment key={t.id}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 4px", borderBottom: `1px solid ${T.border}` }}>
-                  <span style={{ fontSize: 10, color: T.accent, fontFamily: "monospace", background: T.accentDim, padding: "1px 6px", borderRadius: 4 }}>{t.wbsCode}</span>
-                  <span style={{ fontWeight: 700, fontSize: 12.5 }}>{t.phase}</span>
-                </div>
-                {t.subtasks?.map(s => (
-                  <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "3px 4px", paddingLeft: 4 + ((s.level || 2) - 1) * 16, fontSize: 11.5 }}>
-                    <span style={{ color: T.muted, fontFamily: "monospace", fontSize: 9.5, flexShrink: 0 }}>{s.wbsCode}</span>
-                    <span style={{ flex: 1 }}>{s.task}</span>
-                    {s.deliverable && <Badge color={T.amber}>{s.deliverable}</Badge>}
+
+          {showCal && (
+            <div style={{ display: "flex", gap: 12, marginBottom: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <HolidayCalendar holidays={holidays} onToggle={toggleHoliday} />
+              <div style={{ flex: 1, minWidth: 220, fontSize: 11, color: T.muted, lineHeight: 1.8 }}>
+                <div style={{ fontWeight: 700, color: T.text, marginBottom: 4 }}>일정 계산 규칙 (근무일 기준)</div>
+                <div>· 시작일 + 투입공수(근무일) → 종료일 자동 계산 (주말·공휴일 제외)</div>
+                <div>· 종료일을 직접 수정하면 투입공수를 역산</div>
+                <div>· 선후행에 선행 WBS 코드 입력(쉼표 구분, FS 관계) → 선행 종료 다음 근무일로 시작일 자동 이동</div>
+                <div>· 공휴일 변경 시 전체 일정 즉시 재계산</div>
+                {holidays.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <span style={{ fontWeight: 700, color: T.text }}>지정된 공휴일:</span>{" "}
+                    {holidays.map(h => (
+                      <span key={h} onClick={() => toggleHoliday(h)} title="클릭하여 해제"
+                        style={{ display: "inline-block", margin: "2px 4px 2px 0", padding: "1px 7px", borderRadius: 5, background: T.red + "22", color: T.red, cursor: "pointer", fontSize: 10.5 }}>
+                        {h} ✕
+                      </span>
+                    ))}
                   </div>
-                ))}
-              </React.Fragment>
-            ))}
+                )}
+              </div>
+            </div>
+          )}
+
+          <div style={{ overflowX: "auto", maxHeight: 380, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 10 }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 10.5, minWidth: "100%" }}>
+              <thead>
+                <tr>
+                  <td style={{ ...th, textAlign: "left" }}>WBS</td>
+                  <td style={{ ...th, textAlign: "left", minWidth: 170 }}>Task</td>
+                  <td style={{ ...th, minWidth: 100 }}>산출물</td>
+                  <td style={{ ...th, minWidth: 70 }}>작업자</td>
+                  <td style={{ ...th, minWidth: 80 }}>선후행<br/><span style={{ fontWeight: 400, fontSize: 8.5 }}>(선행 WBS, 쉼표)</span></td>
+                  <td style={th}>시작일</td>
+                  <td style={th}>종료일</td>
+                  <td style={{ ...th, width: 60 }}>공수(일)</td>
+                </tr>
+              </thead>
+              <tbody>
+                {wbsData.tasks.map(t => {
+                  const r = rollup(t);
+                  return (
+                    <React.Fragment key={t.id}>
+                      <tr style={{ background: T.subtle }}>
+                        <td style={{ ...cell, fontFamily: "monospace", fontWeight: 700, color: T.accent }}>{t.wbsCode}</td>
+                        <td style={{ ...cell, fontWeight: 700 }}>{t.phase}</td>
+                        <td style={cell} colSpan={3}><span style={{ fontSize: 9.5, color: T.muted }}>요약 (하위 롤업)</span></td>
+                        <td style={{ ...cell, textAlign: "center", color: T.muted }}>{r.start || "—"}</td>
+                        <td style={{ ...cell, textAlign: "center", color: T.muted }}>{r.finish || "—"}</td>
+                        <td style={{ ...cell, textAlign: "center", color: T.muted, fontWeight: 700 }}>{r.eff || "—"}</td>
+                      </tr>
+                      {t.subtasks?.map(s => (
+                        <tr key={s.id}>
+                          <td style={{ ...cell, fontFamily: "monospace", fontSize: 9.5, color: T.muted, whiteSpace: "nowrap" }}>{s.wbsCode}</td>
+                          <td style={{ ...cell, paddingLeft: 8 + ((s.level || 2) - 2) * 14 }}>
+                            <input value={s.task || ""} onChange={e => updateRow(t.id, s.id, { task: e.target.value })} style={edInput} />
+                          </td>
+                          <td style={cell}>
+                            <input value={s.deliverable || ""} onChange={e => updateRow(t.id, s.id, { deliverable: e.target.value })} style={edInput} />
+                          </td>
+                          <td style={cell}>
+                            <input value={s.assignee || ""} onChange={e => updateRow(t.id, s.id, { assignee: e.target.value })} style={edInput} />
+                          </td>
+                          <td style={cell}>
+                            <input value={s.pred || ""} onChange={e => updateRow(t.id, s.id, { pred: e.target.value })} placeholder="예: 1.1.1" style={edInput} />
+                          </td>
+                          <td style={{ ...cell, whiteSpace: "nowrap" }}>
+                            <input type="date" value={s.start || ""} onChange={e => updateRow(t.id, s.id, { start: e.target.value })}
+                              disabled={!!s.pred} title={s.pred ? "선행 작업에 의해 자동 계산됩니다" : ""} style={{ ...edDate, opacity: s.pred ? 0.55 : 1 }} />
+                          </td>
+                          <td style={{ ...cell, whiteSpace: "nowrap" }}>
+                            <input type="date" value={s.finish || ""} onChange={e => updateRow(t.id, s.id, { finish: e.target.value })} style={edDate} />
+                          </td>
+                          <td style={cell}>
+                            <input type="number" min="0" value={s.effort || ""} onChange={e => updateRow(t.id, s.id, { effort: e.target.value })}
+                              style={{ ...edInput, textAlign: "center", width: 50 }} />
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>
+            ※ 매트릭스를 수정한 뒤 "WBS 생성"을 다시 누르면 구조가 재생성됩니다 (입력한 일정은 초기화). 일정·작업자·사유는 프로젝트 저장 시 함께 보존됩니다.
           </div>
         </div>
       )}
