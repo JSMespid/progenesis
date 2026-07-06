@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { SDLC_FACTOR_CRITERIA, criteriaToPromptText } from './sdlcFactorCriteria';
 import TailoringGuideModal from './TailoringGuideModal';
 import { TAILORING_GUIDES, getGuideForOSSP } from './tailoringGuides';
@@ -191,6 +191,7 @@ export default function ProGenesis() {
   const [tailoring, setTailoring] = useState({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준", review_cycle:"격주", test_level:"통합", risk:"강화" });
   const [pdpData, setPdpData] = useState(null);
   const [wbsData, setWbsData] = useState(null);
+  const [wbsSetup, setWbsSetup] = useState({ pbsText: "", selected: {} });   // PBS×FBS 매트릭스 설정
   const [deliverablesData, setDeliverablesData] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
@@ -352,13 +353,18 @@ PDP JSON만 출력(설명·마크다운 금지): {"overview":{"purpose":"string"
     setGenerating(false);
   }
 
-  async function generateWBS() {
-    setGenerating(true); setGenError(null); setWbsData(null);
+  // PBS(Product Breakdown Structure) 초안을 AI로 추천 — WBS 생성 자체는 매트릭스 기반 결정적 로직으로 수행
+  async function recommendPBS() {
+    setGenerating(true); setGenError(null);
     try {
-      const result = await callClaude(`프로젝트: ${projectForm.name}, OSSP: ${selectedOSSP?.label}(${selectedOSSP?.phases?.join(",")}), 기간: ${projectForm.startDate}~${projectForm.endDate}
-WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string","phase":"string","subtasks":[{"id":"string","wbsCode":"string","task":"string","duration":"string","assignee":"string","status":"대기|진행|완료"}],"duration":"string"}]}`, 8000);
-      setWbsData(result);
-    } catch(e) { setGenError("WBS 생성 실패: "+e.message); }
+      const result = await callClaude(`당신은 PMBOK 8판에 정통한 프로젝트 관리 전문가입니다. 아래 프로젝트의 PBS(Product Breakdown Structure, 제품 분해 구조)를 작성하세요.
+프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, OSSP: ${selectedOSSP?.label||"-"}
+규칙: 대상 시스템을 구성 요소로 분해하여 "L1 > L2 > L3" 형식으로 한 줄에 하나씩 작성. L3이 없으면 "L1 > L2"까지만. 여러 요소에 공통 적용되는 부분은 L2에 "공통" 사용 가능. 8~14줄, 한국어.
+JSON만 출력: {"pbs":["string"]}`, 2000);
+      if (Array.isArray(result?.pbs) && result.pbs.length) {
+        setWbsSetup(s => ({ ...s, pbsText: result.pbs.join("\n") }));
+      } else { throw new Error("PBS 응답 형식 오류"); }
+    } catch(e) { setGenError("PBS 추천 실패: "+e.message); }
     setGenerating(false);
   }
 
@@ -394,7 +400,7 @@ ${guide.title} 기준 적용 산출물(${applied.length}개): ${appliedList}
       const draft = {
         wizardStep, projectForm, selectedOSSP,
         sdlcFactors, selectedSDLC, sdlcRecommendation,
-        tailoring, pdpData, wbsData, deliverablesData,
+        tailoring, pdpData, wbsData, wbsSetup, deliverablesData,
         savedAt: new Date().toISOString(),
       };
       localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
@@ -426,6 +432,7 @@ ${guide.title} 기준 적용 산출물(${applied.length}개): ${appliedList}
     if (d.tailoring) setTailoring(d.tailoring);
     setPdpData(d.pdpData || null);
     setWbsData(d.wbsData || null);
+    setWbsSetup(d.wbsSetup || { pbsText: "", selected: {} });
     setDeliverablesData(d.deliverablesData || null);
   }
 
@@ -446,7 +453,7 @@ ${guide.title} 기준 적용 산출물(${applied.length}개): ${appliedList}
     setSelectedOSSP(null); setTailoring({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준",review_cycle:"격주",test_level:"통합",risk:"강화" });
     setSelectedSDLC(null); setSdlcRecommendation(null);
     setSdlcFactors({ req_clarity:"보통", req_volatility:"보통", delivery:"단계적", risk:"보통", regulation:"보통", team:"집중" });
-    setPdpData(null); setWbsData(null); setDeliverablesData(null);
+    setPdpData(null); setWbsData(null); setWbsSetup({ pbsText: "", selected: {} }); setDeliverablesData(null);
     clearDraft();   // 완료된 프로젝트의 임시저장본 제거
     nav("dashboard");
   }
@@ -463,7 +470,8 @@ ${guide.title} 기준 적용 산출물(${applied.length}개): ${appliedList}
     new_project: <NewProjectWizard step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
       pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError}
-      onGeneratePDP={generatePDP} onGenerateWBS={generateWBS} onGenerateDeliverables={generateDeliverables}
+      onGeneratePDP={generatePDP} onRecommendPBS={recommendPBS} setWbsData={setWbsData}
+      wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} onGenerateDeliverables={generateDeliverables}
       onFinish={finishProject} nav={nav} customOSSP={customOSSP}
       sdlcFactors={sdlcFactors} setSdlcFactors={setSdlcFactors}
       selectedSDLC={selectedSDLC} setSelectedSDLC={setSelectedSDLC}
@@ -647,7 +655,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onGenerateWBS, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
   const steps = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   const canNext = [
     form.name&&form.client&&form.startDate&&form.endDate&&form.pm,  // 0 기본정보
@@ -721,7 +729,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===2 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} sdlc={selectedSDLC} />}
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
-        {step===5 && <StepWBS wbsData={wbsData} generating={generating} genError={genError} onGenerate={onGenerateWBS} />}
+        {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} onRecommendPBS={onRecommendPBS} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} />}
         {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
@@ -1194,31 +1202,196 @@ function SectionTitle({ n, title }) {
   return <div style={{ fontSize:12.5, fontWeight:700, margin:"16px 0 8px", paddingBottom:4, borderBottom:`1px solid ${T.border}` }}>{n}. {title}</div>;
 }
 
-function StepWBS({ wbsData, generating, genError, onGenerate }) {
+function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wbsSetup, setWbsSetup, tailoring, ossp }) {
+  const guide = getGuideForOSSP(ossp);
+  const scale = tailoring?.scale || "중형";
+  const method = tailoring?.method || "UML";
+  const excluded = tailoring?.excluded || {};
+  const notes = tailoring?.notes || {};
+
+  // ── FBS: PDP(테일러링결과서)에서 적용 확정된 산출물 → 단계별 Activity ──
+  const isApplied = (d) => {
+    const ov = notes[`${d.phase}:${d.code}`]?.applied;
+    return ov !== undefined ? ov : (d.required || !excluded[d.code]);
+  };
+  const fbs = classifyDeliverables(scale, method, guide).filter(isApplied);
+  const fbsByPhase = {};
+  fbs.forEach(d => { (fbsByPhase[d.phase] = fbsByPhase[d.phase] || []).push(d); });
+  const phases = guide.phaseOrder.filter(ph => fbsByPhase[ph]?.length);
+
+  // ── PBS: "L1 > L2 > L3" 한 줄 형식 텍스트 → leaf 목록 ──
+  const pbsText = wbsSetup?.pbsText || "";
+  const leaves = pbsText.split("\n").map(s => s.trim()).filter(Boolean).map(line => {
+    const p = line.split(">").map(x => x.trim()).filter(Boolean);
+    return { l1: p[0] || "", l2: p[1] || "", l3: p[2] || "" };
+  }).filter(l => l.l1);
+
+  const selected = wbsSetup?.selected || {};
+  const selKey = (d, li) => `${d.phase}|${d.code}|${li}`;
+  const toggleCell = (d, li) => setWbsSetup(s => {
+    const sel = { ...(s.selected || {}) };
+    const k = `${d.phase}|${d.code}|${li}`;
+    sel[k] = !sel[k];
+    return { ...s, selected: sel };
+  });
+  const setRowAll = (d, val) => setWbsSetup(s => {
+    const sel = { ...(s.selected || {}) };
+    leaves.forEach((_, li) => { sel[`${d.phase}|${d.code}|${li}`] = val; });
+    return { ...s, selected: sel };
+  });
+  const rowAllOn = (d) => leaves.length > 0 && leaves.every((_, li) => selected[selKey(d, li)]);
+  const selectedCount = Object.values(selected).filter(Boolean).length;
+
+  // ── WBS 생성 — 엑셀 매크로 'WBS자동생성'의 번호 체계 a.b.c.d.e 이식 ──
+  // a=단계, b=Activity(산출물 작성), c=PBS L1, d=PBS L2, e=PBS L3
+  // 중복 규칙: L1/L2는 동일 Activity 내 중복 생략(단, L2 "공통"은 허용), L3은 중복 허용
+  function buildWBS() {
+    const rows = [];
+    let a = 0;
+    for (const ph of phases) {
+      const acts = fbsByPhase[ph].filter(d => leaves.some((_, li) => selected[selKey(d, li)]));
+      if (!acts.length) continue;
+      a += 1; let b = 0;
+      rows.push({ level: 1, wbsCode: `${a}`, name: ph, deliverable: "" });
+      for (const d of acts) {
+        b += 1;
+        rows.push({ level: 2, wbsCode: `${a}.${b}`, name: `${d.name} 작성`, deliverable: "" });
+        let c = 0, dd = 0, e = 0;
+        const seenL1 = new Set(), seenL2 = new Set();
+        leaves.forEach((leaf, li) => {
+          if (!selected[selKey(d, li)]) return;
+          if (leaf.l1 && !seenL1.has(leaf.l1)) {
+            seenL1.add(leaf.l1);
+            c += 1; dd = 0; e = 0;
+            rows.push({ level: 3, wbsCode: `${a}.${b}.${c}`, name: leaf.l1, deliverable: d.name });
+          }
+          if (leaf.l2 && (leaf.l2 === "공통" || !seenL2.has(leaf.l2))) {
+            if (leaf.l2 !== "공통") seenL2.add(leaf.l2);
+            dd += 1; e = 0;
+            rows.push({ level: 4, wbsCode: `${a}.${b}.${c}.${dd}`, name: leaf.l2, deliverable: d.name });
+          }
+          if (leaf.l3 && dd > 0) {   // L3은 L2가 있는 경우에만 (매크로 전제와 동일)
+            e += 1;
+            rows.push({ level: 5, wbsCode: `${a}.${b}.${c}.${dd}.${e}`, name: leaf.l3, deliverable: d.name });
+          }
+        });
+      }
+    }
+    if (!rows.length) return;
+    // 기존 wbsData 구조(tasks/subtasks)로 변환 — 저장·상세화면 호환
+    const tasks = [];
+    let cur = null;
+    rows.forEach((r, idx) => {
+      if (r.level === 1) {
+        cur = { id: `t${idx}`, wbsCode: r.wbsCode, phase: r.name, duration: "", subtasks: [] };
+        tasks.push(cur);
+      } else if (cur) {
+        cur.subtasks.push({ id: `s${idx}`, wbsCode: r.wbsCode, task: r.name, level: r.level, deliverable: r.deliverable, assignee: "", duration: "", status: "대기" });
+      }
+    });
+    setWbsData({ tasks, pbsText });
+  }
+
+  const th = { ...cellHead, textAlign: "center", fontSize: 10 };
   return (
     <div>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
-        <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>WBS 자동 생성</h2><p style={{ fontSize:11, color:T.muted }}>AI가 작업 분류 구조를 생성합니다.</p></div>
-        {!wbsData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ AI 생성</Btn>}
+      <div style={{ marginBottom: 14 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>WBS 자동 생성 (PBS × FBS 매트릭스)</h2>
+        <p style={{ fontSize: 11, color: T.muted }}>
+          FBS(단계별 확정 산출물)는 PDP에서 자동 구성됩니다. PBS를 정의하고, 매트릭스에서 산출물이 적용될 PBS를 선택한 뒤 WBS를 생성하세요.
+        </p>
       </div>
-      {generating && <Spinner />}
-      {genError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9 }}>{genError}</div>}
-      {wbsData && (
-        <div style={{ animation:"fadeIn .4s" }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-            <Badge color={T.green}>✓ WBS 생성 완료</Badge>
-            <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
+      {genError && <div style={{ color: T.red, fontSize: 12, padding: 10, background: T.red + "11", borderRadius: 9, marginBottom: 10 }}>{genError}</div>}
+
+      {/* 1. PBS 정의 */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>① PBS (제품 분해 구조) <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· {leaves.length}개 요소</span></div>
+          <Btn variant="outline" onClick={onRecommendPBS} disabled={generating} style={{ fontSize: 11, padding: "4px 10px" }}>
+            {generating ? "추천 중…" : "⚡ AI 추천"}
+          </Btn>
+        </div>
+        {generating && <div style={{ marginBottom: 6 }}><Spinner text="프로젝트 정보 기반 PBS 작성 중…" /></div>}
+        <textarea value={pbsText}
+          onChange={e => setWbsSetup(s => ({ ...s, pbsText: e.target.value }))}
+          placeholder={"한 줄에 하나씩 \"L1 > L2 > L3\" 형식으로 입력하세요.\n예)\n포털시스템 > 사용자관리 > 로그인\n포털시스템 > 사용자관리 > 권한관리\n포털시스템 > 게시판\n인터페이스 > 공통"}
+          rows={6}
+          style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 12px", color: T.text, fontSize: 12, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.7 }} />
+        <div style={{ fontSize: 10, color: T.muted, marginTop: 4 }}>※ L3을 사용하려면 L2가 있어야 합니다. 여러 요소에 공통 적용되는 부분은 L2에 "공통"을 사용하세요 (WBS에서 중복 허용).</div>
+      </div>
+
+      {/* 2. PBS × FBS 매트릭스 */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>② PBS × FBS 매트릭스 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· 선택 {selectedCount}칸</span></div>
+          <Btn onClick={buildWBS} disabled={leaves.length === 0 || selectedCount === 0} style={{ fontSize: 12, padding: "6px 12px" }}>⚙ WBS 생성</Btn>
+        </div>
+        {leaves.length === 0 ? (
+          <div style={{ fontSize: 11, color: T.muted, padding: "14px 12px", background: T.bg, border: `1px dashed ${T.border}`, borderRadius: 10 }}>
+            PBS를 먼저 입력하면 매트릭스가 표시됩니다.
           </div>
-          <div style={{ display:"flex", flexDirection:"column", gap:8, maxHeight:300, overflow:"auto" }}>
-            {wbsData.tasks?.map(t=>(
-              <Card key={t.id} style={{ padding:12, background:T.bg }}>
-                <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8 }}>
-                  <span style={{ fontSize:10, color:T.accent, fontFamily:"monospace", background:T.accentDim, padding:"2px 6px", borderRadius:4 }}>{t.wbsCode}</span>
-                  <span style={{ fontWeight:600, fontSize:13 }}>{t.phase}</span>
-                  <span style={{ fontSize:11, color:T.muted, marginLeft:"auto" }}>{t.duration}</span>
+        ) : (
+          <div style={{ overflowX: "auto", maxHeight: 340, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 10 }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 10.5, minWidth: "100%" }}>
+              <thead>
+                <tr>
+                  <td style={{ ...th, textAlign: "left" }} rowSpan={3}>단계</td>
+                  <td style={{ ...th, textAlign: "left", minWidth: 150 }} rowSpan={3}>산출물 (FBS Activity)</td>
+                  <td style={th} rowSpan={3}>전체</td>
+                  {leaves.map((l, li) => <td key={"h1" + li} style={{ ...th, background: "#16233a" }}>{l.l1}</td>)}
+                </tr>
+                <tr>{leaves.map((l, li) => <td key={"h2" + li} style={th}>{l.l2 || "—"}</td>)}</tr>
+                <tr>{leaves.map((l, li) => <td key={"h3" + li} style={th}>{l.l3 || "—"}</td>)}</tr>
+              </thead>
+              <tbody>
+                {phases.map(ph => (
+                  fbsByPhase[ph].map((d, i) => (
+                    <tr key={`${ph}-${d.code}`}>
+                      {i === 0 && <td style={{ ...cell, fontWeight: 600, verticalAlign: "top", whiteSpace: "nowrap" }} rowSpan={fbsByPhase[ph].length}>{ph}</td>}
+                      <td style={{ ...cell, whiteSpace: "nowrap" }}><span style={{ color: T.muted, fontFamily: "monospace", fontSize: 9.5, marginRight: 5 }}>{d.code}</span>{d.name}</td>
+                      <td style={{ ...cell, textAlign: "center" }}>
+                        <input type="checkbox" checked={rowAllOn(d)} onChange={e => setRowAll(d, e.target.checked)} style={{ width: 12, height: 12, cursor: "pointer" }} />
+                      </td>
+                      {leaves.map((_, li) => {
+                        const on = !!selected[selKey(d, li)];
+                        return (
+                          <td key={li} onClick={() => toggleCell(d, li)}
+                            style={{ ...cell, textAlign: "center", cursor: "pointer", background: on ? T.accentDim : "transparent", color: on ? "#bfd4ff" : T.muted, userSelect: "none" }}>
+                            {on ? "●" : ""}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* 3. 생성 결과 */}
+      {wbsData?.tasks?.length > 0 && (
+        <div style={{ animation: "fadeIn .4s" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <Badge color={T.green}>✓ WBS 생성 완료 — {wbsData.tasks.reduce((n, t) => n + 1 + (t.subtasks?.length || 0), 0)}개 항목</Badge>
+            <span style={{ fontSize: 10, color: T.muted }}>매트릭스 수정 후 "WBS 생성"을 다시 누르면 갱신됩니다</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 300, overflow: "auto", border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 12px", background: T.bg }}>
+            {wbsData.tasks.map(t => (
+              <React.Fragment key={t.id}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 4px", borderBottom: `1px solid ${T.border}` }}>
+                  <span style={{ fontSize: 10, color: T.accent, fontFamily: "monospace", background: T.accentDim, padding: "1px 6px", borderRadius: 4 }}>{t.wbsCode}</span>
+                  <span style={{ fontWeight: 700, fontSize: 12.5 }}>{t.phase}</span>
                 </div>
-                {t.subtasks?.map(s=><div key={s.id} style={{ display:"flex", alignItems:"center", gap:6, padding:"4px 8px", background:T.surface, borderRadius:6, fontSize:11, marginBottom:3 }}><span style={{ color:T.muted, fontFamily:"monospace", fontSize:9 }}>{s.wbsCode}</span><span style={{ flex:1 }}>{s.task}</span><Badge color={s.status==="완료"?T.green:s.status==="진행"?T.amber:T.muted}>{s.status}</Badge></div>)}
-              </Card>
+                {t.subtasks?.map(s => (
+                  <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "3px 4px", paddingLeft: 4 + ((s.level || 2) - 1) * 16, fontSize: 11.5 }}>
+                    <span style={{ color: T.muted, fontFamily: "monospace", fontSize: 9.5, flexShrink: 0 }}>{s.wbsCode}</span>
+                    <span style={{ flex: 1 }}>{s.task}</span>
+                    {s.deliverable && <Badge color={T.amber}>{s.deliverable}</Badge>}
+                  </div>
+                ))}
+              </React.Fragment>
             ))}
           </div>
         </div>
