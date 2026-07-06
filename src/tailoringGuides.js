@@ -92,33 +92,29 @@ export const IE_TAILORING_MATRIX = [
   {"code": "TS4202", "name": "결함추적", "phase": "운영전환", "method": "공통", "large": "M", "medium": "O", "small": "O"},
   {"code": "TR5101", "name": "교육훈련 결과서", "phase": "운영전환", "method": "공통", "large": "O", "medium": "O", "small": "O"},];
 
-// ── 2) Waterfall — PMBOK 8판 예측형 접근 기준 QA 필수 산출물 포함 (27건) ──
+// ── 2) Waterfall — 등록 자산 "Waterfall 테일러링 가이드 V1.0" 기준 (22건)
+// 규모 매핑: 대규모→large / 중규모→medium / 소규모→small.
 export const WATERFALL_TAILORING_MATRIX = [
   {"code": "WF1101", "name": "프로젝트 관리 계획서(PMP)", "phase": "요구분석", "method": "공통", "large": "M", "medium": "M", "small": "M"},
   {"code": "WF1102", "name": "요구사항 정의서", "phase": "요구분석", "method": "공통", "large": "M", "medium": "M", "small": "M"},
   {"code": "WF1103", "name": "요구사항 추적표(RTM)", "phase": "요구분석", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "WF1104", "name": "품질보증 계획서", "phase": "요구분석", "method": "공통", "large": "M", "medium": "M", "small": "M"},
+  {"code": "WF1104", "name": "품질보증 계획서", "phase": "요구분석", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "WF1105", "name": "리스크 관리대장", "phase": "요구분석", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "WF1106", "name": "범위 기술서(Scope Statement)", "phase": "요구분석", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "WF2101", "name": "아키텍처 설계서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
+  {"code": "WF2101", "name": "아키텍처 설계서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "WF2102", "name": "상세 설계서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "WF2103", "name": "인터페이스 설계서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "O"},
+  {"code": "WF2103", "name": "인터페이스 설계서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "O", "note": "소규모는 연계 시 M"},
   {"code": "WF2104", "name": "DB 설계서(ERD)", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "WF2105", "name": "화면(UI) 설계서", "phase": "설계", "method": "공통", "large": "M", "medium": "O", "small": "O"},
   {"code": "WF3101", "name": "프로그램 소스코드", "phase": "구현", "method": "공통", "large": "M", "medium": "M", "small": "M"},
   {"code": "WF3102", "name": "코딩 표준 준수 검토서", "phase": "구현", "method": "공통", "large": "M", "medium": "O", "small": "O"},
   {"code": "WF3103", "name": "단위테스트 결과서", "phase": "구현", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "WF3104", "name": "코드 리뷰 기록", "phase": "구현", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "WF4101", "name": "통합테스트 계획서", "phase": "테스트", "method": "공통", "large": "M", "medium": "M", "small": "M"},
+  {"code": "WF4101", "name": "통합테스트 계획서/결과서", "phase": "테스트", "method": "공통", "large": "M", "medium": "M", "small": "M"},
   {"code": "WF4102", "name": "테스트 케이스·시나리오", "phase": "테스트", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "WF4103", "name": "통합테스트 결과서", "phase": "테스트", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "WF4104", "name": "결함 관리 대장", "phase": "테스트", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "WF4105", "name": "성능테스트 결과서", "phase": "테스트", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "WF5101", "name": "배포(이행) 계획서", "phase": "배포", "method": "공통", "large": "M", "medium": "M", "small": "M"},
+  {"code": "WF4103", "name": "결함 관리 대장", "phase": "테스트", "method": "공통", "large": "M", "medium": "M", "small": "O"},
+  {"code": "WF5101", "name": "배포(이행) 계획서", "phase": "배포", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "WF5102", "name": "인수테스트 결과서", "phase": "배포", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "WF5103", "name": "사용자·운영자 매뉴얼", "phase": "배포", "method": "공통", "large": "M", "medium": "M", "small": "O"},
+  {"code": "WF5103", "name": "사용자·운영자 매뉴얼", "phase": "배포", "method": "공통", "large": "M", "medium": "M", "small": "M"},
   {"code": "WF5104", "name": "릴리즈 노트", "phase": "배포", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "WF6101", "name": "변경 요청서(CR)", "phase": "유지보수", "method": "공통", "large": "M", "medium": "M", "small": "O"},
+  {"code": "WF6101", "name": "변경 요청서(CR)", "phase": "유지보수", "method": "공통", "large": "M", "medium": "M", "small": "M"},
   {"code": "WF6102", "name": "형상관리 대장", "phase": "유지보수", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "WF6103", "name": "교훈(Lessons Learned) 보고서", "phase": "유지보수", "method": "공통", "large": "M", "medium": "O", "small": "O"},
 ];
@@ -144,20 +140,18 @@ export const AGILE_TAILORING_MATRIX = [
   {"code": "AG6103", "name": "배포 체크리스트", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "M", "small": "O"},
 ];
 
-// ── 4) DevOps — 지속적 통합·배포, SLO/보안·운영 QA 산출물 포함 (20건) ──
+// ── 4) DevOps — 등록 자산 "DevOps 테일러링 가이드 V1.0" 기준 (16건)
+// 규모 매핑: 대규모→large / 중규모→medium / 소규모→small. CI·롤백·Runbook은 전 규모 필수 원칙.
 export const DEVOPS_TAILORING_MATRIX = [
   {"code": "DO1101", "name": "제품 로드맵", "phase": "계획", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "DO1102", "name": "SLO/SLA 정의서", "phase": "계획", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "DO1103", "name": "품질보증 계획서(DevOps)", "phase": "계획", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "DO1104", "name": "보안 요구사항 정의서", "phase": "계획", "method": "공통", "large": "M", "medium": "M", "small": "O"},
+  {"code": "DO1102", "name": "SLO/SLA 정의서", "phase": "계획", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "DO2101", "name": "프로그램 소스코드", "phase": "코딩", "method": "공통", "large": "M", "medium": "M", "small": "M"},
   {"code": "DO2102", "name": "코드 리뷰(PR) 기록", "phase": "코딩", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "DO2103", "name": "코딩 표준 가이드", "phase": "코딩", "method": "공통", "large": "M", "medium": "O", "small": "O"},
+  {"code": "DO2103", "name": "코딩 표준 가이드", "phase": "코딩", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "DO3101", "name": "CI 파이프라인 정의서", "phase": "빌드", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "DO3102", "name": "빌드 결과 리포트", "phase": "빌드", "method": "공통", "large": "M", "medium": "O", "small": "O"},
+  {"code": "DO3102", "name": "빌드 결과 리포트", "phase": "빌드", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "DO4101", "name": "자동화 테스트 스위트", "phase": "테스트", "method": "공통", "large": "M", "medium": "M", "small": "M"},
   {"code": "DO4102", "name": "테스트 커버리지 리포트", "phase": "테스트", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "DO4103", "name": "보안 취약점 점검 결과서", "phase": "테스트", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "DO5101", "name": "CD 파이프라인 정의서", "phase": "배포", "method": "공통", "large": "M", "medium": "M", "small": "M"},
   {"code": "DO5102", "name": "배포 승인 기록", "phase": "배포", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "DO5103", "name": "롤백 절차서", "phase": "배포", "method": "공통", "large": "M", "medium": "M", "small": "M"},
@@ -165,7 +159,6 @@ export const DEVOPS_TAILORING_MATRIX = [
   {"code": "DO6102", "name": "장애 대응 절차서", "phase": "운영", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "DO7101", "name": "모니터링 대시보드 정의서", "phase": "모니터링", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "DO7102", "name": "장애 회고 보고서(Postmortem)", "phase": "모니터링", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "DO7103", "name": "SLO 준수 리포트", "phase": "모니터링", "method": "공통", "large": "M", "medium": "O", "small": "O"},
 ];
 
 const SIZE_NOTE = "※ 투입 MM 기준 — (초)대형 600MM 초과 / 중형 125MM 초과 / 소형 125MM 이하";
@@ -190,16 +183,26 @@ export const TAILORING_GUIDES = {
   waterfall: {
     id: "waterfall",
     title: "Waterfall 테일러링 가이드",
-    subtitle: "전통적 순차(예측형) 개발 방법론",
+    subtitle: "전통적 순차(예측형) 개발 방법론 · V1.0",
     hasDesignMethod: false,
     phaseOrder: ["요구분석", "설계", "구현", "테스트", "배포", "유지보수"],
     scaleOptions: [
-      { value: "(초)대형", label: "(초)대형" },
-      { value: "중형",    label: "중형" },
-      { value: "소형",    label: "소형" },
+      { value: "(초)대형", label: "대규모" },
+      { value: "중형",    label: "중규모" },
+      { value: "소형",    label: "소규모" },
     ],
-    sizeNote: SIZE_NOTE,
-    purpose: "Waterfall(폭포수) 방법론 적용 프로젝트에서 규모에 따라 필수/선택 산출물을 선정하기 위한 기준을 제시한다. PMBOK 8판 예측형 접근의 품질보증 필수 산출물(품질보증 계획서, 요구사항 추적표(RTM), 결함 관리 대장 등)을 포함하며, OSSP를 PDP(테일러링결과서)로 테일러링할 때의 기준으로 사용된다.",
+    sizeNote: "※ 투입 인원·기간 기준 — 대규모 20인 초과 또는 12개월 초과(다수 연계) / 중규모 5~20인 또는 6~12개월 / 소규모 5인 미만 또는 6개월 미만",
+    sizeCriteria: {
+      headers: ["구분", "기준(예시)", "특징"],
+      rows: [
+        ["소규모", "투입 5인 미만 또는 6개월 미만", "산출물 통합·간소화 중심 테일러링"],
+        ["중규모", "투입 5~20인 또는 6~12개월", "표준 산출물 대부분 적용"],
+        ["대규모", "투입 20인 초과 또는 12개월 초과, 다수 연계", "전 산출물 필수 + 감리 대응 강화"],
+      ],
+      notes: ["본 시스템의 규모 선택(대규모/중규모/소규모)은 내부 저장 값 (초)대형/중형/소형에 각각 대응됩니다."],
+    },
+    matrixNote: "선택(O) 산출물은 프로젝트 특성(연계 유무, 규제, 발주처 요구)에 따라 PDP 확정 시 적용 여부를 결정한다. 필수(M) 산출물의 생략은 승인 절차를 거쳐야 한다.",
+    purpose: "본 가이드는 Waterfall 방법론(OSSP)을 프로젝트 특성에 맞게 조정(Tailoring)하여 프로젝트 정의 프로세스(PDP)를 수립하기 위한 기준을 정의한다. PMBOK 8판의 조정(Tailoring) 원칙에 따라 프로젝트 규모·복잡도·리스크를 고려하되, 필수(M) 산출물의 생략은 승인 절차를 거쳐야 한다.",
     matrix: WATERFALL_TAILORING_MATRIX,
   },
   agile: {
@@ -230,16 +233,27 @@ export const TAILORING_GUIDES = {
   devops: {
     id: "devops",
     title: "DevOps 테일러링 가이드",
-    subtitle: "지속적 통합·배포·운영 방법론",
+    subtitle: "지속적 통합·배포·운영 방법론 · V1.0",
     hasDesignMethod: false,
     phaseOrder: ["계획", "코딩", "빌드", "테스트", "배포", "운영", "모니터링"],
     scaleOptions: [
-      { value: "(초)대형", label: "(초)대형" },
-      { value: "중형",    label: "중형" },
-      { value: "소형",    label: "소형" },
+      { value: "(초)대형", label: "대규모" },
+      { value: "중형",    label: "중규모" },
+      { value: "소형",    label: "소규모" },
     ],
-    sizeNote: SIZE_NOTE,
-    purpose: "DevOps 방법론 적용 프로젝트에서 규모에 따라 필수/선택 산출물을 선정하기 위한 기준을 제시한다. SLO/SLA·보안 점검·롤백 절차 등 운영 품질 산출물과 PMBOK 8판 품질·리스크 성과영역 관점의 QA 산출물을 포함하며, OSSP를 PDP(테일러링결과서)로 테일러링할 때의 기준으로 사용된다.",
+    sizeTitle: "서비스 규모·성숙도 판정 기준",
+    sizeNote: "※ 서비스 규모·성숙도 기준 — 대규모 다수 팀·서비스(미션 크리티컬) / 중규모 복수 서비스 또는 대외 서비스 / 소규모 단일 서비스·1개 팀(사내용)",
+    sizeCriteria: {
+      headers: ["구분", "기준(예시)", "특징"],
+      rows: [
+        ["소규모", "단일 서비스, 1개 팀, 사내용", "필수 자동화 중심, 문서 간소화"],
+        ["중규모", "복수 서비스 또는 대외 서비스", "SLO 기반 운영, 표준 산출물 적용"],
+        ["대규모", "다수 팀·서비스, 미션 크리티컬", "전 산출물 필수 + 승인·감사 이력 강화"],
+      ],
+      notes: ["본 시스템의 규모 선택(대규모/중규모/소규모)은 내부 저장 값 (초)대형/중형/소형에 각각 대응됩니다."],
+    },
+    matrixNote: "CI 파이프라인 정의서·롤백 절차서·운영 매뉴얼(Runbook)은 안전한 전달의 최소 장치로서 규모와 무관하게 필수(M)를 원칙으로 한다.",
+    purpose: "본 가이드는 DevOps 방법론(OSSP)을 서비스 특성과 조직 성숙도에 맞게 조정하여 PDP를 수립하기 위한 기준을 정의한다. PMBOK 8판의 조정(Tailoring) 원칙에 따라 조정하되, 안전한 전달의 최소 장치(CI, 코드리뷰, 롤백 절차, Runbook)는 규모와 무관하게 유지한다.",
     matrix: DEVOPS_TAILORING_MATRIX,
   },
 };
