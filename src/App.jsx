@@ -327,6 +327,7 @@ JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)",
     try {
       // 선택한 OSSP에 해당하는 테일러링 가이드로 확정 산출물을 단계별로 요약
       const guide = getGuideForOSSP(selectedOSSP);
+      const scaleLabel = guide.scaleOptions?.find(o=>o.value===(tailoring.scale||"중형"))?.label || (tailoring.scale||"중형");
       const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide)
         .filter(d => d.required || !(tailoring.excluded||{})[d.code]);
       const byPhase = {};
@@ -337,7 +338,7 @@ JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)",
       const result = await callClaude(`당신은 PMBOK 8판에 정통한 품질보증(QA) 전문가입니다. PDP(Project's Defined Process)는 OSSP(Organization's Set of Standard Process)를 테일러링 가이드 기준으로 테일러링한 테일러링결과서입니다.
 프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, SDLC: ${selectedSDLC?.label||"미지정"}, OSSP: ${selectedOSSP?.label}, 기간: ${projectForm.startDate}~${projectForm.endDate}, PM: ${projectForm.pm}
 적용 테일러링 가이드: ${guide.title}
-프로젝트 규모: ${tailoring.scale||"중형"}, 설계방식: ${guide.hasDesignMethod ? (tailoring.method||"UML") : "해당 없음"}
+프로젝트 규모: ${scaleLabel}, 설계방식: ${guide.hasDesignMethod ? (tailoring.method||"UML") : "해당 없음"}
 테일러링 확정 산출물(단계별): ${tailoringSummary}
 PMBOK 8판의 테일러링 원칙과 품질·리스크 성과영역 관점을 반영하고, 위 테일러링 기준(규모·설계방식·단계별 산출물)을 근거로 PDP를 작성하라. schedule.phases는 위 단계 구성에 맞추고, 각 단계의 deliverable에는 해당 단계의 대표 산출물을 기재하라.
 분량 제한(응답 잘림 방지): objectives 최대 4개, roles 최대 5개, risks 최대 5개, metrics 최대 5개. 각 문자열은 간결하게.
@@ -362,11 +363,12 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
     try {
       // 선택한 OSSP의 테일러링 가이드로 확정된 적용 산출물 목록 구성
       const guide = getGuideForOSSP(selectedOSSP);
+      const scaleLabel = guide.scaleOptions?.find(o=>o.value===(tailoring.scale||"중형"))?.label || (tailoring.scale||"중형");
       const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide)
         .filter(d => d.required || !(tailoring.excluded||{})[d.code]);
       const appliedList = applied.map(d => `${d.code} ${d.name}(${d.phase}${d.required?",필수":",선택"})`).join(", ");
       const result = await callClaude(`SI 착수/계획 산출물 패키지 JSON. 프로젝트: ${projectForm.name}, OSSP: ${selectedOSSP?.label}, SDLC: ${selectedSDLC?.label||"미지정"}
-프로젝트 규모: ${tailoring.scale||"중형"}, 설계방식: ${guide.hasDesignMethod ? (tailoring.method||"UML") : "해당 없음"}
+프로젝트 규모: ${scaleLabel}, 설계방식: ${guide.hasDesignMethod ? (tailoring.method||"UML") : "해당 없음"}
 ${guide.title} 기준 적용 산출물(${applied.length}개): ${appliedList}
 위 적용 산출물을 우선 반영하여 산출물 패키지를 구성하라. code는 위 목록의 코드를 사용하라.
 {"categories":[{"id":"string","name":"string","icon":"이모지","documents":[{"id":"string","name":"string","code":"string","purpose":"string","template":"목차1;목차2;목차3","priority":"필수|권장|선택","estimatedPages":5,"owner":"string"}]}],"summary":{"totalDocs":15,"mandatoryCount":10,"estimatedDays":14}}
@@ -941,11 +943,11 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
       <div style={{ marginBottom:14 }}>
         <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>프로젝트 규모</div>
         <div style={{ display:"flex", gap:8 }}>
-          {["(초)대형","중형","소형"].map(opt=>(
-            <button key={opt} onClick={()=>setScale(opt)}
+          {guide.scaleOptions.map(o=>(
+            <button key={o.value} onClick={()=>setScale(o.value)}
               style={{ flex:1, padding:"8px 0", borderRadius:8, fontSize:12, fontFamily:"inherit",
-                background:scale===opt?T.accent:T.bg, color:scale===opt?"#fff":T.muted,
-                border:`1px solid ${scale===opt?T.accent:T.border}`, cursor:"pointer", fontWeight:scale===opt?600:400 }}>{opt}</button>
+                background:scale===o.value?T.accent:T.bg, color:scale===o.value?"#fff":T.muted,
+                border:`1px solid ${scale===o.value?T.accent:T.border}`, cursor:"pointer", fontWeight:scale===o.value?600:400 }}>{o.label}</button>
           ))}
         </div>
         <div style={{ fontSize:10, color:T.muted, marginTop:6 }}>{guide.sizeNote}</div>
@@ -1027,6 +1029,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, ossp, s
   const method = tailoring?.method || "UML";
   const excluded = tailoring?.excluded || {};
   const guide = getGuideForOSSP(ossp);
+  const scaleLabel = guide.scaleOptions?.find(o=>o.value===scale)?.label || scale;
   const applied = classifyDeliverables(scale, method, guide);
   const includedOptionalCodes = applied.filter(d=>!d.required && !excluded[d.code]).map(d=>d.code);
   const PHASE_ORDER = guide.phaseOrder;
@@ -1098,8 +1101,8 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, ossp, s
             <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse" }}>
               <tbody>
                 <tr><td style={cellHead}>적용 가이드</td><td style={cell} colSpan={3}>{guide.title}</td></tr>
-                <tr><td style={cellHead}>프로젝트 규모</td><td style={cell}>{scale}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
-                <tr><td style={cellHead}>규모 판정 기준</td><td style={cell} colSpan={3}>투입 MM 기준 — (초)대형 600 초과 / 중형 125 초과 / 소형 125 이하</td></tr>
+                <tr><td style={cellHead}>프로젝트 규모</td><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
+                <tr><td style={cellHead}>규모 판정 기준</td><td style={cell} colSpan={3}>{guide.sizeNote?.replace(/^※\s*/, "")}</td></tr>
               </tbody>
             </table>
 
