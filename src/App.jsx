@@ -1083,15 +1083,6 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, ossp, s
               </tbody>
             </table>
 
-            {/* 승인란 */}
-            <div style={{ fontSize:12, fontWeight:700, margin:"14px 0 6px" }}>승인</div>
-            <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse" }}>
-              <tbody>
-                <tr>{["작성자","검토자","승인자"].map(r=><td key={r} style={{...cellHead, textAlign:"center"}}>{r}</td>)}</tr>
-                <tr>{["작성자","검토자","승인자"].map(r=><td key={r} style={{...cell, height:36, textAlign:"center", color:T.muted}}>(서명)</td>)}</tr>
-                <tr>{["작성자","검토자","승인자"].map(r=><td key={r} style={{...cell, textAlign:"center", color:T.muted}}>일자: ____</td>)}</tr>
-              </tbody>
-            </table>
 
             {/* 1. 프로젝트 개요 */}
             <SectionTitle n="1" title="프로젝트 개요" />
