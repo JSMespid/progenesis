@@ -1539,7 +1539,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
                 <div style={{ fontWeight: 700, color: T.text, marginBottom: 4 }}>일정 계산 규칙 (근무일 기준)</div>
                 <div>· 시작일 + 투입공수(근무일) → 종료일 자동 계산 (주말·공휴일 제외)</div>
                 <div>· 종료일을 직접 수정하면 투입공수를 역산</div>
-                <div>· 선후행에 선행 WBS 코드 입력(쉼표 구분, FS 관계) → 선행 종료 다음 근무일로 시작일 자동 이동</div>
+                <div>· 선행에 선행 WBS 코드 입력(쉼표 구분, FS 관계) → 선행 종료 다음 근무일로 시작일 자동 이동</div>
                 <div>· 공휴일 변경 시 전체 일정 즉시 재계산</div>
                 {holidays.length > 0 && (
                   <div style={{ marginTop: 6 }}>
@@ -1564,7 +1564,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
                   <td style={{ ...th, textAlign: "left", minWidth: 170 }}>Task</td>
                   <td style={{ ...th, minWidth: 100 }}>산출물</td>
                   <td style={{ ...th, minWidth: 70 }}>작업자</td>
-                  <td style={{ ...th, minWidth: 80 }}>선후행<br/><span style={{ fontWeight: 400, fontSize: 8.5 }}>(선행 WBS, 쉼표)</span></td>
+                  <td style={{ ...th, minWidth: 80 }}>선행<br/><span style={{ fontWeight: 400, fontSize: 8.5 }}>(선행 WBS, 쉼표)</span></td>
                   <td style={th}>시작일</td>
                   <td style={th}>종료일</td>
                   <td style={{ ...th, width: 60 }}>공수(일)</td>
@@ -1845,7 +1845,7 @@ function WbsScheduleView({ wbs }) {
               <td style={{ ...th, textAlign:"left", minWidth:170 }}>Task</td>
               <td style={{ ...th, minWidth:100 }}>산출물</td>
               <td style={{ ...th, minWidth:70 }}>작업자</td>
-              <td style={{ ...th, minWidth:70 }}>선후행</td>
+              <td style={{ ...th, minWidth:70 }}>선행</td>
               <td style={th}>시작일</td>
               <td style={th}>종료일</td>
               <td style={{ ...th, width:60 }}>공수(일)</td>
