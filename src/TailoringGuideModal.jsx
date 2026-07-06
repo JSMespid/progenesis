@@ -36,6 +36,7 @@ function normalizeEntry(e) {
     medium: e.medium ?? sz.medium ?? sz["중형"] ?? "",
     small: e.small ?? sz.small ?? sz["소형"] ?? "",
     method: e.method ?? e.designMethod ?? e.design ?? "공통",
+    note: e.note ?? "",
   };
 }
 
@@ -133,7 +134,7 @@ export default function TailoringGuideModal({ guide, matrix = [], onClose }) {
           <p style={S.p}>{purpose}</p>
 
           {/* 2. 규모 분류 기준 — 방법론 전용 기준이 정의된 가이드는 해당 표, 그 외는 공통 MM 기준표 */}
-          <div style={S.sectionTitle}>2. 프로젝트 규모 판정 기준</div>
+          <div style={S.sectionTitle}>2. {guide?.sizeTitle || "프로젝트 규모 판정 기준"}</div>
           {sizeCriteria ? (
             <>
               <table style={S.table}>
@@ -214,7 +215,10 @@ export default function TailoringGuideModal({ guide, matrix = [], onClose }) {
                   {rows.map((r) => (
                     <tr key={`${phase}-${r.id}-${r.name}`}>
                       <td style={{ ...S.td, color: "#8892a4", fontFamily: "monospace" }}>{r.id}</td>
-                      <td style={S.tdLeft}>{r.name}</td>
+                      <td style={S.tdLeft}>
+                        {r.name}
+                        {r.note && <span style={{ fontSize: 11, color: "#8892a4", marginLeft: 6 }}>({r.note})</span>}
+                      </td>
                       <td style={S.td}><MOBadge v={r.large} /></td>
                       <td style={S.td}><MOBadge v={r.medium} /></td>
                       <td style={S.td}><MOBadge v={r.small} /></td>
