@@ -123,28 +123,25 @@ export const WATERFALL_TAILORING_MATRIX = [
   {"code": "WF6103", "name": "교훈(Lessons Learned) 보고서", "phase": "유지보수", "method": "공통", "large": "M", "medium": "O", "small": "O"},
 ];
 
-// ── 3) Agile/Scrum — PMBOK 8판 적응형 접근 기준, DoD·인수기준 등 QA 산출물 포함 (20건) ──
+// ── 3) Agile/Scrum — 등록 자산 "Agile/Scrum 테일러링 가이드 V1.0" 기준 (16건)
+// 규모 매핑: 대규모→large / 중규모→medium / 소규모→small. DoD·회고 산출물은 규모 무관 필수 원칙.
 export const AGILE_TAILORING_MATRIX = [
-  {"code": "AG1101", "name": "스프린트 계획서", "phase": "스프린트 계획", "method": "공통", "large": "M", "medium": "M", "small": "M"},
+  {"code": "AG1101", "name": "스프린트 계획서", "phase": "스프린트 계획", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "AG1102", "name": "스프린트 백로그", "phase": "스프린트 계획", "method": "공통", "large": "M", "medium": "M", "small": "M"},
   {"code": "AG1103", "name": "완료 기준(DoD) 정의서", "phase": "스프린트 계획", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "AG1104", "name": "품질보증 계획서(애자일)", "phase": "스프린트 계획", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "AG2101", "name": "제품 백로그", "phase": "백로그 관리", "method": "공통", "large": "M", "medium": "M", "small": "M"},
   {"code": "AG2102", "name": "사용자 스토리", "phase": "백로그 관리", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "AG2103", "name": "인수 기준(Acceptance Criteria) 정의서", "phase": "백로그 관리", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "AG2104", "name": "스토리 맵", "phase": "백로그 관리", "method": "공통", "large": "M", "medium": "O", "small": "O"},
+  {"code": "AG2103", "name": "스토리 맵", "phase": "백로그 관리", "method": "공통", "large": "M", "medium": "O", "small": "O"},
   {"code": "AG3101", "name": "프로그램 소스코드", "phase": "개발", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "AG3102", "name": "단위테스트 코드", "phase": "개발", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "AG3103", "name": "번다운 차트", "phase": "개발", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "AG3104", "name": "CI 빌드 결과 기록", "phase": "개발", "method": "공통", "large": "M", "medium": "O", "small": "O"},
+  {"code": "AG3102", "name": "단위테스트 코드", "phase": "개발", "method": "공통", "large": "M", "medium": "M", "small": "O"},
+  {"code": "AG3103", "name": "번다운 차트", "phase": "개발", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "AG4101", "name": "스프린트 리뷰 결과서", "phase": "리뷰", "method": "공통", "large": "M", "medium": "M", "small": "O"},
   {"code": "AG4102", "name": "제품 증분(Increment) 데모 자료", "phase": "리뷰", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "AG5101", "name": "회고 결과서", "phase": "회고", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "AG5102", "name": "개선 액션 아이템 목록", "phase": "회고", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "AG6101", "name": "릴리즈 계획서", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "AG6102", "name": "인수테스트 결과서", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "AG6103", "name": "릴리즈 노트", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "AG6104", "name": "배포 체크리스트", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "M", "small": "O"},
+  {"code": "AG5101", "name": "회고 결과서", "phase": "회고", "method": "공통", "large": "M", "medium": "M", "small": "M"},
+  {"code": "AG5102", "name": "개선 액션 아이템 목록", "phase": "회고", "method": "공통", "large": "M", "medium": "M", "small": "M"},
+  {"code": "AG6101", "name": "릴리즈 계획서", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "M", "small": "O"},
+  {"code": "AG6102", "name": "릴리즈 노트", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "M", "small": "M"},
+  {"code": "AG6103", "name": "배포 체크리스트", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "M", "small": "O"},
 ];
 
 // ── 4) DevOps — 지속적 통합·배포, SLO/보안·운영 QA 산출물 포함 (20건) ──
@@ -181,6 +178,11 @@ export const TAILORING_GUIDES = {
     subtitle: "정보공학(IE)/UML 기반 SI 개발 방법론",
     hasDesignMethod: true,                       // UML/IE 설계방식 선택 있음
     phaseOrder: ["요구정의", "분석", "설계", "구축", "운영전환"],
+    scaleOptions: [
+      { value: "(초)대형", label: "(초)대형" },
+      { value: "중형",    label: "중형" },
+      { value: "소형",    label: "소형" },
+    ],
     sizeNote: SIZE_NOTE,
     purpose: "프로젝트 유형 또는 특성에 따라 프로젝트에서 수행되어야 할 태스크와 산출물 선정 작업을 지원하기 위한 기준을 제시하고 방법론 테일러링을 가이드한다. 본 가이드는 조직 표준 프로세스(OSSP)를 프로젝트 정의 프로세스(PDP)로 테일러링할 때의 기준으로 사용된다.",
     matrix: IE_TAILORING_MATRIX,
@@ -191,6 +193,11 @@ export const TAILORING_GUIDES = {
     subtitle: "전통적 순차(예측형) 개발 방법론",
     hasDesignMethod: false,
     phaseOrder: ["요구분석", "설계", "구현", "테스트", "배포", "유지보수"],
+    scaleOptions: [
+      { value: "(초)대형", label: "(초)대형" },
+      { value: "중형",    label: "중형" },
+      { value: "소형",    label: "소형" },
+    ],
     sizeNote: SIZE_NOTE,
     purpose: "Waterfall(폭포수) 방법론 적용 프로젝트에서 규모에 따라 필수/선택 산출물을 선정하기 위한 기준을 제시한다. PMBOK 8판 예측형 접근의 품질보증 필수 산출물(품질보증 계획서, 요구사항 추적표(RTM), 결함 관리 대장 등)을 포함하며, OSSP를 PDP(테일러링결과서)로 테일러링할 때의 기준으로 사용된다.",
     matrix: WATERFALL_TAILORING_MATRIX,
@@ -198,11 +205,26 @@ export const TAILORING_GUIDES = {
   agile: {
     id: "agile",
     title: "Agile/Scrum 테일러링 가이드",
-    subtitle: "반복·점진적(적응형) 개발 방법론",
+    subtitle: "반복·점진적(적응형) 개발 방법론 · V1.0",
     hasDesignMethod: false,
     phaseOrder: ["스프린트 계획", "백로그 관리", "개발", "리뷰", "회고", "릴리즈"],
-    sizeNote: SIZE_NOTE,
-    purpose: "Agile/Scrum 방법론 적용 프로젝트에서 규모에 따라 필수/선택 산출물을 선정하기 위한 기준을 제시한다. PMBOK 8판 적응형 접근의 품질 내재화 관점에서 완료 기준(DoD)·인수 기준(AC) 등 QA 산출물을 포함하며, OSSP를 PDP(테일러링결과서)로 테일러링할 때의 기준으로 사용된다.",
+    scaleOptions: [
+      { value: "(초)대형", label: "대규모" },
+      { value: "중형",    label: "중규모" },
+      { value: "소형",    label: "소규모" },
+    ],
+    sizeNote: "※ 팀 수·기간 기준 — 대규모 3개 팀 이상 또는 12개월 초과 / 중규모 1~2개 팀·3~12개월 / 소규모 1개 팀(7인 이하)·3개월 미만",
+    sizeCriteria: {
+      headers: ["구분", "기준(예시)", "특징"],
+      rows: [
+        ["소규모", "1개 팀(7인 이하), 3개월 미만", "이벤트·산출물 간소화, 구두 소통 비중 확대"],
+        ["중규모", "1~2개 팀, 3~12개월", "표준 산출물 대부분 적용"],
+        ["대규모", "3개 팀 이상 또는 12개월 초과", "팀 간 동기화 산출물 추가(스토리 맵 필수 등)"],
+      ],
+      notes: ["본 시스템의 규모 선택(대규모/중규모/소규모)은 내부 저장 값 (초)대형/중형/소형에 각각 대응됩니다."],
+    },
+    matrixNote: "DoD·회고 관련 산출물은 규모와 무관하게 필수(M)를 원칙으로 한다.",
+    purpose: "본 가이드는 Agile/Scrum 방법론(OSSP)을 프로젝트 특성에 맞게 조정하여 PDP를 수립하기 위한 기준을 정의한다. 적응형 접근에서도 PMBOK 8판의 조정(Tailoring) 원칙에 따라 품질 순환(DoD·회고)에 관련된 필수 산출물은 유지하는 것을 원칙으로 한다.",
     matrix: AGILE_TAILORING_MATRIX,
   },
   devops: {
@@ -211,6 +233,11 @@ export const TAILORING_GUIDES = {
     subtitle: "지속적 통합·배포·운영 방법론",
     hasDesignMethod: false,
     phaseOrder: ["계획", "코딩", "빌드", "테스트", "배포", "운영", "모니터링"],
+    scaleOptions: [
+      { value: "(초)대형", label: "(초)대형" },
+      { value: "중형",    label: "중형" },
+      { value: "소형",    label: "소형" },
+    ],
     sizeNote: SIZE_NOTE,
     purpose: "DevOps 방법론 적용 프로젝트에서 규모에 따라 필수/선택 산출물을 선정하기 위한 기준을 제시한다. SLO/SLA·보안 점검·롤백 절차 등 운영 품질 산출물과 PMBOK 8판 품질·리스크 성과영역 관점의 QA 산출물을 포함하며, OSSP를 PDP(테일러링결과서)로 테일러링할 때의 기준으로 사용된다.",
     matrix: DEVOPS_TAILORING_MATRIX,
