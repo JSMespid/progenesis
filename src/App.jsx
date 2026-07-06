@@ -1688,6 +1688,193 @@ function StepReview({ form, sdlc, ossp, pdpData, wbsData, deliverablesData }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// 완료된 프로젝트 조회용 — 위저드에서 작성한 PDP(테일러링결과서)·WBS(일정표)를
+// 동일한 형태로 다시 볼 수 있는 읽기 전용 뷰
+// ═══════════════════════════════════════════════════════════════════
+function PdpDocView({ project }) {
+  const pdp = project.pdp;
+  const tailoring = project.tailoring || {};
+  const ossp = project.ossp;
+  const sdlc = tailoring.sdlc;
+  const guide = getGuideForOSSP(ossp);
+  const scale = tailoring.scale || "중형";
+  const method = tailoring.method || "UML";
+  const excluded = tailoring.excluded || {};
+  const notes = tailoring.notes || {};
+  const scaleLabel = guide.scaleOptions?.find(o=>o.value===scale)?.label || scale;
+  const list = classifyDeliverables(scale, method, guide);
+  const isApplied = (d) => {
+    const ov = notes[`${d.phase}:${d.code}`]?.applied;
+    return ov !== undefined ? ov : (d.required || !excluded[d.code]);
+  };
+  const appliedCount = list.filter(isApplied).length;
+  const grouped = {};
+  list.forEach(d => { (grouped[d.phase] = grouped[d.phase] || []).push(d); });
+
+  if (!pdp) return <div style={{ color:T.muted, fontSize:12, padding:20 }}>저장된 PDP가 없습니다.</div>;
+
+  return (
+    <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, padding:20 }}>
+      {/* 표지 */}
+      <div style={{ textAlign:"center", paddingBottom:16, borderBottom:`2px solid ${T.accent}` }}>
+        <div style={{ fontSize:18, fontWeight:700, letterSpacing:1 }}>프로젝트 정의 프로세스 (PDP)</div>
+        <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>테일러링결과서 · Tailoring Result</div>
+        <div style={{ fontSize:13, fontWeight:600, color:T.accent, marginTop:10 }}>{project.name}</div>
+      </div>
+
+      {/* 문서 메타 */}
+      <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse", margin:"14px 0" }}>
+        <tbody>
+          <tr><td style={cellHead}>고객사</td><td style={cell}>{project.client||"-"}</td><td style={cellHead}>기간</td><td style={cell}>{project.startDate} ~ {project.endDate}</td></tr>
+          <tr><td style={cellHead}>기준 OSSP</td><td style={cell}>{ossp?.label||"-"}</td><td style={cellHead}>SDLC</td><td style={cell}>{sdlc?.label||"-"}</td></tr>
+        </tbody>
+      </table>
+
+      {/* 1. 프로젝트 개요 */}
+      <SectionTitle n="1" title="프로젝트 개요" />
+      <div style={{ fontSize:12, color:T.text, lineHeight:1.7, marginBottom:6 }}>{pdp.overview?.purpose}</div>
+      {pdp.overview?.scope && <div style={{ fontSize:11, color:T.muted, lineHeight:1.6, marginBottom:6 }}><b>범위:</b> {pdp.overview.scope}</div>}
+      {pdp.overview?.objectives?.length > 0 && (
+        <div style={{ fontSize:11, color:T.muted, lineHeight:1.7 }}>
+          {pdp.overview.objectives.map((o,i)=>(
+            <div key={i}><span style={{ color:T.accent, marginRight:5 }}>▸</span>{o}</div>
+          ))}
+        </div>
+      )}
+
+      {/* 2. 테일러링 기준 */}
+      <SectionTitle n="2" title="테일러링 기준" />
+      <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse" }}>
+        <tbody>
+          <tr><td style={cellHead}>적용 가이드</td><td style={cell} colSpan={3}>{guide.title}</td></tr>
+          <tr><td style={cellHead}>프로젝트 규모</td><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
+          <tr><td style={cellHead}>규모 판정 기준</td><td style={cell} colSpan={3}>{guide.sizeNote?.replace(/^※\s*/, "")}</td></tr>
+        </tbody>
+      </table>
+
+      {/* 3. 산출물 테일러링 매트릭스 */}
+      <SectionTitle n="3" title={`산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`} />
+      <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
+        <thead>
+          <tr>{["단계","코드","산출물","구분","적용 여부","변경 여부","테일러링 내역 및 사유"].map(h=>
+            <td key={h} style={{...cellHead, textAlign:"center"}}>{h}</td>)}</tr>
+        </thead>
+        <tbody>
+          {guide.phaseOrder.filter(ph=>grouped[ph]?.length).map(ph=>(
+            grouped[ph].map((d,i)=>{
+              const n = notes[`${d.phase}:${d.code}`] || {};
+              const on = isApplied(d);
+              return (
+                <tr key={`${ph}-${d.code}`} style={{ opacity:on?1:0.55 }}>
+                  {i===0 && <td style={{...cell, fontWeight:600, verticalAlign:"top"}} rowSpan={grouped[ph].length}>{ph}</td>}
+                  <td style={{...cell, fontFamily:"monospace"}}>{d.code}</td>
+                  <td style={cell}>{d.name}{d.note && <span style={{ color:T.muted, fontSize:9.5, marginLeft:4 }}>({d.note})</span>}</td>
+                  <td style={{...cell, textAlign:"center"}}><Badge color={d.required?T.accent:T.amber}>{d.required?"필수":"선택"}</Badge></td>
+                  <td style={{...cell, textAlign:"center", fontSize:13, color:on?T.accent:T.muted }}>{on ? "☒" : "☐"}</td>
+                  <td style={{...cell, textAlign:"center", fontSize:13, color:n.changed?T.amber:T.muted }}>{n.changed ? "☒" : "☐"}</td>
+                  <td style={{...cell, color:n.reason?T.text:T.muted }}>{n.reason || ""}</td>
+                </tr>
+              );
+            })
+          ))}
+        </tbody>
+      </table>
+
+      {/* (구버전 프로젝트 호환) 일정·리스크가 저장돼 있으면 표시 */}
+      {pdp.schedule?.phases?.length > 0 && (
+        <>
+          <SectionTitle n="4" title="추진 일정 (구버전 저장분)" />
+          {pdp.schedule.phases.map((ph,i)=>(
+            <div key={i} style={{ fontSize:11, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
+              <span style={{ color:T.accent, marginRight:6 }}>■</span>{ph.phase}
+              <span style={{ color:T.muted }}> ({ph.start} ~ {ph.end})</span>
+            </div>
+          ))}
+        </>
+      )}
+      {pdp.risks?.length > 0 && (
+        <>
+          <SectionTitle n={pdp.schedule?.phases?.length > 0 ? "5" : "4"} title="주요 리스크 (구버전 저장분)" />
+          {pdp.risks.map((r,i)=>(
+            <div key={i} style={{ fontSize:11, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
+              <Badge color={r.level==="상"?T.red:r.level==="중"?T.amber:T.muted}>{r.level}</Badge>
+              <span style={{ marginLeft:6 }}>{r.description}</span>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+function WbsScheduleView({ wbs }) {
+  if (!wbs?.tasks?.length) return <div style={{ color:T.muted, fontSize:12, padding:20 }}>저장된 WBS가 없습니다.</div>;
+  const holidays = wbs.holidays || [];
+  const th = { ...cellHead, textAlign:"center", fontSize:10 };
+  const rollup = (t) => {
+    const ss = (t.subtasks||[]).map(s=>s.start).filter(Boolean).sort();
+    const ff = (t.subtasks||[]).map(s=>s.finish).filter(Boolean).sort();
+    const eff = (t.subtasks||[]).reduce((n,s)=>n+(Number(s.effort)||0),0);
+    return { start:ss[0]||"", finish:ff.slice(-1)[0]||"", eff };
+  };
+  const total = wbs.tasks.reduce((n,t)=>n+1+(t.subtasks?.length||0),0);
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, flexWrap:"wrap" }}>
+        <Badge color={T.green}>WBS {total}개 항목</Badge>
+        {holidays.length > 0 && <Badge color={T.red}>공휴일 {holidays.length}일</Badge>}
+        {holidays.length > 0 && <span style={{ fontSize:10, color:T.muted }}>{holidays.join(", ")}</span>}
+      </div>
+      <div style={{ overflowX:"auto", border:`1px solid ${T.border}`, borderRadius:10 }}>
+        <table style={{ borderCollapse:"collapse", fontSize:10.5, minWidth:"100%" }}>
+          <thead>
+            <tr>
+              <td style={{ ...th, textAlign:"left" }}>WBS</td>
+              <td style={{ ...th, textAlign:"left", minWidth:170 }}>Task</td>
+              <td style={{ ...th, minWidth:100 }}>산출물</td>
+              <td style={{ ...th, minWidth:70 }}>작업자</td>
+              <td style={{ ...th, minWidth:70 }}>선후행</td>
+              <td style={th}>시작일</td>
+              <td style={th}>종료일</td>
+              <td style={{ ...th, width:60 }}>공수(일)</td>
+            </tr>
+          </thead>
+          <tbody>
+            {wbs.tasks.map(t => {
+              const r = rollup(t);
+              return (
+                <React.Fragment key={t.id}>
+                  <tr style={{ background:T.subtle }}>
+                    <td style={{ ...cell, fontFamily:"monospace", fontWeight:700, color:T.accent }}>{t.wbsCode}</td>
+                    <td style={{ ...cell, fontWeight:700 }}>{t.phase}</td>
+                    <td style={cell} colSpan={3}><span style={{ fontSize:9.5, color:T.muted }}>요약 (하위 롤업)</span></td>
+                    <td style={{ ...cell, textAlign:"center", color:T.muted }}>{r.start || "—"}</td>
+                    <td style={{ ...cell, textAlign:"center", color:T.muted }}>{r.finish || "—"}</td>
+                    <td style={{ ...cell, textAlign:"center", color:T.muted, fontWeight:700 }}>{r.eff || "—"}</td>
+                  </tr>
+                  {t.subtasks?.map(s => (
+                    <tr key={s.id}>
+                      <td style={{ ...cell, fontFamily:"monospace", fontSize:9.5, color:T.muted, whiteSpace:"nowrap" }}>{s.wbsCode}</td>
+                      <td style={{ ...cell, paddingLeft: 8 + ((s.level || 2) - 2) * 14 }}>{s.task}</td>
+                      <td style={cell}>{s.deliverable || ""}</td>
+                      <td style={{ ...cell, textAlign:"center" }}>{s.assignee || ""}</td>
+                      <td style={{ ...cell, textAlign:"center" }}>{s.pred || ""}</td>
+                      <td style={{ ...cell, textAlign:"center", whiteSpace:"nowrap" }}>{s.start || ""}</td>
+                      <td style={{ ...cell, textAlign:"center", whiteSpace:"nowrap" }}>{s.finish || ""}</td>
+                      <td style={{ ...cell, textAlign:"center" }}>{s.effort || ""}</td>
+                    </tr>
+                  ))}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function ProjectDetail({ project, nav, onDelete }) {
   const [tab, setTab] = useState("overview");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1717,33 +1904,8 @@ function ProjectDetail({ project, nav, onDelete }) {
           ))}
         </div>
       )}
-      {tab==="pdp" && project.pdp && (
-        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-          <Card style={{ padding:16 }}><div style={{ fontSize:11, color:T.muted, marginBottom:6, fontWeight:600 }}>목적</div><div style={{ fontSize:13, lineHeight:1.7 }}>{project.pdp.overview?.purpose}</div></Card>
-          <Card style={{ padding:16 }}>
-            <div style={{ fontSize:11, color:T.muted, marginBottom:8, fontWeight:600 }}>추진 목표</div>
-            {project.pdp.overview?.objectives?.map((o,i)=><div key={i} style={{ fontSize:12, padding:"5px 0", borderBottom:`1px solid ${T.border}`, display:"flex", gap:8 }}><span style={{ color:T.accent }}>▸</span>{o}</div>)}
-          </Card>
-          <Card style={{ padding:16 }}>
-            <div style={{ fontSize:11, color:T.muted, marginBottom:8, fontWeight:600 }}>일정 계획</div>
-            {project.pdp.schedule?.phases?.map((ph,i)=><div key={i} style={{ fontSize:12, padding:"5px 0", borderBottom:`1px solid ${T.border}` }}><span style={{ color:T.accent, fontWeight:600 }}>{ph.phase}</span><div style={{ color:T.muted, fontSize:11 }}>{ph.start} ~ {ph.end}</div></div>)}
-          </Card>
-          <Card style={{ padding:16 }}>
-            <div style={{ fontSize:11, color:T.muted, marginBottom:8, fontWeight:600 }}>위험 관리</div>
-            {project.pdp.risks?.map((r,i)=><div key={i} style={{ fontSize:12, padding:"5px 0", borderBottom:`1px solid ${T.border}`, display:"flex", justifyContent:"space-between" }}><span>{r.description?.substring(0,30)}…</span><Badge color={r.level==="상"?T.red:r.level==="중"?T.amber:T.green}>{r.level}</Badge></div>)}
-          </Card>
-        </div>
-      )}
-      {tab==="wbs" && project.wbs && (
-        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-          {project.wbs.tasks?.map(t=>(
-            <Card key={t.id} style={{ padding:14 }}>
-              <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:10 }}><span style={{ fontSize:10, color:T.accent, fontFamily:"monospace", background:T.accentDim, padding:"2px 8px", borderRadius:5 }}>{t.wbsCode}</span><span style={{ fontWeight:700, fontSize:14 }}>{t.phase}</span><span style={{ fontSize:11, color:T.muted, marginLeft:"auto" }}>{t.duration}</span></div>
-              {t.subtasks?.map(s=><div key={s.id} style={{ display:"flex", alignItems:"center", gap:7, padding:"5px 8px", background:T.bg, borderRadius:6, fontSize:11, marginBottom:3 }}><span style={{ color:T.muted, fontFamily:"monospace", fontSize:9 }}>{s.wbsCode}</span><span style={{ flex:1 }}>{s.task}</span><Badge color={s.status==="완료"?T.green:s.status==="진행"?T.amber:T.muted}>{s.status}</Badge></div>)}
-            </Card>
-          ))}
-        </div>
-      )}
+      {tab==="pdp" && <PdpDocView project={project} />}
+      {tab==="wbs" && <WbsScheduleView wbs={project.wbs} />}
       {tab==="deliverables" && project.deliverables && (
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
           <div style={{ display:"flex", gap:10 }}>
