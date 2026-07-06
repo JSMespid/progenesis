@@ -1008,7 +1008,9 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
                         onClick={e=>e.stopPropagation()} style={{ width:13, height:13, cursor:"pointer" }} />
                     )}
                     <span style={{ fontSize:11, color:T.muted, fontFamily:"monospace", flexShrink:0 }}>{d.code}</span>
-                    <span style={{ fontSize:12, color:T.text, flex:1, textDecoration:isExcluded?"line-through":"none" }}>{d.name}</span>
+                    <span style={{ fontSize:12, color:T.text, flex:1, textDecoration:isExcluded?"line-through":"none" }}>
+                      {d.name}{d.note && <span style={{ color:T.muted, fontSize:10, marginLeft:6 }}>({d.note})</span>}
+                    </span>
                     {d.method!=="공통" && <Badge color={T.muted}>{d.method}</Badge>}
                   </div>
                 );
