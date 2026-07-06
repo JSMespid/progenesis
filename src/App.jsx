@@ -332,8 +332,9 @@ JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)",
       const pdpNotes = tailoring.notes || {};
       const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide)
         .filter(d => {
+          if (d.required) return true;   // 필수(M) 산출물은 항상 적용 (테일러링 대상 아님)
           const ov = pdpNotes[`${d.phase}:${d.code}`]?.applied;   // PDP 화면에서 수정한 적용 여부 우선
-          return ov !== undefined ? ov : (d.required || !(tailoring.excluded||{})[d.code]);
+          return ov !== undefined ? ov : !(tailoring.excluded||{})[d.code];
         });
       const byPhase = {};
       applied.forEach(d => { (byPhase[d.phase] = byPhase[d.phase] || []).push(d.name); });
@@ -377,8 +378,9 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       const pdpNotes = tailoring.notes || {};
       const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide)
         .filter(d => {
+          if (d.required) return true;   // 필수(M) 산출물은 항상 적용 (테일러링 대상 아님)
           const ov = pdpNotes[`${d.phase}:${d.code}`]?.applied;   // PDP 화면에서 수정한 적용 여부 우선
-          return ov !== undefined ? ov : (d.required || !(tailoring.excluded||{})[d.code]);
+          return ov !== undefined ? ov : !(tailoring.excluded||{})[d.code];
         });
       const appliedList = applied.map(d => `${d.code} ${d.name}(${d.phase}${d.required?",필수":",선택"})`).join(", ");
       const result = await callClaude(`SI 착수/계획 산출물 패키지 JSON. 프로젝트: ${projectForm.name}, OSSP: ${selectedOSSP?.label}, SDLC: ${selectedSDLC?.label||"미지정"}
@@ -1059,10 +1061,11 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
   // (프로젝트 저장 시 tailoring JSON에 함께 보존)
   const notes = tailoring?.notes || {};
   const noteKey = (d) => `${d.phase}:${d.code}`;
-  // 적용 여부: 기본값은 테일러링 단계 결과(필수=적용, 선택=체크 상태), 이 화면에서 수정한 값이 있으면 그 값을 우선
+  // 적용 여부: 필수(M)는 항상 적용(수정 불가). 선택(O)은 테일러링 단계 결과가 기본값, 이 화면에서 수정 가능
   const isApplied = (d) => {
+    if (d.required) return true;
     const ov = notes[noteKey(d)]?.applied;
-    return ov !== undefined ? ov : (d.required || !excluded[d.code]);
+    return ov !== undefined ? ov : !excluded[d.code];
   };
   const appliedCount = list.filter(isApplied).length;
   const setNote = (d, patch) => setTailoring && setTailoring(t => {
@@ -1143,7 +1146,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
             {/* 3. 산출물 테일러링 매트릭스 — 적용/변경 여부 및 사유 기록 */}
             <SectionTitle n="3" title={`산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`} />
             <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
-              ※ 적용 여부는 테일러링 단계의 선택 결과가 기본값이며, 이 화면에서 직접 수정할 수 있습니다. 필수 산출물을 미적용으로 변경하는 경우 사유를 반드시 기록하세요(가이드상 필수 생략은 승인 대상). 변경 여부·테일러링 내역 및 사유는 프로젝트 저장 시 함께 보존됩니다.
+              ※ 필수(M) 산출물은 항상 적용되며 수정할 수 없습니다. 선택(O) 산출물은 테일러링 단계의 선택 결과가 기본값이며, 이 화면에서 적용 여부·변경 여부·테일러링 내역 및 사유를 수정·기록할 수 있습니다 (프로젝트 저장 시 함께 보존).
             </div>
             <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
               <thead>
@@ -1168,19 +1171,25 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
                           <Badge color={d.required?T.accent:T.amber}>{d.required?"필수":"선택"}</Badge>
                         </td>
                         <td style={{...cell, textAlign:"center"}}>
-                          <input type="checkbox" checked={on}
-                            onChange={e=>setNote(d,{applied:e.target.checked})}
-                            style={{ width:14, height:14, cursor:"pointer" }} />
+                          {d.required
+                            ? <span style={{ fontSize:14, color:T.accent }} title="필수 산출물은 항상 적용됩니다">☒</span>
+                            : <input type="checkbox" checked={on}
+                                onChange={e=>setNote(d,{applied:e.target.checked})}
+                                style={{ width:14, height:14, cursor:"pointer" }} />}
                         </td>
                         <td style={{...cell, textAlign:"center"}}>
-                          <input type="checkbox" checked={!!n.changed}
-                            onChange={e=>setNote(d,{changed:e.target.checked})}
-                            style={{ width:13, height:13, cursor:"pointer" }} />
+                          {d.required
+                            ? <span style={{ fontSize:12, color:T.muted }}>—</span>
+                            : <input type="checkbox" checked={!!n.changed}
+                                onChange={e=>setNote(d,{changed:e.target.checked})}
+                                style={{ width:13, height:13, cursor:"pointer" }} />}
                         </td>
                         <td style={{...cell, minWidth:180 }}>
-                          <input value={n.reason||""}
-                            onChange={e=>setNote(d,{reason:e.target.value})}
-                            placeholder={on ? "" : "미적용 사유 입력"} style={noteInput} />
+                          {d.required
+                            ? <span style={{ fontSize:11, color:T.muted }}>—</span>
+                            : <input value={n.reason||""}
+                                onChange={e=>setNote(d,{reason:e.target.value})}
+                                placeholder={on ? "" : "미적용 사유 입력"} style={noteInput} />}
                         </td>
                       </tr>
                     );
@@ -1311,8 +1320,9 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
 
   // ── FBS: PDP(테일러링결과서)에서 적용 확정된 산출물 → 단계별 Activity ──
   const isApplied = (d) => {
+    if (d.required) return true;   // 필수(M) 산출물은 항상 적용
     const ov = notes[`${d.phase}:${d.code}`]?.applied;
-    return ov !== undefined ? ov : (d.required || !excluded[d.code]);
+    return ov !== undefined ? ov : !excluded[d.code];
   };
   const fbs = classifyDeliverables(scale, method, guide).filter(isApplied);
   const fbsByPhase = {};
@@ -1705,8 +1715,9 @@ function PdpDocView({ project }) {
   const scaleLabel = guide.scaleOptions?.find(o=>o.value===scale)?.label || scale;
   const list = classifyDeliverables(scale, method, guide);
   const isApplied = (d) => {
+    if (d.required) return true;   // 필수(M) 산출물은 항상 적용
     const ov = notes[`${d.phase}:${d.code}`]?.applied;
-    return ov !== undefined ? ov : (d.required || !excluded[d.code]);
+    return ov !== undefined ? ov : !excluded[d.code];
   };
   const appliedCount = list.filter(isApplied).length;
   const grouped = {};
@@ -1772,8 +1783,8 @@ function PdpDocView({ project }) {
                   <td style={cell}>{d.name}{d.note && <span style={{ color:T.muted, fontSize:9.5, marginLeft:4 }}>({d.note})</span>}</td>
                   <td style={{...cell, textAlign:"center"}}><Badge color={d.required?T.accent:T.amber}>{d.required?"필수":"선택"}</Badge></td>
                   <td style={{...cell, textAlign:"center", fontSize:13, color:on?T.accent:T.muted }}>{on ? "☒" : "☐"}</td>
-                  <td style={{...cell, textAlign:"center", fontSize:13, color:n.changed?T.amber:T.muted }}>{n.changed ? "☒" : "☐"}</td>
-                  <td style={{...cell, color:n.reason?T.text:T.muted }}>{n.reason || ""}</td>
+                  <td style={{...cell, textAlign:"center", fontSize:13, color:!d.required&&n.changed?T.amber:T.muted }}>{d.required ? "—" : (n.changed ? "☒" : "☐")}</td>
+                  <td style={{...cell, color:n.reason?T.text:T.muted }}>{d.required ? "" : (n.reason || "")}</td>
                 </tr>
               );
             })
