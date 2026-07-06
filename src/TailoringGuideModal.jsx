@@ -81,6 +81,9 @@ export default function TailoringGuideModal({ guide, matrix = [], onClose }) {
   const hasDesignMethod = guide ? !!guide.hasDesignMethod : true;
   const phaseOrder = guide?.phaseOrder || null;
   const colCount = hasDesignMethod ? 6 : 5;
+  const scaleLabels = guide?.scaleOptions?.map((o) => o.label) || ["(초)대형", "중형", "소형"];
+  const sizeCriteria = guide?.sizeCriteria || null;   // 방법론 전용 규모 기준 (없으면 공통 MM 기준표)
+  const matrixNote = guide?.matrixNote || null;
 
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose?.();
@@ -129,31 +132,55 @@ export default function TailoringGuideModal({ guide, matrix = [], onClose }) {
           <div style={{ ...S.sectionTitle, marginTop: 0 }}>1. 목적</div>
           <p style={S.p}>{purpose}</p>
 
-          {/* 2. 규모 분류 기준 (전 방법론 공통) */}
-          <div style={S.sectionTitle}>2. 프로젝트 규모에 따른 분류</div>
-          <table style={S.table}>
-            <thead>
-              <tr>
-                <th style={S.th}>구분</th><th style={S.th}>기간</th><th style={S.th}>월평균 인원</th>
-                <th style={S.th}>투입 MM</th><th style={S.th}>용역 매출액</th><th style={S.th}>매출액</th><th style={S.th}>Infra(장비) 매출액</th>
-              </tr>
-            </thead>
-            <tbody>
-              {SIZE_CRITERIA.map((r) => (
-                <tr key={r.구분}>
-                  <td style={{ ...S.td, fontWeight: 700 }}>{r.구분}</td>
-                  <td style={S.td}>{r.기간}</td><td style={S.td}>{r.인원}</td><td style={S.td}>{r.mm}</td>
-                  <td style={S.td}>{r.용역}</td><td style={S.td}>{r.매출}</td><td style={S.td}>{r.infra}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{ marginTop: 8 }}>
-            {SIZE_NOTES.map((n, i) => <p key={i} style={S.note}>※ {n}</p>)}
-          </div>
-          <p style={{ ...S.note, marginTop: 6 }}>
-            ※ 본 시스템의 테일러링 단계에서는 초대형·대형을 "(초)대형"으로 통합하여 3단계(초·대형 / 중형 / 소형)로 적용합니다.
-          </p>
+          {/* 2. 규모 분류 기준 — 방법론 전용 기준이 정의된 가이드는 해당 표, 그 외는 공통 MM 기준표 */}
+          <div style={S.sectionTitle}>2. 프로젝트 규모 판정 기준</div>
+          {sizeCriteria ? (
+            <>
+              <table style={S.table}>
+                <thead>
+                  <tr>{sizeCriteria.headers.map((h) => <th key={h} style={S.th}>{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {sizeCriteria.rows.map((row, i) => (
+                    <tr key={i}>
+                      {row.map((c, j) => (
+                        <td key={j} style={j === 0 ? { ...S.td, fontWeight: 700 } : S.tdLeft}>{c}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ marginTop: 8 }}>
+                {(sizeCriteria.notes || []).map((n, i) => <p key={i} style={S.note}>※ {n}</p>)}
+              </div>
+            </>
+          ) : (
+            <>
+              <table style={S.table}>
+                <thead>
+                  <tr>
+                    <th style={S.th}>구분</th><th style={S.th}>기간</th><th style={S.th}>월평균 인원</th>
+                    <th style={S.th}>투입 MM</th><th style={S.th}>용역 매출액</th><th style={S.th}>매출액</th><th style={S.th}>Infra(장비) 매출액</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {SIZE_CRITERIA.map((r) => (
+                    <tr key={r.구분}>
+                      <td style={{ ...S.td, fontWeight: 700 }}>{r.구분}</td>
+                      <td style={S.td}>{r.기간}</td><td style={S.td}>{r.인원}</td><td style={S.td}>{r.mm}</td>
+                      <td style={S.td}>{r.용역}</td><td style={S.td}>{r.매출}</td><td style={S.td}>{r.infra}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ marginTop: 8 }}>
+                {SIZE_NOTES.map((n, i) => <p key={i} style={S.note}>※ {n}</p>)}
+              </div>
+              <p style={{ ...S.note, marginTop: 6 }}>
+                ※ 본 시스템의 테일러링 단계에서는 초대형·대형을 "(초)대형"으로 통합하여 3단계(초·대형 / 중형 / 소형)로 적용합니다.
+              </p>
+            </>
+          )}
 
           {/* 3. 매트릭스 */}
           <div style={S.sectionTitle}>3. 산출물 테일러링 매트릭스 (총 {total}건)</div>
@@ -162,6 +189,7 @@ export default function TailoringGuideModal({ guide, matrix = [], onClose }) {
             <span><span style={S.badgeO}>O</span> Optional (선택)</span>
             <span><span style={S.badgeNA}>—</span> N/A (해당 없음)</span>
           </div>
+          {matrixNote && <p style={{ ...S.note, marginTop: -6, marginBottom: 10 }}>※ {matrixNote}</p>}
           <input
             style={S.searchBox}
             placeholder="산출물 ID / 명칭 / 단계 검색…"
@@ -173,9 +201,9 @@ export default function TailoringGuideModal({ guide, matrix = [], onClose }) {
               <tr>
                 <th style={S.th}>ID</th>
                 <th style={{ ...S.th, textAlign: "left" }}>산출물</th>
-                <th style={S.th}>(초)대형</th>
-                <th style={S.th}>중형</th>
-                <th style={S.th}>소형</th>
+                <th style={S.th}>{scaleLabels[0]}</th>
+                <th style={S.th}>{scaleLabels[1]}</th>
+                <th style={S.th}>{scaleLabels[2]}</th>
                 {hasDesignMethod && <th style={S.th}>설계방식</th>}
               </tr>
             </thead>
