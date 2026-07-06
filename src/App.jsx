@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { SDLC_FACTOR_CRITERIA, criteriaToPromptText } from './sdlcFactorCriteria';
+import TailoringGuideModal from './TailoringGuideModal';
 
 const T = {
   bg: "#0A0C10", surface: "#111318", border: "#1E2230",
@@ -418,10 +419,11 @@ JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)",
       const tailoringSummary = Object.entries(byPhase)
         .map(([ph, names]) => `${ph}: ${names.join(", ")}`).join(" / ");
 
-      const result = await callClaude(`프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, SDLC: ${selectedSDLC?.label||"미지정"}, OSSP: ${selectedOSSP?.label}, 기간: ${projectForm.startDate}~${projectForm.endDate}, PM: ${projectForm.pm}
+      const result = await callClaude(`당신은 PMBOK 8판에 정통한 품질보증(QA) 전문가입니다. PDP(Project's Defined Process)는 OSSP(Organization's Set of Standard Process)를 테일러링 가이드 기준으로 테일러링한 테일러링결과서입니다.
+프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, SDLC: ${selectedSDLC?.label||"미지정"}, OSSP: ${selectedOSSP?.label}, 기간: ${projectForm.startDate}~${projectForm.endDate}, PM: ${projectForm.pm}
 프로젝트 규모: ${tailoring.scale||"중형"}, 설계방식: ${tailoring.method||"UML"}
 테일러링 확정 산출물(단계별): ${tailoringSummary}
-위 테일러링 기준(규모·설계방식·단계별 산출물)을 반영하여 PDP를 작성하라. schedule.phases는 위 단계 구성에 맞추고, 각 단계의 deliverable에는 해당 단계의 대표 산출물을 기재하라.
+PMBOK 8판의 테일러링 원칙과 품질·리스크 성과영역 관점을 반영하고, 위 테일러링 기준(규모·설계방식·단계별 산출물)을 근거로 PDP를 작성하라. schedule.phases는 위 단계 구성에 맞추고, 각 단계의 deliverable에는 해당 단계의 대표 산출물을 기재하라.
 분량 제한(응답 잘림 방지): objectives 최대 4개, roles 최대 5개, risks 최대 5개, metrics 최대 5개. 각 문자열은 간결하게.
 PDP JSON만 출력(설명·마크다운 금지): {"overview":{"purpose":"string","scope":"string","objectives":["string"]},"organization":{"pm":"string","roles":[{"role":"string","name":"string","responsibility":"string"}]},"schedule":{"phases":[{"phase":"string","start":"YYYY-MM-DD","end":"YYYY-MM-DD","deliverable":"string"}]},"risks":[{"id":"string","description":"string","level":"상|중|하","mitigation":"string"}],"quality":{"metrics":[{"metric":"string","target":"string"}]}}`, 8000);
       setPdpData(result);
@@ -982,6 +984,7 @@ function classifyDeliverables(scale, method) {
 }
 
 function StepTailoring({ tailoring, setTailoring, ossp }) {
+  const [showGuide, setShowGuide] = useState(false);   // 테일러링 가이드 열람 모달
   const scale = tailoring.scale || "중형";
   const method = tailoring.method || "UML";
   const excluded = tailoring.excluded || {};   // { code: true } = 사용자가 제외한 선택 산출물
@@ -1007,7 +1010,12 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
       <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>OSSP 테일러링</h2>
       <p style={{ fontSize:12, color:T.muted, marginBottom:14 }}>
         선택: <span style={{ color:T.accent, fontWeight:600 }}>{ossp?.label}</span>
-        <span style={{ marginLeft:8, color:T.muted }}>· 방법론 테일러링 가이드 v2.0 기준</span>
+        <span style={{ marginLeft:8, color:T.muted }}>
+          · <span onClick={()=>setShowGuide(true)} title="테일러링 가이드 전문 보기"
+              style={{ color:T.accent, cursor:"pointer", textDecoration:"underline", textUnderlineOffset:3 }}>
+              방법론 테일러링 가이드 v2.0 기준 🔍
+            </span>
+        </span>
       </p>
 
       {/* 프로젝트 규모 */}
@@ -1086,6 +1094,9 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
           </div>
         ))}
       </div>
+
+      {/* 테일러링 가이드 전문 모달 */}
+      {showGuide && <TailoringGuideModal matrix={TAILORING_MATRIX} onClose={()=>setShowGuide(false)} />}
     </div>
   );
 }
