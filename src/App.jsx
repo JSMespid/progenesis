@@ -340,9 +340,9 @@ JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)",
 적용 테일러링 가이드: ${guide.title}
 프로젝트 규모: ${scaleLabel}, 설계방식: ${guide.hasDesignMethod ? (tailoring.method||"UML") : "해당 없음"}
 테일러링 확정 산출물(단계별): ${tailoringSummary}
-PMBOK 8판의 테일러링 원칙과 품질·리스크 성과영역 관점을 반영하고, 위 테일러링 기준(규모·설계방식·단계별 산출물)을 근거로 PDP를 작성하라. schedule.phases는 위 단계 구성에 맞추고, 각 단계의 deliverable에는 해당 단계의 대표 산출물을 기재하라.
-분량 제한(응답 잘림 방지): objectives 최대 4개, roles 최대 5개, risks 최대 5개, metrics 최대 5개. 각 문자열은 간결하게.
-PDP JSON만 출력(설명·마크다운 금지): {"overview":{"purpose":"string","scope":"string","objectives":["string"]},"organization":{"pm":"string","roles":[{"role":"string","name":"string","responsibility":"string"}]},"schedule":{"phases":[{"phase":"string","start":"YYYY-MM-DD","end":"YYYY-MM-DD","deliverable":"string"}]},"risks":[{"id":"string","description":"string","level":"상|중|하","mitigation":"string"}],"quality":{"metrics":[{"metric":"string","target":"string"}]}}`, 8000);
+PMBOK 8판의 테일러링 원칙과 품질 성과영역 관점을 반영하고, 위 테일러링 기준(규모·설계방식·단계별 산출물)을 근거로 테일러링결과서의 프로젝트 개요를 작성하라.
+분량 제한(응답 잘림 방지): objectives 최대 4개. 각 문자열은 간결하게.
+PDP JSON만 출력(설명·마크다운 금지): {"overview":{"purpose":"string","scope":"string","objectives":["string"]}}`, 2000);
       setPdpData(result);
     } catch(e) { setGenError("PDP 생성 실패: "+e.message); }
     setGenerating(false);
@@ -712,7 +712,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===1 && <StepSDLC factors={sdlcFactors} setFactors={setSdlcFactors} selected={selectedSDLC} setSelected={setSelectedSDLC} recommendation={sdlcRecommendation} recommending={recommending} genError={genError} onRecommend={onRecommendSDLC} />}
         {step===2 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} sdlc={selectedSDLC} />}
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
-        {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
+        {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} generating={generating} genError={genError} onGenerate={onGenerateWBS} />}
         {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
@@ -1026,24 +1026,39 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
   );
 }
 
-function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, ossp, sdlc, form }) {
+function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTailoring, ossp, sdlc, form }) {
   const scale = tailoring?.scale || "중형";
   const method = tailoring?.method || "UML";
   const excluded = tailoring?.excluded || {};
   const guide = getGuideForOSSP(ossp);
   const scaleLabel = guide.scaleOptions?.find(o=>o.value===scale)?.label || scale;
-  const applied = classifyDeliverables(scale, method, guide);
-  const includedOptionalCodes = applied.filter(d=>!d.required && !excluded[d.code]).map(d=>d.code);
   const PHASE_ORDER = guide.phaseOrder;
 
-  // 적용/제외 산출물 분류
-  const appliedList = applied.filter(d => d.required || !excluded[d.code]);
-  const excludedList = applied.filter(d => !d.required && excluded[d.code]);
+  // 가이드 기준 전체 산출물 — 테일러링결과서 양식에 따라 미적용 산출물도 함께 표시
+  const list = classifyDeliverables(scale, method, guide);
+  const isApplied = (d) => d.required || !excluded[d.code];
+  const appliedCount = list.filter(isApplied).length;
   const grouped = {};
-  appliedList.forEach(d => { (grouped[d.phase] = grouped[d.phase] || []).push(d); });
+  list.forEach(d => { (grouped[d.phase] = grouped[d.phase] || []).push(d); });
+
+  // 산출물별 테일러링 기록: tailoring.notes = { "단계:코드": { changed, reason, doc } }
+  // (프로젝트 저장 시 tailoring JSON에 함께 보존)
+  const notes = tailoring?.notes || {};
+  const noteKey = (d) => `${d.phase}:${d.code}`;
+  const setNote = (d, patch) => setTailoring && setTailoring(t => {
+    const ns = { ...(t.notes || {}) };
+    const k = `${d.phase}:${d.code}`;
+    ns[k] = { ...(ns[k] || {}), ...patch };
+    return { ...t, notes: ns };
+  });
 
   const docNo = `PDP-${(form?.client||"").replace(/\s/g,"").slice(0,4).toUpperCase()||"PRJ"}-${new Date().getFullYear()}`;
   const today = new Date().toLocaleDateString("ko-KR");
+
+  // 표 안 인라인 입력 스타일
+  const noteInput = { width:"100%", boxSizing:"border-box", background:"transparent", border:"none",
+    borderBottom:`1px dashed ${T.border}`, color:T.text, fontSize:10.5, fontFamily:"inherit",
+    outline:"none", padding:"2px 2px" };
 
   return (
     <div>
@@ -1083,11 +1098,17 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, ossp, s
               </tbody>
             </table>
 
-
             {/* 1. 프로젝트 개요 */}
             <SectionTitle n="1" title="프로젝트 개요" />
             <div style={{ fontSize:12, color:T.text, lineHeight:1.7, marginBottom:6 }}>{pdpData.overview?.purpose}</div>
-            {pdpData.overview?.scope && <div style={{ fontSize:11, color:T.muted, lineHeight:1.6 }}><b>범위:</b> {pdpData.overview.scope}</div>}
+            {pdpData.overview?.scope && <div style={{ fontSize:11, color:T.muted, lineHeight:1.6, marginBottom:6 }}><b>범위:</b> {pdpData.overview.scope}</div>}
+            {pdpData.overview?.objectives?.length > 0 && (
+              <div style={{ fontSize:11, color:T.muted, lineHeight:1.7 }}>
+                {pdpData.overview.objectives.map((o,i)=>(
+                  <div key={i}><span style={{ color:T.accent, marginRight:5 }}>▸</span>{o}</div>
+                ))}
+              </div>
+            )}
 
             {/* 2. 테일러링 기준 */}
             <SectionTitle n="2" title="테일러링 기준" />
@@ -1099,62 +1120,55 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, ossp, s
               </tbody>
             </table>
 
-            {/* 3. 산출물 테일러링 매트릭스 */}
-            <SectionTitle n="3" title={`산출물 테일러링 매트릭스 (적용 ${appliedList.length}건)`} />
+            {/* 3. 산출물 테일러링 매트릭스 — 적용/변경 여부 및 사유 기록 */}
+            <SectionTitle n="3" title={`산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`} />
+            <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
+              ※ 적용 여부는 테일러링 단계의 선택 결과가 반영됩니다. 변경 여부·테일러링 내역 및 사유·변경 문서명은 이 화면에서 직접 기록하세요 (프로젝트 저장 시 함께 보존).
+            </div>
             <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
               <thead>
-                <tr>{["단계","코드","산출물명","적용","설계방식"].map(h=><td key={h} style={{...cellHead, textAlign:"center"}}>{h}</td>)}</tr>
+                <tr>{["단계","코드","산출물","구분","적용 여부","변경 여부","테일러링 내역 및 사유","변경 문서명"].map(h=>
+                  <td key={h} style={{...cellHead, textAlign:"center"}}>{h}</td>)}</tr>
               </thead>
               <tbody>
                 {PHASE_ORDER.filter(ph=>grouped[ph]?.length).map(ph=>(
-                  grouped[ph].map((d,i)=>(
-                    <tr key={d.code}>
-                      {i===0 && <td style={{...cell, fontWeight:600, verticalAlign:"top"}} rowSpan={grouped[ph].length}>{ph}</td>}
-                      <td style={{...cell, fontFamily:"monospace"}}>{d.code}</td>
-                      <td style={cell}>{d.name}</td>
-                      <td style={{...cell, textAlign:"center"}}>
-                        <Badge color={d.required?T.accent:T.amber}>{d.required?"필수":"선택"}</Badge>
-                      </td>
-                      <td style={{...cell, textAlign:"center", color:T.muted}}>{d.method}</td>
-                    </tr>
-                  ))
+                  grouped[ph].map((d,i)=>{
+                    const k = noteKey(d);
+                    const n = notes[k] || {};
+                    const on = isApplied(d);
+                    return (
+                      <tr key={`${ph}-${d.code}`} style={{ opacity:on?1:0.55 }}>
+                        {i===0 && <td style={{...cell, fontWeight:600, verticalAlign:"top"}} rowSpan={grouped[ph].length}>{ph}</td>}
+                        <td style={{...cell, fontFamily:"monospace"}}>{d.code}</td>
+                        <td style={cell}>
+                          {d.name}
+                          {d.note && <span style={{ color:T.muted, fontSize:9.5, marginLeft:4 }}>({d.note})</span>}
+                        </td>
+                        <td style={{...cell, textAlign:"center"}}>
+                          <Badge color={d.required?T.accent:T.amber}>{d.required?"필수":"선택"}</Badge>
+                        </td>
+                        <td style={{...cell, textAlign:"center", fontSize:14, color:on?T.accent:T.muted }}>{on ? "☒" : "☐"}</td>
+                        <td style={{...cell, textAlign:"center"}}>
+                          <input type="checkbox" checked={!!n.changed}
+                            onChange={e=>setNote(d,{changed:e.target.checked})}
+                            style={{ width:13, height:13, cursor:"pointer" }} />
+                        </td>
+                        <td style={{...cell, minWidth:150 }}>
+                          <input value={n.reason||""}
+                            onChange={e=>setNote(d,{reason:e.target.value})}
+                            placeholder={on ? "" : "미적용 사유 입력"} style={noteInput} />
+                        </td>
+                        <td style={{...cell, minWidth:90 }}>
+                          <input value={n.doc||""}
+                            onChange={e=>setNote(d,{doc:e.target.value})}
+                            placeholder="" style={noteInput} />
+                        </td>
+                      </tr>
+                    );
+                  })
                 ))}
               </tbody>
             </table>
-
-            {/* 4. 제외 산출물 */}
-            {excludedList.length > 0 && (
-              <>
-                <SectionTitle n="4" title={`제외 산출물 (${excludedList.length}건)`} />
-                <div style={{ fontSize:11, color:T.muted, lineHeight:1.7 }}>
-                  {excludedList.map(d=>`${d.code} ${d.name}`).join(" · ")}
-                </div>
-              </>
-            )}
-
-            {/* 5. 일정 */}
-            <SectionTitle n={excludedList.length>0?"5":"4"} title="추진 일정" />
-            {pdpData.schedule?.phases?.map((ph,i)=>(
-              <div key={i} style={{ fontSize:11, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
-                <span style={{ color:T.accent, marginRight:6 }}>■</span>{ph.phase}
-                <span style={{ color:T.muted }}> ({ph.start?.slice(5)}~{ph.end?.slice(5)})</span>
-                {ph.deliverable && <span style={{ color:T.muted }}> · {ph.deliverable}</span>}
-              </div>
-            ))}
-
-            {/* 6. 리스크 */}
-            {pdpData.risks?.length > 0 && (
-              <>
-                <SectionTitle n={excludedList.length>0?"6":"5"} title="주요 리스크" />
-                {pdpData.risks.map((r,i)=>(
-                  <div key={i} style={{ fontSize:11, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
-                    <Badge color={r.level==="상"?T.red:r.level==="중"?T.amber:T.muted}>{r.level}</Badge>
-                    <span style={{ marginLeft:6 }}>{r.description}</span>
-                    {r.mitigation && <div style={{ color:T.muted, fontSize:10, marginTop:2 }}>↳ {r.mitigation}</div>}
-                  </div>
-                ))}
-              </>
-            )}
           </div>
         </div>
       )}
