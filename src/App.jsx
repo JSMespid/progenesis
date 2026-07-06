@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { SDLC_FACTOR_CRITERIA, criteriaToPromptText } from './sdlcFactorCriteria';
 import TailoringGuideModal from './TailoringGuideModal';
+import { TAILORING_GUIDES, getGuideForOSSP } from './tailoringGuides';
 
 const T = {
   bg: "#0A0C10", surface: "#111318", border: "#1E2230",
@@ -106,94 +107,7 @@ const BUILTIN_DELIVERABLES = {
   },
 };
 
-// 방법론 테일러링 가이드 v2.0 — 산출물 매트릭스 (85개). M=필수, O=선택 / method: 공통·UML·IE
-const TAILORING_MATRIX = [
-  {"code": "RD1101", "name": "현행 시스템 분석서", "phase": "요구정의", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "RD1201", "name": "목표 비즈니스 프로세스 정의서", "phase": "요구정의", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "RD1202", "name": "요구사항 정의서", "phase": "요구정의", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "CB1101", "name": "유스케이스 모형 기술서", "phase": "요구정의", "method": "UML", "large": "M", "medium": "M", "small": "M"},
-  {"code": "CB1201", "name": "재사용 컴포넌트 활용 및 확보 목록", "phase": "요구정의", "method": "UML", "large": "O", "medium": "O", "small": "O"},
-  {"code": "RD1301", "name": "요구사항 명세서", "phase": "요구정의", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "AR1101", "name": "아키텍처 정의서", "phase": "요구정의", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "DM3101", "name": "개념 ERD", "phase": "요구정의", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "DM3102", "name": "데이터 주제 영역 정의서", "phase": "요구정의", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "TS1101", "name": "테스트 전략", "phase": "요구정의", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "TS1201", "name": "인수테스트 계획서", "phase": "요구정의", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "CB2101", "name": "유스케이스 분석서", "phase": "분석", "method": "UML", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS2101", "name": "업무기능 분해도", "phase": "분석", "method": "IE", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS2102", "name": "프로세스 다이어그램", "phase": "분석", "method": "IE", "large": "O", "medium": "O", "small": "O"},
-  {"code": "PS2103", "name": "프로세스 명세서", "phase": "분석", "method": "IE", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS2201", "name": "UI 목록", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS2202", "name": "UI 정의서", "phase": "분석", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "PS2301", "name": "인터페이스 정의서", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS2401", "name": "패키지 기능 명세서", "phase": "분석", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "PS2402", "name": "매핑 & Gap 분석서", "phase": "분석", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "AR2101", "name": "개발 표준 정의서", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "DM3201", "name": "논리 ERD", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "DM3202", "name": "Entity 정의서", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "DM3203", "name": "논리 Relationship 정의서", "phase": "분석", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "DM3204", "name": "Process vs. Entity Matrix", "phase": "분석", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "MG4121", "name": "데이터 이행 계획서", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "MG4131", "name": "데이터 이행 목록", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "MG4141", "name": "데이터 Cleansing 요건 목록 및 정의서", "phase": "분석", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "TS2101", "name": "인수테스트 시나리오", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TS2102", "name": "인수테스트 케이스", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TS2201", "name": "시스템테스트 계획서", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "TS2202", "name": "시스템테스트 시나리오", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "TS2203", "name": "시스템테스트 케이스", "phase": "분석", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "AR1101", "name": "아키텍처 정의서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS2201", "name": "UI 목록", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS3101", "name": "UI 설계서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS3102", "name": "보고서 목록", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS3103", "name": "보고서 레이아웃", "phase": "설계", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "PS3201", "name": "인터페이스 설계서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "CB3101", "name": "컴포넌트 명세서", "phase": "설계", "method": "UML", "large": "O", "medium": "O", "small": "O"},
-  {"code": "CB3201", "name": "컴포넌트 설계서", "phase": "설계", "method": "UML", "large": "O", "medium": "O", "small": "O"},
-  {"code": "CB3301", "name": "유스케이스 설계서", "phase": "설계", "method": "UML", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS3301", "name": "프로그램 목록", "phase": "설계", "method": "IE", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS3302", "name": "프로그램 명세서", "phase": "설계", "method": "IE", "large": "M", "medium": "M", "small": "M"},
-  {"code": "PS3303", "name": "프로그램 명세서(배치)", "phase": "설계", "method": "IE", "large": "O", "medium": "O", "small": "O"},
-  {"code": "DM3301", "name": "물리 ERD", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "DM3302", "name": "Table 정의서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "DM3303", "name": "Database 정의서", "phase": "설계", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "DM3304", "name": "Object 정의서", "phase": "설계", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "DM3305", "name": "데이터 용량 산정 결과서", "phase": "설계", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "DM3306", "name": "Index 정의서", "phase": "설계", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "MG4211", "name": "데이터 이행 시나리오", "phase": "설계", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "MG4221", "name": "Table 매핑 정의서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "MG4222", "name": "Column 매핑 정의서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "MG4223", "name": "변환 프로그램 목록", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "MG4224", "name": "변환 프로그램 명세서", "phase": "설계", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "MG4225", "name": "Code 매핑 정의서", "phase": "설계", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "MG4231", "name": "검증 프로그램 목록", "phase": "설계", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "MG4232", "name": "검증 프로그램 명세서", "phase": "설계", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "MG4233", "name": "오류 관리 목록", "phase": "설계", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "TS3101", "name": "통합테스트 계획서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TS3102", "name": "통합테스트 시나리오", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TS3103", "name": "통합테스트 케이스", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TS3201", "name": "단위테스트 계획서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "TS3202", "name": "단위테스트 시나리오", "phase": "설계", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "TS3203", "name": "단위테스트 케이스", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TR3101", "name": "교육훈련 계획서", "phase": "설계", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "AR4201", "name": "운영전환 계획서", "phase": "구축", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "MG4311", "name": "리허설결과서(통합테스트결과서/리허설 결과서)", "phase": "구축", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "TS3203", "name": "단위테스트 케이스/로그", "phase": "구축", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TS4101", "name": "단위테스트 결과서", "phase": "구축", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "TS3103", "name": "통합테스트 케이스/로그", "phase": "구축", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TS4201", "name": "통합테스트 결과서", "phase": "구축", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TS4202", "name": "결함추적", "phase": "구축", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "TS4203", "name": "원인분석 보고서", "phase": "구축", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-  {"code": "TS2203", "name": "시스템테스트 케이스/로그", "phase": "구축", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "TS4301", "name": "시스템테스트 결과서", "phase": "구축", "method": "공통", "large": "M", "medium": "M", "small": "O"},
-  {"code": "TR4101", "name": "사용자 매뉴얼", "phase": "구축", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TR4102", "name": "운영자 매뉴얼", "phase": "구축", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "AR5201", "name": "운영전환 점검 결과서", "phase": "운영전환", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "MG4431", "name": "데이터 이행 결과서", "phase": "운영전환", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "TS2102", "name": "인수테스트 케이스/로그", "phase": "운영전환", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TS5101", "name": "인수테스트 결과서", "phase": "운영전환", "method": "공통", "large": "M", "medium": "M", "small": "M"},
-  {"code": "TS4202", "name": "결함추적", "phase": "운영전환", "method": "공통", "large": "M", "medium": "O", "small": "O"},
-  {"code": "TR5101", "name": "교육훈련 결과서", "phase": "운영전환", "method": "공통", "large": "O", "medium": "O", "small": "O"},
-];
+// 방법론별 테일러링 매트릭스와 가이드는 src/tailoringGuides.js로 이동 (TAILORING_GUIDES / getGuideForOSSP)
 
 const TAILORING_RULES = [
   { id:"doc_level", label:"문서화 수준", options:["최소","표준","상세"] },
@@ -411,8 +325,9 @@ JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)",
   async function generatePDP() {
     setGenerating(true); setGenError(null); setPdpData(null);
     try {
-      // 테일러링으로 확정된 산출물을 단계별로 요약 (PDP의 일정·범위 근거로 사용)
-      const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML")
+      // 선택한 OSSP에 해당하는 테일러링 가이드로 확정 산출물을 단계별로 요약
+      const guide = getGuideForOSSP(selectedOSSP);
+      const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide)
         .filter(d => d.required || !(tailoring.excluded||{})[d.code]);
       const byPhase = {};
       applied.forEach(d => { (byPhase[d.phase] = byPhase[d.phase] || []).push(d.name); });
@@ -421,7 +336,8 @@ JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)",
 
       const result = await callClaude(`당신은 PMBOK 8판에 정통한 품질보증(QA) 전문가입니다. PDP(Project's Defined Process)는 OSSP(Organization's Set of Standard Process)를 테일러링 가이드 기준으로 테일러링한 테일러링결과서입니다.
 프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, SDLC: ${selectedSDLC?.label||"미지정"}, OSSP: ${selectedOSSP?.label}, 기간: ${projectForm.startDate}~${projectForm.endDate}, PM: ${projectForm.pm}
-프로젝트 규모: ${tailoring.scale||"중형"}, 설계방식: ${tailoring.method||"UML"}
+적용 테일러링 가이드: ${guide.title}
+프로젝트 규모: ${tailoring.scale||"중형"}, 설계방식: ${guide.hasDesignMethod ? (tailoring.method||"UML") : "해당 없음"}
 테일러링 확정 산출물(단계별): ${tailoringSummary}
 PMBOK 8판의 테일러링 원칙과 품질·리스크 성과영역 관점을 반영하고, 위 테일러링 기준(규모·설계방식·단계별 산출물)을 근거로 PDP를 작성하라. schedule.phases는 위 단계 구성에 맞추고, 각 단계의 deliverable에는 해당 단계의 대표 산출물을 기재하라.
 분량 제한(응답 잘림 방지): objectives 최대 4개, roles 최대 5개, risks 최대 5개, metrics 최대 5개. 각 문자열은 간결하게.
@@ -444,13 +360,14 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
   async function generateDeliverables() {
     setGenerating(true); setGenError(null); setDeliverablesData(null);
     try {
-      // 가이드 테일러링 결과로 확정된 적용 산출물 목록 구성
-      const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML")
+      // 선택한 OSSP의 테일러링 가이드로 확정된 적용 산출물 목록 구성
+      const guide = getGuideForOSSP(selectedOSSP);
+      const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide)
         .filter(d => d.required || !(tailoring.excluded||{})[d.code]);
       const appliedList = applied.map(d => `${d.code} ${d.name}(${d.phase}${d.required?",필수":",선택"})`).join(", ");
       const result = await callClaude(`SI 착수/계획 산출물 패키지 JSON. 프로젝트: ${projectForm.name}, OSSP: ${selectedOSSP?.label}, SDLC: ${selectedSDLC?.label||"미지정"}
-프로젝트 규모: ${tailoring.scale||"중형"}, 설계방식: ${tailoring.method||"UML"}
-방법론 테일러링 가이드 기준 적용 산출물(${applied.length}개): ${appliedList}
+프로젝트 규모: ${tailoring.scale||"중형"}, 설계방식: ${guide.hasDesignMethod ? (tailoring.method||"UML") : "해당 없음"}
+${guide.title} 기준 적용 산출물(${applied.length}개): ${appliedList}
 위 적용 산출물을 우선 반영하여 산출물 패키지를 구성하라. code는 위 목록의 코드를 사용하라.
 {"categories":[{"id":"string","name":"string","icon":"이모지","documents":[{"id":"string","name":"string","code":"string","purpose":"string","template":"목차1;목차2;목차3","priority":"필수|권장|선택","estimatedPages":5,"owner":"string"}]}],"summary":{"totalDocs":15,"mandatoryCount":10,"estimatedDays":14}}
 4개 카테고리: 착수문서(🚀), 계획문서(📋), 기술문서(🔧), 품질/위험문서(🛡). 각 3~5개 문서.`, 8000);
@@ -969,15 +886,16 @@ function StepOSSP({ selected, setSelected, customOSSP=[], sdlc }) {
   );
 }
 
-// 규모/설계방식에 따라 산출물을 필수(M)/선택(O)/제외로 분류
-function classifyDeliverables(scale, method) {
+// 규모/설계방식/방법론 가이드에 따라 산출물을 필수(M)/선택(O)/제외로 분류
+function classifyDeliverables(scale, method, guide) {
+  const g = guide || TAILORING_GUIDES.ie;
   const scaleKey = scale === "(초)대형" ? "large" : scale === "중형" ? "medium" : "small";
-  // 설계방식: '공통'은 항상 포함, 'UML' 또는 'IE' 중 택1을 함께 포함
   const result = [];
-  for (const d of TAILORING_MATRIX) {
-    if (d.method !== "공통" && d.method !== method) continue;  // 다른 설계방식은 제외
+  for (const d of g.matrix) {
+    // 설계방식(UML/IE) 개념이 있는 가이드만 방식 필터 적용, '공통'은 항상 포함
+    if (g.hasDesignMethod && d.method !== "공통" && d.method !== method) continue;
     const mark = d[scaleKey];
-    if (!mark) continue;
+    if (!mark || mark === "-") continue;
     result.push({ ...d, required: mark === "M" });
   }
   return result;
@@ -985,17 +903,18 @@ function classifyDeliverables(scale, method) {
 
 function StepTailoring({ tailoring, setTailoring, ossp }) {
   const [showGuide, setShowGuide] = useState(false);   // 테일러링 가이드 열람 모달
+  const guide = getGuideForOSSP(ossp);                 // 선택한 OSSP에 해당하는 테일러링 가이드
   const scale = tailoring.scale || "중형";
   const method = tailoring.method || "UML";
   const excluded = tailoring.excluded || {};   // { code: true } = 사용자가 제외한 선택 산출물
 
-  const list = classifyDeliverables(scale, method);
+  const list = classifyDeliverables(scale, method, guide);
   const required = list.filter(d => d.required);
   const optional = list.filter(d => !d.required);
   const includedOptional = optional.filter(d => !excluded[d.code]);
 
-  // 단계 순서
-  const PHASE_ORDER = ["요구정의","분석","설계","구축","운영전환"];
+  // 단계 순서 (가이드별)
+  const PHASE_ORDER = guide.phaseOrder;
   const grouped = {};
   for (const d of list) (grouped[d.phase] = grouped[d.phase] || []).push(d);
 
@@ -1013,7 +932,7 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
         <span style={{ marginLeft:8, color:T.muted }}>
           · <span onClick={()=>setShowGuide(true)} title="테일러링 가이드 전문 보기"
               style={{ color:T.accent, cursor:"pointer", textDecoration:"underline", textUnderlineOffset:3 }}>
-              방법론 테일러링 가이드 v2.0 기준 🔍
+              {guide.title} 기준 🔍
             </span>
         </span>
       </p>
@@ -1029,22 +948,24 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
                 border:`1px solid ${scale===opt?T.accent:T.border}`, cursor:"pointer", fontWeight:scale===opt?600:400 }}>{opt}</button>
           ))}
         </div>
-        <div style={{ fontSize:10, color:T.muted, marginTop:6 }}>※ 투입 MM 기준 — (초)대형 600MM 초과 / 중형 125MM 초과 / 소형 125MM 이하</div>
+        <div style={{ fontSize:10, color:T.muted, marginTop:6 }}>{guide.sizeNote}</div>
       </div>
 
-      {/* 설계방식 */}
-      <div style={{ marginBottom:16 }}>
-        <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>프로세스 설계방식</div>
-        <div style={{ display:"flex", gap:8 }}>
-          {[["UML","UML (객체지향)"],["IE","IE (정보공학)"]].map(([v,label])=>(
-            <button key={v} onClick={()=>setMethod(v)}
-              style={{ flex:1, padding:"8px 0", borderRadius:8, fontSize:12, fontFamily:"inherit",
-                background:method===v?T.accent:T.bg, color:method===v?"#fff":T.muted,
-                border:`1px solid ${method===v?T.accent:T.border}`, cursor:"pointer", fontWeight:method===v?600:400 }}>{label}</button>
-          ))}
+      {/* 설계방식 — UML/IE 구분이 있는 가이드(IE 기반)에서만 표시 */}
+      {guide.hasDesignMethod && (
+        <div style={{ marginBottom:16 }}>
+          <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>프로세스 설계방식</div>
+          <div style={{ display:"flex", gap:8 }}>
+            {[["UML","UML (객체지향)"],["IE","IE (정보공학)"]].map(([v,label])=>(
+              <button key={v} onClick={()=>setMethod(v)}
+                style={{ flex:1, padding:"8px 0", borderRadius:8, fontSize:12, fontFamily:"inherit",
+                  background:method===v?T.accent:T.bg, color:method===v?"#fff":T.muted,
+                  border:`1px solid ${method===v?T.accent:T.border}`, cursor:"pointer", fontWeight:method===v?600:400 }}>{label}</button>
+            ))}
+          </div>
+          <div style={{ fontSize:10, color:T.muted, marginTop:6 }}>※ 공통 산출물은 항상 포함되며, 선택한 설계방식 전용 산출물이 추가됩니다.</div>
         </div>
-        <div style={{ fontSize:10, color:T.muted, marginTop:6 }}>※ 공통 산출물은 항상 포함되며, 선택한 설계방식 전용 산출물이 추가됩니다.</div>
-      </div>
+      )}
 
       {/* 요약 */}
       <div style={{ display:"flex", gap:10, marginBottom:14 }}>
@@ -1096,7 +1017,7 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
       </div>
 
       {/* 테일러링 가이드 전문 모달 */}
-      {showGuide && <TailoringGuideModal matrix={TAILORING_MATRIX} onClose={()=>setShowGuide(false)} />}
+      {showGuide && <TailoringGuideModal guide={guide} onClose={()=>setShowGuide(false)} />}
     </div>
   );
 }
@@ -1105,9 +1026,10 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, ossp, s
   const scale = tailoring?.scale || "중형";
   const method = tailoring?.method || "UML";
   const excluded = tailoring?.excluded || {};
-  const applied = classifyDeliverables(scale, method);
+  const guide = getGuideForOSSP(ossp);
+  const applied = classifyDeliverables(scale, method, guide);
   const includedOptionalCodes = applied.filter(d=>!d.required && !excluded[d.code]).map(d=>d.code);
-  const PHASE_ORDER = ["요구정의","분석","설계","구축","운영전환"];
+  const PHASE_ORDER = guide.phaseOrder;
 
   // 적용/제외 산출물 분류
   const appliedList = applied.filter(d => d.required || !excluded[d.code]);
@@ -1175,7 +1097,8 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, ossp, s
             <SectionTitle n="2" title="테일러링 기준" />
             <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse" }}>
               <tbody>
-                <tr><td style={cellHead}>프로젝트 규모</td><td style={cell}>{scale}</td><td style={cellHead}>설계방식</td><td style={cell}>{method}</td></tr>
+                <tr><td style={cellHead}>적용 가이드</td><td style={cell} colSpan={3}>{guide.title}</td></tr>
+                <tr><td style={cellHead}>프로젝트 규모</td><td style={cell}>{scale}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
                 <tr><td style={cellHead}>규모 판정 기준</td><td style={cell} colSpan={3}>투입 MM 기준 — (초)대형 600 초과 / 중형 125 초과 / 소형 125 이하</td></tr>
               </tbody>
             </table>
