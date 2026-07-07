@@ -2055,9 +2055,9 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
               </div>
             ))}
           </div>
-          <div style={{ display:"flex", flexDirection:"column", gap:6, maxHeight:240, overflow:"auto" }}>
+          <div style={{ display:"flex", flexDirection:"column", gap:6, maxHeight:420, overflowY:"auto" }}>
             {deliverablesData.categories?.map(cat=>(
-              <div key={cat.id} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden" }}>
+              <div key={cat.id} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", flexShrink:0 }}>
                 <div onClick={()=>setExpandedCat(expandedCat===cat.id?null:cat.id)} style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 12px", cursor:"pointer" }}>
                   <span>{cat.icon}</span>
                   <span style={{ fontWeight:600, fontSize:13, flex:1 }}>{cat.name}</span>
