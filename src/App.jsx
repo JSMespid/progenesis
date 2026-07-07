@@ -2262,6 +2262,7 @@ function makeWbsGanttXlsx(wbs, meta) {
     head: 6, txt: 7, ctr: 8, date: 9, pct: 10, num: 11,
     sumTxt: 12, sumDate: 13, sumCtr: 14, sumPct: 15, sumNum: 16,
     tlMonth: 17, tlDay: 18, gantt: 19, ganttSum: 20, legend: 21, holHead: 22, holDate: 23, usage: 24, usageHead: 25,
+    predTxt: 26,   // 선행 입력 열 — 텍스트 서식(@)이라 1.1 입력 시 숫자가 아닌 텍스트로 저장됨
   };
 
   // ═══ WBS 시트 ═══
@@ -2347,10 +2348,10 @@ function makeWbsGanttXlsx(wbs, meta) {
       cells.push(cStr(r, 1, indent + (it.task || ""), S.txt));
       cells.push(cStr(r, 2, it.deliverable || "", S.txt));
       cells.push(cStr(r, 3, it.assignee || "", S.ctr));
-      cells.push(cStr(r, 4, it.pred || "", S.ctr));
+      cells.push(it.pred ? cStr(r, 4, it.pred, S.predTxt) : cEmpty(r, 4, S.predTxt));
       // F 시작일: 선행이 있으면 위쪽 행에서 선행 종료일을 그대로 사용 (선행은 위쪽 행만 참조 — 순환 참조 방지)
       if (r > DATA_START) {
-        const f = `IF($E${r}="",${staticStart},IFERROR(INDEX($G$${DATA_START}:$G$${r - 1},MATCH($E${r},$A$${DATA_START}:$A$${r - 1},0)),${staticStart}))`;
+        const f = `IF($E${r}="",${staticStart},IFERROR(INDEX($G$${DATA_START}:$G$${r - 1},MATCH($E${r}&"",$A$${DATA_START}:$A$${r - 1},0)),${staticStart}))`;
         cells.push(cFml(r, 5, f, S.date));
       } else {
         cells.push(startFn ? cFml(r, 5, startFn, S.date) : cEmpty(r, 5, S.date));
@@ -2440,6 +2441,7 @@ function makeWbsGanttXlsx(wbs, meta) {
     ["   · 시작일(F) + 공수(H) → 종료일(G) 자동 계산: 주말(토·일)과 공휴일 시트의 날짜를 제외합니다.", false],
     ["   · 선행(E)에 선행 작업의 WBS 코드를 입력하면 선행 작업의 종료일이 시작일로 자동 입력됩니다.", false],
     ["   · 제약: 선행은 자신보다 위쪽 행의 작업만 참조할 수 있습니다 (순환 참조 방지). 쉼표로 여러 개를 입력하면 자동 계산 대신 저장된 날짜가 유지됩니다.", false],
+    ["   · 선행 열은 텍스트 서식이므로 1.1처럼 입력하면 WBS 코드로 정확히 인식됩니다.", false],
     ["4. 진척률과 상태", true],
     ["   · 진척률(I)을 입력하면 막대 위에 진한 색으로 진척 구간이 표시됩니다 (0%~100%).", false],
     ["   · 상태(J)는 오늘 날짜 기준으로 예정/진행/지연/완료가 자동 표시됩니다.", false],
@@ -2486,7 +2488,7 @@ function makeWbsGanttXlsx(wbs, meta) {
     `<border><left style="hair"><color rgb="FFE8E8E8"/></left><right style="hair"><color rgb="FFE8E8E8"/></right><top style="hair"><color rgb="FFE8E8E8"/></top><bottom style="hair"><color rgb="FFE8E8E8"/></bottom><diagonal/></border>` +
     `</borders>` +
     `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
-    `<cellXfs count="26">` +
+    `<cellXfs count="27">` +
     `<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>` +                                                                   // 0
     `<xf numFmtId="0" fontId="3" fillId="0" borderId="0"/>` +                                                                   // 1 title
     `<xf numFmtId="0" fontId="1" fillId="4" borderId="1" applyAlignment="1"><alignment vertical="center"/></xf>` +              // 2 metaLabel
@@ -2513,6 +2515,7 @@ function makeWbsGanttXlsx(wbs, meta) {
     `<xf numFmtId="164" fontId="0" fillId="0" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` + // 23 holDate
     `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>` + // 24 usage
     `<xf numFmtId="0" fontId="5" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="center"/></xf>` +              // 25 usageHead
+    `<xf numFmtId="49" fontId="0" fillId="0" borderId="1" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` + // 26 predTxt (텍스트 @)
     `</cellXfs>` +
     `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>` +
     `<dxfs count="6">` +
