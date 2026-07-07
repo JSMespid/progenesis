@@ -2666,6 +2666,25 @@ function officeFileForDoc(doc, catName, meta, wbs) {
   ] }) };
 }
 
+// 산출물 1건만 개별 다운로드 (ZIP 내부와 동일한 파일명 규칙)
+function downloadSingleDeliverable(doc, catName, meta, wbs) {
+  const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
+  const pi = prioInfo(doc.priority);
+  const of = officeFileForDoc(doc, catName, meta, wbs);
+  const mime = {
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  }[of.ext] || "application/octet-stream";
+  const codePart = sanitize(doc.code || "");
+  const blob = new Blob([of.bytes], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const aEl = document.createElement("a");
+  aEl.href = url; aEl.download = `[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`;
+  document.body.appendChild(aEl); aEl.click(); aEl.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
 // 산출물 전체를 폴더 구조 ZIP으로 다운로드 (각 파일은 실제 Office 문서)
 function downloadDeliverablesZip(deliverables, meta, wbs) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
@@ -2747,6 +2766,8 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate, 
                     <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
                     <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
                     <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
+                    <button onClick={()=>downloadSingleDeliverable(doc, cat.name, form||{}, wbs)} title="이 산출물만 다운로드"
+                      style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
                   </div>
                 ))}
               </div>
@@ -3055,6 +3076,8 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
                   <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
                   <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
                   <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
+                  <button onClick={()=>downloadSingleDeliverable(doc, cat.name, project, project.wbs)} title="이 산출물만 다운로드"
+                    style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
                 </div>
               ))}
             </Card>
