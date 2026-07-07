@@ -108,6 +108,7 @@ export function resolveProcessTailoring(processState) {
       changed = s.status === "변경적용";
     }
     if (applied === undefined) applied = true;         // 기본값: 적용
+    if (mark === "●") { applied = true; changed = false; }   // 필수(●)는 항상 적용, 수정·변경 불가 (방법론 테일러링과 동일 규칙)
     changed = !!changed && !!applied;                  // 변경 여부는 적용 상태에서만 유효
     const na = mark === "-";
     const status = na ? "해당없음" : (!applied ? "미적용" : (changed ? "변경적용" : "적용"));
