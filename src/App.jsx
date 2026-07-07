@@ -830,7 +830,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} onRecommendPBS={onRecommendPBS} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} />}
-        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} form={form} />}
+        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} tailoring={tailoring} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
       <div style={{ display:"flex", justifyContent:"space-between" }}>
@@ -2135,7 +2135,7 @@ function docxTable(rows, headerCols = 0) {
   const borders = '<w:tblBorders><w:top w:val="single" w:sz="4" w:color="999999"/><w:left w:val="single" w:sz="4" w:color="999999"/><w:bottom w:val="single" w:sz="4" w:color="999999"/><w:right w:val="single" w:sz="4" w:color="999999"/><w:insideH w:val="single" w:sz="4" w:color="999999"/><w:insideV w:val="single" w:sz="4" w:color="999999"/></w:tblBorders>';
   const trs = rows.map((cells, ri) => "<w:tr>" + cells.map((c, ci) => {
     const head = ri === 0 && headerCols === -1 ? true : ci < headerCols;
-    return `<w:tc><w:tcPr>${head ? '<w:shd w:val="clear" w:fill="EFEFEF"/>' : ""}</w:tcPr><w:p><w:r><w:rPr>${head ? "<w:b/>" : ""}<w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t xml:space="preserve">${xesc(c)}</w:t></w:r></w:p></w:tc>`;
+    return `<w:tc><w:tcPr>${head ? '<w:shd w:val="clear" w:fill="EFEFEF"/><w:vAlign w:val="center"/>' : ""}</w:tcPr><w:p>${head ? '<w:pPr><w:jc w:val="center"/></w:pPr>' : ""}<w:r><w:rPr>${head ? "<w:b/>" : ""}<w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t xml:space="preserve">${xesc(c)}</w:t></w:r></w:p></w:tc>`;
   }).join("") + "</w:tr>").join("");
   return `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/>${borders}</w:tblPr>${trs}</w:tbl><w:p/>`;
 }
@@ -2224,8 +2224,39 @@ function pickOfficeFormat(name) {
   return "docx";
 }
 
-// 산출물 1건 → Office 파일 바이트 생성
-function officeFileForDoc(doc, catName, meta) {
+// WBS 산출물 전용 — ④ 일정 계획 표 전체(요약 롤업·계층 들여쓰기·공휴일 포함)를 그대로 담는다
+function wbsXlsxRows(wbs, meta) {
+  const today = new Date().toLocaleDateString("ko-KR");
+  const rollup = (t) => {
+    const ss = (t.subtasks||[]).map(s=>s.start).filter(Boolean).sort();
+    const ff = (t.subtasks||[]).map(s=>s.finish).filter(Boolean).sort();
+    const eff = (t.subtasks||[]).reduce((n,s)=>n+(Number(s.effort)||0),0);
+    return { start: ss[0]||"", finish: ff.slice(-1)[0]||"", eff };
+  };
+  const rows = [
+    ["문서명", "WBS (일정 계획)"], ["프로젝트명", meta.name||""], ["고객사", meta.client||""], ["PM", meta.pm||""],
+    ["프로젝트 기간", `${meta.startDate||""} ~ ${meta.endDate||""}`], ["작성일", today], ["버전", "V0.1 (초안)"],
+  ];
+  if ((wbs.holidays||[]).length) rows.push(["공휴일", wbs.holidays.join(", ")]);
+  rows.push([]);
+  rows.push(["WBS", "Task", "산출물", "작업자", "선행", "시작일", "종료일", "공수(일)"]);
+  (wbs.tasks||[]).forEach(t => {
+    const r = rollup(t);
+    rows.push([t.wbsCode, t.phase, "요약 (하위 롤업)", "", "", r.start, r.finish, r.eff ? String(r.eff) : ""]);
+    (t.subtasks||[]).forEach(s => {
+      const indent = "  ".repeat(Math.max(0, (s.level||2) - 2));
+      rows.push([s.wbsCode, indent + (s.task||""), s.deliverable||"", s.assignee||"", s.pred||"", s.start||"", s.finish||"", s.effort ? String(s.effort) : ""]);
+    });
+  });
+  return rows;
+}
+
+// 산출물 1건 → Office 파일 바이트 생성 (wbs: WBS 산출물에 일정 계획 원본을 담기 위한 전달)
+function officeFileForDoc(doc, catName, meta, wbs) {
+  // 산출물명이 'WBS'면 스켈레톤 대신 실제 일정 계획 표 전체를 xlsx로 생성
+  if (String(doc.name||"").replace(/\s/g,"").toUpperCase() === "WBS" && wbs?.tasks?.length) {
+    return { ext: "xlsx", bytes: makeXlsx({ sheetName: "WBS", rows: wbsXlsxRows(wbs, meta) }) };
+  }
   const fmt = pickOfficeFormat(doc.name);
   const today = new Date().toLocaleDateString("ko-KR");
   const prio = prioInfo(doc.priority).label;
@@ -2258,7 +2289,7 @@ function officeFileForDoc(doc, catName, meta) {
 }
 
 // 산출물 전체를 폴더 구조 ZIP으로 다운로드 (각 파일은 실제 Office 문서)
-function downloadDeliverablesZip(deliverables, meta) {
+function downloadDeliverablesZip(deliverables, meta, wbs) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
   const cats = deliverables?.categories || [];
   const files = []; const manifest = [];
@@ -2267,7 +2298,7 @@ function downloadDeliverablesZip(deliverables, meta) {
     const folder = `${String(ci + 1).padStart(2, "0")}_${sanitize(cat.name)}`;
     (cat.documents || []).forEach(doc => {
       const pi = prioInfo(doc.priority);
-      const of = officeFileForDoc(doc, cat.name, meta);
+      const of = officeFileForDoc(doc, cat.name, meta, wbs);
       const codePart = sanitize(doc.code || "");
       files.push({ path: `${folder}/[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`, content: of.bytes });
       manifest.push([folder, doc.code || "-", doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
@@ -2289,7 +2320,7 @@ function downloadDeliverablesZip(deliverables, meta) {
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
-function StepDeliverables({ deliverablesData, generating, genError, onGenerate, form }) {
+function StepDeliverables({ deliverablesData, generating, genError, onGenerate, form, wbs }) {
   const [expanded, setExpanded] = useState({});   // { 카테고리id: true } — 여러 카테고리 동시 펼침 유지
   const toggleCat = (id) => setExpanded(m => ({ ...m, [id]: !m[id] }));
   const total = deliverablesData?.summary?.totalDocs || 0;
@@ -2307,7 +2338,7 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate, 
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
             <Badge color={T.green}>✓ 산출물 생성 완료</Badge>
             <div style={{ display:"flex", gap:6 }}>
-              <Btn onClick={()=>downloadDeliverablesZip(deliverablesData, form||{})} style={{ fontSize:11, padding:"4px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
+              <Btn onClick={()=>downloadDeliverablesZip(deliverablesData, form||{}, wbs)} style={{ fontSize:11, padding:"4px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
               <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
             </div>
           </div>
@@ -2631,7 +2662,7 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
       {tab==="deliverables" && project.deliverables && (
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
           <div style={{ display:"flex", justifyContent:"flex-end" }}>
-            <Btn onClick={()=>downloadDeliverablesZip(project.deliverables, project)} style={{ fontSize:11, padding:"5px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
+            <Btn onClick={()=>downloadDeliverablesZip(project.deliverables, project, project.wbs)} style={{ fontSize:11, padding:"5px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
           </div>
           <div style={{ display:"flex", gap:10 }}>
             {[{label:"전체",value:project.deliverables.summary?.totalDocs||0,color:T.accent},{label:"필수(M)",value:project.deliverables.summary?.mandatoryCount||0,color:T.red},{label:"선택(O)",value:(project.deliverables.summary?.totalDocs||0)-(project.deliverables.summary?.mandatoryCount||0),color:T.amber}].map(s=>(
