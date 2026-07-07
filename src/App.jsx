@@ -2176,6 +2176,379 @@ function makeXlsx({ sheetName = "Sheet1", rows }) {
   ]);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// WBS 간트 워크북 생성기 (자체 구현 · 외부 코드/파일 미사용)
+// - 시트: WBS(일정+간트) / 공휴일 / 사용법
+// - B3 셀 하나로 차트 단위(일/주) 전환 — 조건부 서식·날짜 축이 수식으로 즉시 반영
+// - 일정 수식: 선행(FS) 종료 + 1근무일 → 시작일(WORKDAY), 시작일 + 공수 - 1근무일 → 종료일
+// - 간트 막대·진척·오늘·주말·공휴일은 조건부 서식(범용 엑셀 기법)으로 표현
+// ═══════════════════════════════════════════════════════════════════
+
+
+// 날짜 문자열(yyyy-mm-dd) → 엑셀 시리얼 값 (1900 날짜 체계)
+function xlDateSerial(s) {
+  if (!s) return null;
+  const d = new Date(s + "T00:00:00Z");
+  if (isNaN(d)) return null;
+  return Math.round((d.getTime() - Date.UTC(1899, 11, 30)) / 86400000);
+}
+// 수식에 심을 정적 날짜: DATE(y,m,d) — 로캘 무관
+function xlDateFn(s) {
+  if (!s) return null;
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  return `DATE(${+m[1]},${+m[2]},${+m[3]})`;
+}
+
+function makeWbsGanttXlsx(wbs, meta) {
+  const tasks = wbs?.tasks || [];
+  const holidays = (wbs?.holidays || []).slice().sort();
+  const today = new Date().toLocaleDateString("ko-KR");
+
+  // ── 행 평탄화: 요약(레벨1) + 하위(레벨2~5), 자식 행 범위 기록 ──
+  const flat = [];   // { kind:'sum'|'sub', ... }
+  tasks.forEach(t => {
+    const sumIdx = flat.length;
+    flat.push({ kind: "sum", wbsCode: t.wbsCode, name: t.phase, childFrom: null, childTo: null });
+    (t.subtasks || []).forEach(s => flat.push({ kind: "sub", ...s }));
+    const n = (t.subtasks || []).length;
+    if (n) { flat[sumIdx].childFrom = sumIdx + 1; flat[sumIdx].childTo = sumIdx + n; }
+  });
+
+  const HEAD_ROW = 6;                 // 테이블 헤더·날짜 축 행
+  const DATA_START = HEAD_ROW + 1;    // 첫 데이터 행 = 7
+  const lastRow = DATA_START + flat.length - 1;
+  const rowOf = (i) => DATA_START + i;
+
+  // ── 차트 시작일: 최소 시작일에서 이전 월요일로 스냅 (없으면 프로젝트 시작일/오늘) ──
+  const allStarts = [];
+  const allFinishes = [];
+  flat.forEach(r => { if (r.kind === "sub") { if (r.start) allStarts.push(r.start); if (r.finish) allFinishes.push(r.finish); } });
+  if (meta?.startDate) allStarts.push(meta.startDate);
+  if (meta?.endDate) allFinishes.push(meta.endDate);
+  allStarts.sort(); allFinishes.sort();
+  let chartStart = allStarts[0] || new Date().toISOString().slice(0, 10);
+  {
+    const d = new Date(chartStart + "T00:00:00Z");
+    const dow = d.getUTCDay();                       // 0=일
+    d.setUTCDate(d.getUTCDate() - ((dow + 6) % 7));  // 직전(포함) 월요일
+    chartStart = d.toISOString().slice(0, 10);
+  }
+  // 타임라인 열 수: 일 단위 기준 프로젝트 기간 + 여유, 90~240열
+  let spanDays = 120;
+  if (allFinishes.length) {
+    const a = new Date(chartStart + "T00:00:00Z"), b = new Date(allFinishes[allFinishes.length - 1] + "T00:00:00Z");
+    spanDays = Math.max(30, Math.round((b - a) / 86400000));
+  }
+  const NCOLS = Math.max(90, Math.min(240, spanDays + 30));
+  const GANTT_FIRST = 10;                       // K열 (0-based 10)
+  const GANTT_LAST = GANTT_FIRST + NCOLS - 1;
+  const K = colLetter(GANTT_FIRST);             // "K"
+  const LASTCOL = colLetter(GANTT_LAST);
+
+  // ── 셀 헬퍼 ──
+  const cStr = (r, c, v, s) => v === "" || v == null ? (s ? `<c r="${colLetter(c)}${r}" s="${s}"/>` : "") :
+    `<c r="${colLetter(c)}${r}" s="${s || 0}" t="inlineStr"><is><t xml:space="preserve">${xesc(v)}</t></is></c>`;
+  const cNum = (r, c, v, s) => v == null ? (s ? `<c r="${colLetter(c)}${r}" s="${s}"/>` : "") :
+    `<c r="${colLetter(c)}${r}" s="${s || 0}"><v>${v}</v></c>`;
+  const cFml = (r, c, f, s) => `<c r="${colLetter(c)}${r}" s="${s || 0}"><f>${xesc(f)}</f></c>`;
+  const cEmpty = (r, c, s) => `<c r="${colLetter(c)}${r}" s="${s}"/>`;
+
+  // ── 스타일 인덱스 (styles.xml 정의 순서와 일치) ──
+  const S = {
+    title: 1, metaLabel: 2, metaVal: 3, metaDate: 4, metaCenter: 5,
+    head: 6, txt: 7, ctr: 8, date: 9, pct: 10, num: 11,
+    sumTxt: 12, sumDate: 13, sumCtr: 14, sumPct: 15, sumNum: 16,
+    tlMonth: 17, tlDay: 18, gantt: 19, ganttSum: 20, legend: 21, holHead: 22, holDate: 23, usage: 24, usageHead: 25,
+  };
+
+  // ═══ WBS 시트 ═══
+  const rowsXml = [];
+
+  // Row 1: 제목
+  rowsXml.push(`<row r="1" ht="24" customHeight="1">${cStr(1, 0, "WBS · 일정 계획 (Gantt)", S.title)}</row>`);
+  // Row 2: 프로젝트 메타
+  rowsXml.push(`<row r="2">${[
+    cStr(2, 0, "프로젝트명", S.metaLabel), cStr(2, 1, meta?.name || "", S.metaVal),
+    cStr(2, 2, "고객사", S.metaLabel), cStr(2, 3, meta?.client || "", S.metaVal),
+    cStr(2, 4, "PM", S.metaLabel), cStr(2, 5, meta?.pm || "", S.metaVal),
+    cStr(2, 6, "기간", S.metaLabel), cStr(2, 7, `${meta?.startDate || ""} ~ ${meta?.endDate || ""}`, S.metaVal),
+    cStr(2, 8, "작성일", S.metaLabel), cStr(2, 9, today, S.metaVal),
+  ].join("")}</row>`);
+  // Row 3: 차트 설정 (B3 = 단위 토글, D3 = 차트 시작일)
+  rowsXml.push(`<row r="3">${[
+    cStr(3, 0, "차트 단위 ▼", S.metaLabel), cStr(3, 1, "일", S.metaCenter),
+    cStr(3, 2, "차트 시작일", S.metaLabel), cNum(3, 3, xlDateSerial(chartStart), S.metaDate),
+    cStr(3, 4, "기준일", S.metaLabel), cFml(3, 5, "TODAY()", S.metaDate),
+    cStr(3, 6, "버전", S.metaLabel), cStr(3, 7, "V0.1 (초안)", S.metaVal),
+  ].join("")}</row>`);
+  // Row 4: 범례
+  rowsXml.push(`<row r="4">${cStr(4, 0, "범례: 파랑=작업 막대 · 진한 파랑=진척(진척률 입력 시) · 네이비=단계 요약 · 주황=오늘 · 분홍=공휴일 · 회색=주말  |  B3에서 일↔주 전환, D3에서 차트 시작일 변경", S.legend)}</row>`);
+
+  // Row 5: 월 헤더 (날짜 축 행6 참조)
+  {
+    const cells = [];
+    for (let i = 0; i < NCOLS; i++) {
+      const col = GANTT_FIRST + i;
+      const cl = colLetter(col);
+      const prev = colLetter(col - 1);
+      const f = i === 0
+        ? `TEXT(${cl}$${HEAD_ROW},"yy년 m월")`
+        : `IF(MONTH(${cl}$${HEAD_ROW})<>MONTH(${prev}$${HEAD_ROW}),TEXT(${cl}$${HEAD_ROW},"yy년 m월"),"")`;
+      cells.push(cFml(5, col, f, S.tlMonth));
+    }
+    rowsXml.push(`<row r="5" ht="14" customHeight="1">${cells.join("")}</row>`);
+  }
+
+  // Row 6: 테이블 헤더 + 날짜 축
+  {
+    const heads = ["WBS", "Task", "산출물", "작업자", "선행", "시작일", "종료일", "공수(일)", "진척률", "상태"];
+    const cells = heads.map((h, ci) => cStr(HEAD_ROW, ci, h, S.head));
+    for (let i = 0; i < NCOLS; i++) {
+      const col = GANTT_FIRST + i;
+      const f = i === 0 ? `$D$3` : `${colLetter(col - 1)}$${HEAD_ROW}+IF(ChartUnit="주",7,1)`;
+      cells.push(cFml(HEAD_ROW, col, f, S.tlDay));
+    }
+    rowsXml.push(`<row r="${HEAD_ROW}" ht="16" customHeight="1">${cells.join("")}</row>`);
+  }
+
+  // 데이터 행
+  flat.forEach((it, i) => {
+    const r = rowOf(i);
+    const cells = [];
+    const ganttStyle = it.kind === "sum" ? S.ganttSum : S.gantt;
+    if (it.kind === "sum") {
+      // childFrom/childTo는 flat 인덱스 → 행 번호로 변환
+      const r1 = it.childFrom != null ? DATA_START + it.childFrom : null;
+      const r2 = it.childTo != null ? DATA_START + it.childTo : null;
+      cells.push(cStr(r, 0, it.wbsCode, S.sumTxt));
+      cells.push(cStr(r, 1, it.name, S.sumTxt));
+      cells.push(cStr(r, 2, "요약 (하위 롤업)", S.sumTxt));
+      cells.push(cEmpty(r, 3, S.sumTxt));
+      cells.push(cEmpty(r, 4, S.sumCtr));
+      if (r1 != null) {
+        cells.push(cFml(r, 5, `IF(COUNT($F$${r1}:$F$${r2})=0,"",MIN($F$${r1}:$F$${r2}))`, S.sumDate));
+        cells.push(cFml(r, 6, `IF(COUNT($G$${r1}:$G$${r2})=0,"",MAX($G$${r1}:$G$${r2}))`, S.sumDate));
+        cells.push(cFml(r, 7, `IF(SUM($H$${r1}:$H$${r2})=0,"",SUM($H$${r1}:$H$${r2}))`, S.sumNum));
+        cells.push(cFml(r, 8, `IFERROR(SUMPRODUCT($H$${r1}:$H$${r2},$I$${r1}:$I$${r2})/SUM($H$${r1}:$H$${r2}),0)`, S.sumPct));
+      } else {
+        cells.push(cEmpty(r, 5, S.sumDate)); cells.push(cEmpty(r, 6, S.sumDate));
+        cells.push(cEmpty(r, 7, S.sumNum)); cells.push(cEmpty(r, 8, S.sumPct));
+      }
+      cells.push(cEmpty(r, 9, S.sumCtr));
+    } else {
+      const startFn = xlDateFn(it.start);
+      const finishFn = xlDateFn(it.finish);
+      const staticStart = startFn || `""`;
+      cells.push(cStr(r, 0, it.wbsCode || "", S.txt));
+      const indent = "  ".repeat(Math.max(0, (it.level || 2) - 2));
+      cells.push(cStr(r, 1, indent + (it.task || ""), S.txt));
+      cells.push(cStr(r, 2, it.deliverable || "", S.txt));
+      cells.push(cStr(r, 3, it.assignee || "", S.ctr));
+      cells.push(cStr(r, 4, it.pred || "", S.ctr));
+      // F 시작일: 선행이 있으면 위쪽 행에서 종료일 조회 후 다음 근무일 (선행은 위쪽 행만 참조 — 순환 참조 방지)
+      if (r > DATA_START) {
+        const f = `IF($E${r}="",${staticStart},IFERROR(WORKDAY(INDEX($G$${DATA_START}:$G$${r - 1},MATCH($E${r},$A$${DATA_START}:$A$${r - 1},0)),1,HolidayList),${staticStart}))`;
+        cells.push(cFml(r, 5, f, S.date));
+      } else {
+        cells.push(startFn ? cFml(r, 5, startFn, S.date) : cEmpty(r, 5, S.date));
+      }
+      // G 종료일: 시작일 + 공수(근무일) - 1
+      {
+        const fb = finishFn || `""`;
+        cells.push(cFml(r, 6, `IF(OR($F${r}="",$H${r}=""),${fb},WORKDAY($F${r},MAX($H${r},1)-1,HolidayList))`, S.date));
+      }
+      // H 공수
+      const eff = Number(it.effort);
+      cells.push(eff > 0 ? cNum(r, 7, eff, S.num) : cEmpty(r, 7, S.num));
+      // I 진척률 (기본 0)
+      cells.push(cNum(r, 8, 0, S.pct));
+      // J 상태
+      cells.push(cFml(r, 9, `IF($F${r}="","",IF($I${r}>=1,"완료",IF($G${r}="","",IF(TODAY()>$G${r},"지연",IF(TODAY()>=$F${r},"진행","예정")))))`, S.ctr));
+    }
+    // 간트 영역 스타일 빈 셀 (조건부 서식이 칠함)
+    for (let c = GANTT_FIRST; c <= GANTT_LAST; c++) cells.push(cEmpty(r, c, ganttStyle));
+    const outline = it.kind === "sub" ? ` outlineLevel="${Math.min(7, Math.max(1, (it.level || 2) - 1))}"` : "";
+    rowsXml.push(`<row r="${r}"${outline}>${cells.join("")}</row>`);
+  });
+
+  // 조건부 서식 (우선순위 순, stopIfTrue) — 범용 엑셀 기법의 자체 구현
+  const ganttRange = `${K}${DATA_START}:${LASTCOL}${lastRow}`;
+  const unitSpan = `IF(ChartUnit="주",6,0)`;
+  const cf = `<conditionalFormatting sqref="${ganttRange}">` +
+    `<cfRule type="expression" dxfId="0" priority="1" stopIfTrue="1"><formula>AND($A${DATA_START}&lt;&gt;"",ISERROR(FIND(".",$A${DATA_START})),$F${DATA_START}&lt;&gt;"",$G${DATA_START}&lt;&gt;"",${K}$${HEAD_ROW}&lt;=$G${DATA_START},${K}$${HEAD_ROW}+${unitSpan}&gt;=$F${DATA_START})</formula></cfRule>` +
+    `<cfRule type="expression" dxfId="1" priority="2" stopIfTrue="1"><formula>AND($F${DATA_START}&lt;&gt;"",$G${DATA_START}&lt;&gt;"",${K}$${HEAD_ROW}&lt;=$G${DATA_START},${K}$${HEAD_ROW}+${unitSpan}&gt;=$F${DATA_START},$I${DATA_START}&gt;0,${K}$${HEAD_ROW}&lt;=$F${DATA_START}+($G${DATA_START}-$F${DATA_START})*$I${DATA_START})</formula></cfRule>` +
+    `<cfRule type="expression" dxfId="2" priority="3" stopIfTrue="1"><formula>AND($F${DATA_START}&lt;&gt;"",$G${DATA_START}&lt;&gt;"",${K}$${HEAD_ROW}&lt;=$G${DATA_START},${K}$${HEAD_ROW}+${unitSpan}&gt;=$F${DATA_START})</formula></cfRule>` +
+    `<cfRule type="expression" dxfId="3" priority="4" stopIfTrue="1"><formula>AND(${K}$${HEAD_ROW}&lt;=TODAY(),TODAY()&lt;${K}$${HEAD_ROW}+IF(ChartUnit="주",7,1))</formula></cfRule>` +
+    `<cfRule type="expression" dxfId="4" priority="5" stopIfTrue="1"><formula>AND(ChartUnit="일",COUNTIF(HolidayList,${K}$${HEAD_ROW})&gt;0)</formula></cfRule>` +
+    `<cfRule type="expression" dxfId="5" priority="6"><formula>AND(ChartUnit="일",WEEKDAY(${K}$${HEAD_ROW},2)&gt;=6)</formula></cfRule>` +
+    `</conditionalFormatting>`;
+
+  const dv = `<dataValidations count="1"><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" promptTitle="차트 단위" prompt="일 또는 주를 선택하면 간트 축이 바뀝니다" sqref="B3"><formula1>"일,주"</formula1></dataValidation></dataValidations>`;
+
+  const wbsSheet = XMLH +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+    `<sheetPr><outlinePr summaryBelow="0"/></sheetPr>` +
+    `<sheetViews><sheetView workbookViewId="0" showGridLines="0" zoomScale="90">` +
+    `<pane xSplit="10" ySplit="${HEAD_ROW}" topLeftCell="${K}${DATA_START}" activePane="bottomRight" state="frozen"/>` +
+    `<selection pane="bottomRight" activeCell="${K}${DATA_START}" sqref="${K}${DATA_START}"/>` +
+    `</sheetView></sheetViews>` +
+    `<sheetFormatPr defaultRowHeight="15.5" outlineLevelRow="4"/>` +
+    `<cols>` +
+    `<col min="1" max="1" width="9" customWidth="1"/>` +
+    `<col min="2" max="2" width="36" customWidth="1"/>` +
+    `<col min="3" max="3" width="20" customWidth="1"/>` +
+    `<col min="4" max="4" width="9" customWidth="1"/>` +
+    `<col min="5" max="5" width="10" customWidth="1"/>` +
+    `<col min="6" max="7" width="11.5" customWidth="1"/>` +
+    `<col min="8" max="8" width="8" customWidth="1"/>` +
+    `<col min="9" max="9" width="7.5" customWidth="1"/>` +
+    `<col min="10" max="10" width="7" customWidth="1"/>` +
+    `<col min="${GANTT_FIRST + 1}" max="${GANTT_LAST + 1}" width="3.4" customWidth="1"/>` +
+    `</cols>` +
+    `<sheetData>${rowsXml.join("")}</sheetData>` +
+    cf + dv +
+    `</worksheet>`;
+
+  // ═══ 공휴일 시트 ═══
+  const HOL_MAX = 60;   // HolidayList = A2:A61 (빈 칸은 사용자가 추가 입력)
+  const holRows = [`<row r="1">${cStr(1, 0, "공휴일 날짜", S.holHead)}${cStr(1, 1, "설명", S.holHead)}</row>`];
+  for (let i = 0; i < HOL_MAX; i++) {
+    const r = i + 2;
+    const serial = i < holidays.length ? xlDateSerial(holidays[i]) : null;
+    holRows.push(`<row r="${r}">${serial != null ? cNum(r, 0, serial, S.holDate) : cEmpty(r, 0, S.holDate)}${i < holidays.length ? cStr(r, 1, "프로젝트 지정 공휴일", S.txt) : cEmpty(r, 1, S.txt)}</row>`);
+  }
+  const holSheet = XMLH +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+    `<sheetViews><sheetView workbookViewId="0"/></sheetViews>` +
+    `<cols><col min="1" max="1" width="15" customWidth="1"/><col min="2" max="2" width="30" customWidth="1"/></cols>` +
+    `<sheetData>${holRows.join("")}</sheetData>` +
+    `</worksheet>`;
+
+  // ═══ 사용법 시트 ═══
+  const usage = [
+    ["WBS 일정 계획 워크북 사용법", true],
+    ["", false],
+    ["1. 차트 단위 전환 (일 ↔ 주)", true],
+    ["   · WBS 시트 B3 셀에서 '일' 또는 '주'를 선택하면 간트 차트 축이 즉시 전환됩니다.", false],
+    ["   · '주' 단위에서는 각 열이 7일(1주)을 나타내며, 주말·공휴일 음영은 '일' 단위에서만 표시됩니다.", false],
+    ["2. 차트 시작일", true],
+    ["   · D3 셀의 날짜를 바꾸면 간트 차트가 해당 날짜부터 표시됩니다.", false],
+    ["3. 일정 자동 계산 (근무일 기준)", true],
+    ["   · 시작일(F) + 공수(H) → 종료일(G) 자동 계산: 주말(토·일)과 공휴일 시트의 날짜를 제외합니다.", false],
+    ["   · 선행(E)에 선행 작업의 WBS 코드를 입력하면 시작일이 '선행 종료일 다음 근무일'로 자동 계산됩니다.", false],
+    ["   · 제약: 선행은 자신보다 위쪽 행의 작업만 참조할 수 있습니다 (순환 참조 방지). 쉼표로 여러 개를 입력하면 자동 계산 대신 저장된 날짜가 유지됩니다.", false],
+    ["4. 진척률과 상태", true],
+    ["   · 진척률(I)을 입력하면 막대 위에 진한 색으로 진척 구간이 표시됩니다 (0%~100%).", false],
+    ["   · 상태(J)는 오늘 날짜 기준으로 예정/진행/지연/완료가 자동 표시됩니다.", false],
+    ["5. 공휴일 관리", true],
+    ["   · '공휴일' 시트 A열(2행~61행)에 날짜를 추가/삭제하면 일정 계산과 간트 음영에 즉시 반영됩니다.", false],
+    ["6. 행 그룹(개요)", true],
+    ["   · 좌측 개요 버튼(1/2/3…)으로 단계별 하위 작업을 접거나 펼 수 있습니다.", false],
+    ["", false],
+    ["※ 본 워크북은 ProGenesis가 표준 엑셀 기능(수식·조건부 서식)만으로 자동 생성한 문서입니다 (매크로 없음).", false],
+  ];
+  const usageRows = usage.map(([t, b], i) => `<row r="${i + 1}">${cStr(i + 1, 0, t, b ? S.usageHead : S.usage)}</row>`);
+  const usageSheet = XMLH +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+    `<sheetViews><sheetView workbookViewId="0" showGridLines="0"/></sheetViews>` +
+    `<cols><col min="1" max="1" width="110" customWidth="1"/></cols>` +
+    `<sheetData>${usageRows.join("")}</sheetData>` +
+    `</worksheet>`;
+
+  // ═══ styles.xml ═══
+  const stylesXml = XMLH + `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+    `<numFmts count="3">` +
+    `<numFmt numFmtId="164" formatCode="yyyy\\-mm\\-dd"/>` +
+    `<numFmt numFmtId="165" formatCode="d"/>` +
+    `<numFmt numFmtId="166" formatCode="0%"/>` +
+    `</numFmts>` +
+    `<fonts count="6">` +
+    `<font><sz val="10"/><name val="맑은 고딕"/></font>` +
+    `<font><b/><sz val="10"/><name val="맑은 고딕"/></font>` +
+    `<font><sz val="8"/><name val="맑은 고딕"/><color rgb="FF595959"/></font>` +
+    `<font><b/><sz val="14"/><name val="맑은 고딕"/><color rgb="FF1F3864"/></font>` +
+    `<font><b/><sz val="8"/><name val="맑은 고딕"/><color rgb="FF1F3864"/></font>` +
+    `<font><b/><sz val="10"/><name val="맑은 고딕"/><color rgb="FF1F3864"/></font>` +
+    `</fonts>` +
+    `<fills count="5">` +
+    `<fill><patternFill patternType="none"/></fill>` +
+    `<fill><patternFill patternType="gray125"/></fill>` +
+    `<fill><patternFill patternType="solid"><fgColor rgb="FFD9E1F2"/></patternFill></fill>` +
+    `<fill><patternFill patternType="solid"><fgColor rgb="FFEDF2FA"/></patternFill></fill>` +
+    `<fill><patternFill patternType="solid"><fgColor rgb="FFF2F2F2"/></patternFill></fill>` +
+    `</fills>` +
+    `<borders count="3">` +
+    `<border><left/><right/><top/><bottom/><diagonal/></border>` +
+    `<border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="thin"><color rgb="FFBFBFBF"/></top><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/></border>` +
+    `<border><left style="hair"><color rgb="FFE8E8E8"/></left><right style="hair"><color rgb="FFE8E8E8"/></right><top style="hair"><color rgb="FFE8E8E8"/></top><bottom style="hair"><color rgb="FFE8E8E8"/></bottom><diagonal/></border>` +
+    `</borders>` +
+    `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
+    `<cellXfs count="26">` +
+    `<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>` +                                                                   // 0
+    `<xf numFmtId="0" fontId="3" fillId="0" borderId="0"/>` +                                                                   // 1 title
+    `<xf numFmtId="0" fontId="1" fillId="4" borderId="1" applyAlignment="1"><alignment vertical="center"/></xf>` +              // 2 metaLabel
+    `<xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyAlignment="1"><alignment vertical="center"/></xf>` +              // 3 metaVal
+    `<xf numFmtId="164" fontId="0" fillId="0" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` + // 4 metaDate
+    `<xf numFmtId="0" fontId="1" fillId="0" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` +   // 5 metaCenter (B3)
+    `<xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>` + // 6 head
+    `<xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyAlignment="1"><alignment vertical="center"/></xf>` +              // 7 txt
+    `<xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` +   // 8 ctr
+    `<xf numFmtId="164" fontId="0" fillId="0" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` + // 9 date
+    `<xf numFmtId="166" fontId="0" fillId="0" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` + // 10 pct
+    `<xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` +   // 11 num
+    `<xf numFmtId="0" fontId="1" fillId="3" borderId="1" applyAlignment="1"><alignment vertical="center"/></xf>` +              // 12 sumTxt
+    `<xf numFmtId="164" fontId="1" fillId="3" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` + // 13 sumDate
+    `<xf numFmtId="0" fontId="1" fillId="3" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` +   // 14 sumCtr
+    `<xf numFmtId="166" fontId="1" fillId="3" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` + // 15 sumPct
+    `<xf numFmtId="0" fontId="1" fillId="3" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` +   // 16 sumNum
+    `<xf numFmtId="0" fontId="4" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="center"/></xf>` +              // 17 tlMonth
+    `<xf numFmtId="165" fontId="2" fillId="2" borderId="2" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` + // 18 tlDay
+    `<xf numFmtId="0" fontId="0" fillId="0" borderId="2"/>` +                                                                   // 19 gantt
+    `<xf numFmtId="0" fontId="0" fillId="0" borderId="2"/>` +                                                                   // 20 ganttSum
+    `<xf numFmtId="0" fontId="2" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="center"/></xf>` +              // 21 legend
+    `<xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` +   // 22 holHead
+    `<xf numFmtId="164" fontId="0" fillId="0" borderId="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` + // 23 holDate
+    `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>` + // 24 usage
+    `<xf numFmtId="0" fontId="5" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="center"/></xf>` +              // 25 usageHead
+    `</cellXfs>` +
+    `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>` +
+    `<dxfs count="6">` +
+    `<dxf><fill><patternFill><bgColor rgb="FF203864"/></patternFill></fill></dxf>` +   // 0 요약 막대 (네이비)
+    `<dxf><fill><patternFill><bgColor rgb="FF1F4E9C"/></patternFill></fill></dxf>` +   // 1 진척 (진한 파랑)
+    `<dxf><fill><patternFill><bgColor rgb="FF8EAADB"/></patternFill></fill></dxf>` +   // 2 작업 막대 (파랑)
+    `<dxf><fill><patternFill><bgColor rgb="FFF5A623"/></patternFill></fill></dxf>` +   // 3 오늘 (주황)
+    `<dxf><fill><patternFill><bgColor rgb="FFF8CBAD"/></patternFill></fill></dxf>` +   // 4 공휴일 (분홍)
+    `<dxf><fill><patternFill><bgColor rgb="FFE7E6E6"/></patternFill></fill></dxf>` +   // 5 주말 (회색)
+    `</dxfs>` +
+    `</styleSheet>`;
+
+  // ═══ workbook / 관계 / Content_Types ═══
+  const wbXml = XMLH + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+    `<sheets>` +
+    `<sheet name="WBS" sheetId="1" r:id="rId1"/>` +
+    `<sheet name="공휴일" sheetId="2" r:id="rId2"/>` +
+    `<sheet name="사용법" sheetId="3" r:id="rId3"/>` +
+    `</sheets>` +
+    `<definedNames>` +
+    `<definedName name="ChartUnit">WBS!$B$3</definedName>` +
+    `<definedName name="HolidayList">공휴일!$A$2:$A$${HOL_MAX + 1}</definedName>` +
+    `</definedNames>` +
+    `<calcPr calcId="191029" fullCalcOnLoad="1"/>` +
+    `</workbook>`;
+
+  return zipBytes([
+    { path: "[Content_Types].xml", content: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
+    { path: "_rels/.rels", content: XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+    { path: "xl/workbook.xml", content: wbXml },
+    { path: "xl/_rels/workbook.xml.rels", content: XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' },
+    { path: "xl/styles.xml", content: stylesXml },
+    { path: "xl/worksheets/sheet1.xml", content: wbsSheet },
+    { path: "xl/worksheets/sheet2.xml", content: holSheet },
+    { path: "xl/worksheets/sheet3.xml", content: usageSheet },
+  ]);
+}
+
 // ── PPTX ─────────────────────────────────────────────────────
 const PPT_THEME = XMLH + `<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="6350"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln><a:ln w="12700"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln><a:ln w="19050"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>`;
 function pptTextBox(id, name, x, y, w, h, text, size, bold, color) {
@@ -2253,9 +2626,9 @@ function wbsXlsxRows(wbs, meta) {
 
 // 산출물 1건 → Office 파일 바이트 생성 (wbs: WBS 산출물에 일정 계획 원본을 담기 위한 전달)
 function officeFileForDoc(doc, catName, meta, wbs) {
-  // 산출물명이 'WBS'면 스켈레톤 대신 실제 일정 계획 표 전체를 xlsx로 생성
+  // 산출물명이 'WBS'면 스켈레톤 대신 ④ 일정 계획 전체를 담은 간트 워크북(수식·조건부 서식, 일/주 전환)을 생성
   if (String(doc.name||"").replace(/\s/g,"").toUpperCase() === "WBS" && wbs?.tasks?.length) {
-    return { ext: "xlsx", bytes: makeXlsx({ sheetName: "WBS", rows: wbsXlsxRows(wbs, meta) }) };
+    return { ext: "xlsx", bytes: makeWbsGanttXlsx(wbs, meta) };
   }
   const fmt = pickOfficeFormat(doc.name);
   const today = new Date().toLocaleDateString("ko-KR");
