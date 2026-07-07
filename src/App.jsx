@@ -999,10 +999,80 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
   );
 }
 
+// 프로세스 테일러링 가이드 전문 열람 모달 (원본 xls의 수행 방법·목적·매트릭스 전체)
+function ProcessGuideModal({ onClose }) {
+  const G = PROCESS_TAILORING_GUIDE;
+  const byArea = {};
+  G.items.forEach(it => { (byArea[it.area] = byArea[it.area] || []).push(it); });
+  const markCell = (m) => (
+    <td style={{ ...cell, textAlign:"center", fontWeight:700, color:m==="●"?T.accent:m==="○"?T.amber:T.muted }}>{m}</td>
+  );
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.72)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div onClick={e=>e.stopPropagation()} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:14, width:"100%", maxWidth:1000, maxHeight:"88vh", display:"flex", flexDirection:"column" }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 18px", borderBottom:`1px solid ${T.border}`, flexShrink:0 }}>
+          <div style={{ fontSize:14, fontWeight:700 }}>{G.title} — 전문</div>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:T.muted, fontSize:18, cursor:"pointer" }}>✕</button>
+        </div>
+        <div style={{ padding:"14px 18px", overflowY:"auto" }}>
+          {/* 적용 기준 */}
+          <div style={{ fontSize:11, color:T.muted, lineHeight:1.8, padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:9, marginBottom:4 }}>
+            <div>{G.levelNote}</div>
+            <div>{G.sizeNote}</div>
+            <div>범례: <span style={{ color:T.accent, fontWeight:700 }}>●</span> 필수(항상 적용) · <span style={{ color:T.amber, fontWeight:700 }}>○</span> 선택 · <span style={{ color:T.muted }}>-</span> 해당 등급 미적용</div>
+          </div>
+
+          {/* 1. 프로세스별 목적 */}
+          <SectionTitle n="1" title="프로세스별 목적 (Goal)" />
+          <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
+            <tbody>
+              {Object.entries(G.goals).map(([k,v])=>(
+                <tr key={k}>
+                  <td style={{ ...cellHead, verticalAlign:"top", width:140 }}>{k}</td>
+                  <td style={{ ...cell, lineHeight:1.7 }}>{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* 2. 테일러링 가이드 매트릭스 */}
+          <SectionTitle n="2" title={`테일러링 가이드 매트릭스 (전체 ${G.items.length}건)`} />
+          <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
+            <thead>
+              <tr>
+                <td style={{...cellHead, textAlign:"center"}} rowSpan={2}>프로세스 영역</td>
+                <td style={{...cellHead, textAlign:"center"}} rowSpan={2}>세부 프로세스</td>
+                <td style={{...cellHead, textAlign:"center"}} colSpan={3}>적용 등급</td>
+                <td style={{...cellHead, textAlign:"center"}} rowSpan={2}>테일러링 적용 가이드</td>
+                <td style={{...cellHead, textAlign:"center"}} rowSpan={2}>주요 산출물</td>
+              </tr>
+              <tr>{G.levels.map(lv=><td key={lv} style={{...cellHead, textAlign:"center", width:34}}>{lv}</td>)}</tr>
+            </thead>
+            <tbody>
+              {Object.keys(byArea).map(area=>(
+                byArea[area].map((it,i)=>(
+                  <tr key={`${area}-${i}`}>
+                    {i===0 && <td style={{...cell, fontWeight:600, verticalAlign:"top", whiteSpace:"nowrap"}} rowSpan={byArea[area].length}>{area}</td>}
+                    <td style={cell}>{it.process}{it.activity && <span style={{ color:T.muted }}> › {it.activity}</span>}</td>
+                    {markCell(it.l3)}{markCell(it.l4)}{markCell(it.l5)}
+                    <td style={{...cell, fontSize:10, lineHeight:1.6, color:it.guide?T.text:T.muted }}>{it.guide || ""}</td>
+                    <td style={{...cell, fontSize:10, lineHeight:1.6, color:it.outputs?T.text:T.muted }}>{it.outputs || ""}</td>
+                  </tr>
+                ))
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // 프로세스 테일러링 — 조직 표준 관리 프로세스(요구사항관리·계획수립·품질보증 등)를
-// 적용 등급(L3/L4/L5) 기준으로 세부 프로세스별 적용/변경적용/미적용 + 사유를 기록
+// 적용 등급(L3/L4/L5) 기준으로 확정. 필수(●)는 항상 적용(수정 불가), 선택(○)만 적용·변경 여부 조정 가능.
 function StepProcessTailoring({ tailoring, setTailoring }) {
   const G = PROCESS_TAILORING_GUIDE;
+  const [showGuide, setShowGuide] = useState(false);   // 가이드 전문 모달
   const proc = tailoring?.process || {};
   const level = proc.level || "L3";
   const setLevel = (v) => setTailoring(t => ({ ...t, process: { ...(t.process||{}), level: v, items: (t.process?.items)||{} } }));
@@ -1017,18 +1087,22 @@ function StepProcessTailoring({ tailoring, setTailoring }) {
   const byArea = {};
   resolved.forEach(r => { (byArea[r.area] = byArea[r.area] || []).push(r); });
   const applicable = resolved.filter(r => r.status !== "해당없음");
-  const counts = {
-    적용: applicable.filter(r=>r.status==="적용").length,
-    변경적용: applicable.filter(r=>r.status==="변경적용").length,
-    미적용: applicable.filter(r=>r.status==="미적용").length,
-  };
-  // 필수(●)인데 변경적용/미적용이면서 사유 미기재 → 가이드 위반
-  const violations = applicable.filter(r => r.mark==="●" && r.status!=="적용" && !String(r.reason||"").trim());
+  const required = applicable.filter(r => r.mark === "●");
+  const optional = applicable.filter(r => r.mark === "○");
+  const includedOptional = optional.filter(r => r.applied);
 
   return (
     <div>
       <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>프로세스 테일러링</h2>
-      <p style={{ fontSize:12, color:T.muted, marginBottom:14 }}>{G.title} 기준 · 관리 프로세스의 이행 수준을 확정합니다.</p>
+      <p style={{ fontSize:12, color:T.muted, marginBottom:14 }}>
+        관리 프로세스의 이행 수준을 확정합니다.
+        <span style={{ marginLeft:8 }}>
+          · <span onClick={()=>setShowGuide(true)} title="프로세스 테일러링 가이드 전문 보기"
+              style={{ color:T.accent, cursor:"pointer", textDecoration:"underline", textUnderlineOffset:3 }}>
+              {G.title} 기준 🔍
+            </span>
+        </span>
+      </p>
 
       {/* 적용 등급 선택 */}
       <div style={{ marginBottom:14 }}>
@@ -1044,20 +1118,24 @@ function StepProcessTailoring({ tailoring, setTailoring }) {
         <div style={{ fontSize:10, color:T.muted, marginTop:6, lineHeight:1.6 }}>{G.levelNote}<br/>{G.sizeNote}</div>
       </div>
 
-      {/* 요약 */}
+      {/* 요약 — 방법론 테일러링과 동일 구성 */}
       <div style={{ display:"flex", gap:10, marginBottom:10 }}>
-        {[["적용대상",applicable.length,T.accent],["적용",counts.적용,T.green],["변경적용",counts.변경적용,T.amber],["미적용",counts.미적용,T.red]].map(([label,val,color])=>(
-          <div key={label} style={{ flex:1, padding:"10px 14px", borderRadius:9, background:T.bg, border:`1px solid ${T.border}` }}>
-            <div style={{ fontSize:20, fontWeight:700, color }}>{val}</div>
-            <div style={{ fontSize:11, color:T.muted }}>{label}</div>
-          </div>
-        ))}
-      </div>
-      {violations.length > 0 && (
-        <div style={{ fontSize:11, color:T.red, padding:"8px 12px", background:T.red+"11", border:`1px solid ${T.red}44`, borderRadius:8, marginBottom:10 }}>
-          ⚠ 필수(●) 세부 프로세스 {violations.length}건이 변경적용/미적용인데 사유가 없습니다. {G.statusNote}
+        <div style={{ flex:1, padding:"10px 14px", borderRadius:9, background:T.bg, border:`1px solid ${T.border}` }}>
+          <div style={{ fontSize:20, fontWeight:700, color:T.accent }}>{required.length}</div>
+          <div style={{ fontSize:11, color:T.muted }}>필수 프로세스 (●)</div>
         </div>
-      )}
+        <div style={{ flex:1, padding:"10px 14px", borderRadius:9, background:T.bg, border:`1px solid ${T.border}` }}>
+          <div style={{ fontSize:20, fontWeight:700, color:T.amber }}>{includedOptional.length}<span style={{ fontSize:12, color:T.muted }}> / {optional.length}</span></div>
+          <div style={{ fontSize:11, color:T.muted }}>선택 프로세스 (○, 포함/전체)</div>
+        </div>
+        <div style={{ flex:1, padding:"10px 14px", borderRadius:9, background:T.bg, border:`1px solid ${T.border}` }}>
+          <div style={{ fontSize:20, fontWeight:700, color:T.green }}>{required.length + includedOptional.length}</div>
+          <div style={{ fontSize:11, color:T.muted }}>총 적용 프로세스</div>
+        </div>
+      </div>
+      <div style={{ fontSize:10, color:T.muted, marginBottom:10 }}>
+        ※ 필수(●) 프로세스는 항상 적용되며 수정할 수 없습니다. 선택(○) 프로세스만 적용 여부·변경 여부를 조정할 수 있으며, 변경·미적용 시 사유를 기록합니다.
+      </div>
 
       {/* 영역별 세부 프로세스 목록 */}
       <div style={{ display:"flex", flexDirection:"column", gap:12, maxHeight:420, overflowY:"auto", paddingRight:4 }}>
@@ -1070,20 +1148,22 @@ function StepProcessTailoring({ tailoring, setTailoring }) {
             <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
               {byArea[area].map(r=>{
                 const na = r.status === "해당없음";
-                const needReason = r.mark==="●" && r.status!=="적용";
-                const missing = needReason && !String(r.reason||"").trim();
+                const req = r.mark === "●";
                 return (
                   <div key={r.key} style={{ padding:"6px 10px", borderRadius:7, background:T.bg,
-                    border:`1px solid ${missing ? T.red+"66" : T.border}`, opacity:na?0.4:1 }}>
+                    border:`1px solid ${T.border}`, opacity:na?0.4:(!req && !r.applied?0.55:1) }}>
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                      <Badge color={r.mark==="●"?T.accent:r.mark==="○"?T.amber:T.muted}>
-                        {r.mark==="●"?"필수":r.mark==="○"?"선택":"해당없음"}
+                      <Badge color={req?T.accent:r.mark==="○"?T.amber:T.muted}>
+                        {req?"필수":r.mark==="○"?"선택":"해당없음"}
                       </Badge>
-                      <span title={r.guide || ""} style={{ fontSize:12, color:T.text, flex:1 }}>
+                      <span title={r.guide || ""} style={{ fontSize:12, color:T.text, flex:1, textDecoration:!na && !req && !r.applied ? "line-through" : "none" }}>
                         {r.process}{r.activity && <span style={{ color:T.muted }}> › {r.activity}</span>}
                         {r.guide && <span style={{ color:T.muted, fontSize:10, marginLeft:5 }}>ⓘ</span>}
                       </span>
-                      {!na && (
+                      {!na && req && (
+                        <span title="필수 프로세스는 항상 적용됩니다" style={{ fontSize:12, color:T.accent, whiteSpace:"nowrap" }}>☒ 적용</span>
+                      )}
+                      {!na && !req && (
                         <span style={{ display:"flex", alignItems:"center", gap:12, flexShrink:0 }}>
                           <label style={{ display:"flex", alignItems:"center", gap:4, fontSize:11, color:r.applied?T.text:T.red, cursor:"pointer", whiteSpace:"nowrap" }}>
                             <input type="checkbox" checked={r.applied}
@@ -1101,11 +1181,11 @@ function StepProcessTailoring({ tailoring, setTailoring }) {
                     {r.outputs && !na && (
                       <div style={{ fontSize:10, color:T.muted, marginTop:3, paddingLeft:2 }}>산출물: {r.outputs}</div>
                     )}
-                    {!na && r.status!=="적용" && (
+                    {!na && !req && r.status!=="적용" && (
                       <input value={r.reason} onChange={e=>setItem(r.key,{ reason:e.target.value })}
-                        placeholder={missing ? "⚠ 필수 프로세스 — 테일러링 내역 및 사유를 반드시 입력하세요" : "테일러링 내역 및 사유"}
+                        placeholder={r.applied ? "변경 내역 입력" : "미적용 사유 입력"}
                         style={{ width:"100%", boxSizing:"border-box", marginTop:5, background:"transparent",
-                          border:"none", borderBottom:`1px dashed ${missing?T.red:T.border}`, color:T.text,
+                          border:"none", borderBottom:`1px dashed ${T.border}`, color:T.text,
                           fontSize:11, fontFamily:"inherit", outline:"none", padding:"3px 2px" }} />
                     )}
                   </div>
@@ -1115,6 +1195,9 @@ function StepProcessTailoring({ tailoring, setTailoring }) {
           </div>
         ))}
       </div>
+
+      {/* 가이드 전문 모달 */}
+      {showGuide && <ProcessGuideModal onClose={()=>setShowGuide(false)} />}
     </div>
   );
 }
@@ -1409,10 +1492,10 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
               </tbody>
             </table>
 
-            {/* 4. 프로세스 테일러링 내역서 — 방법론 매트릭스와 동일한 컬럼 구성 (체크박스로 직접 수정 가능) */}
+            {/* 4. 프로세스 테일러링 내역서 — 방법론 매트릭스와 동일한 컬럼·규칙 (필수 고정, 선택만 수정) */}
             <SectionTitle n="4" title={`프로세스 테일러링 내역서 (적용 등급 ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
             <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
-              ※ 적용 여부·변경 여부·사유는 이 화면 또는 테일러링 단계의 '프로세스 테일러링' 탭에서 수정할 수 있습니다 (프로젝트 저장 시 함께 보존). 필수(●) 프로세스를 변경적용·미적용한 경우 테일러링 내역 및 사유가 기재되어야 합니다.
+              ※ 필수(●) 프로세스는 항상 적용되며 수정할 수 없습니다. 선택(○) 프로세스는 이 화면 또는 테일러링 단계의 '프로세스 테일러링' 탭에서 적용 여부·변경 여부·사유를 수정할 수 있습니다 (프로젝트 저장 시 함께 보존).
             </div>
             <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
               <thead>
@@ -1422,7 +1505,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
               <tbody>
                 {Object.keys(procByArea).map(area=>(
                   procByArea[area].map((r,i)=>{
-                    const violated = r.mark==="●" && r.status!=="적용" && !String(r.reason||"").trim();
+                    const req = r.mark === "●";
                     return (
                       <tr key={r.key} style={{ opacity:r.applied?1:0.55 }}>
                         {i===0 && <td style={{...cell, fontWeight:600, verticalAlign:"top"}} rowSpan={procByArea[area].length}>{area}</td>}
@@ -1431,27 +1514,31 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
                           {r.outputs && <div style={{ color:T.muted, fontSize:9.5, marginTop:2 }}>산출물: {r.outputs}</div>}
                         </td>
                         <td style={{...cell, textAlign:"center"}}>
-                          <Badge color={r.mark==="●"?T.accent:T.amber}>{r.mark==="●"?"필수":"선택"}</Badge>
+                          <Badge color={req?T.accent:T.amber}>{req?"필수":"선택"}</Badge>
                         </td>
                         <td style={{...cell, textAlign:"center"}}>
-                          <input type="checkbox" checked={r.applied}
-                            onChange={e=>setProcItem(r,{ applied:e.target.checked, changed:e.target.checked?r.changed:false })}
-                            style={{ width:14, height:14, cursor:"pointer" }} />
+                          {req
+                            ? <span style={{ fontSize:14, color:T.accent }} title="필수 프로세스는 항상 적용됩니다">☒</span>
+                            : <input type="checkbox" checked={r.applied}
+                                onChange={e=>setProcItem(r,{ applied:e.target.checked, changed:e.target.checked?r.changed:false })}
+                                style={{ width:14, height:14, cursor:"pointer" }} />}
                         </td>
                         <td style={{...cell, textAlign:"center"}}>
-                          {r.applied
-                            ? <input type="checkbox" checked={r.changed}
-                                onChange={e=>setProcItem(r,{ changed:e.target.checked })}
-                                style={{ width:13, height:13, cursor:"pointer" }} />
-                            : <span style={{ fontSize:12, color:T.muted }}>—</span>}
+                          {req
+                            ? <span style={{ fontSize:12, color:T.muted }}>—</span>
+                            : (r.applied
+                                ? <input type="checkbox" checked={r.changed}
+                                    onChange={e=>setProcItem(r,{ changed:e.target.checked })}
+                                    style={{ width:13, height:13, cursor:"pointer" }} />
+                                : <span style={{ fontSize:12, color:T.muted }}>—</span>)}
                         </td>
                         <td style={{...cell, minWidth:180 }}>
-                          {r.status==="적용"
+                          {req || r.status==="적용"
                             ? <span style={{ fontSize:11, color:T.muted }}>—</span>
                             : <input value={r.reason||""}
                                 onChange={e=>setProcItem(r,{ reason:e.target.value })}
-                                placeholder={violated ? "⚠ 필수 — 사유 입력" : (r.applied ? "변경 내역 입력" : "미적용 사유 입력")}
-                                style={{ ...noteInput, borderBottom:`1px dashed ${violated?T.red:T.border}` }} />}
+                                placeholder={r.applied ? "변경 내역 입력" : "미적용 사유 입력"}
+                                style={noteInput} />}
                         </td>
                       </tr>
                     );
@@ -2081,8 +2168,8 @@ function PdpDocView({ project }) {
                 </td>
                 <td style={{...cell, textAlign:"center"}}><Badge color={r.mark==="●"?T.accent:T.amber}>{r.mark==="●"?"필수":"선택"}</Badge></td>
                 <td style={{...cell, textAlign:"center", fontSize:13, color:r.applied?T.accent:T.muted }}>{r.applied ? "☒" : "☐"}</td>
-                <td style={{...cell, textAlign:"center", fontSize:13, color:r.changed?T.amber:T.muted }}>{r.applied ? (r.changed ? "☒" : "☐") : "—"}</td>
-                <td style={{...cell, color:r.reason?T.text:T.muted, fontSize:10 }}>{r.status==="적용" ? "—" : (r.reason || "")}</td>
+                <td style={{...cell, textAlign:"center", fontSize:13, color:r.changed?T.amber:T.muted }}>{r.mark==="●" ? "—" : (r.applied ? (r.changed ? "☒" : "☐") : "—")}</td>
+                <td style={{...cell, color:r.reason?T.text:T.muted, fontSize:10 }}>{r.mark==="●" || r.status==="적용" ? "—" : (r.reason || "")}</td>
               </tr>
             ))
           ))}
