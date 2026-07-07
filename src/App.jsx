@@ -12,7 +12,7 @@ const T = {
 };
 
 function Badge({ color = T.accent, children }) {
-  return <span style={{ background: color+"22", color, border:`1px solid ${color}44`, borderRadius:6, padding:"2px 8px", fontSize:10, fontWeight:700, letterSpacing:0.5, textTransform:"uppercase" }}>{children}</span>;
+  return <span style={{ background: color+"22", color, border:`1px solid ${color}44`, borderRadius:6, padding:"2px 8px", fontSize:10, fontWeight:700, letterSpacing:0.5, textTransform:"uppercase", whiteSpace:"nowrap" }}>{children}</span>;
 }
 
 function Card({ children, style={}, onClick, hover=false }) {
@@ -1084,12 +1084,18 @@ function StepProcessTailoring({ tailoring, setTailoring }) {
                         {r.guide && <span style={{ color:T.muted, fontSize:10, marginLeft:5 }}>ⓘ</span>}
                       </span>
                       {!na && (
-                        <select value={r.status} onChange={e=>setItem(r.key,{ status:e.target.value })}
-                          style={{ background:T.surface, border:`1px solid ${r.status==="적용"?T.border:r.status==="변경적용"?T.amber+"88":T.red+"88"}`,
-                            borderRadius:7, padding:"4px 8px", fontSize:11, fontFamily:"inherit", outline:"none", cursor:"pointer",
-                            color:r.status==="적용"?T.text:r.status==="변경적용"?T.amber:T.red }}>
-                          {G.statusOptions.map(o=><option key={o} value={o}>{o}</option>)}
-                        </select>
+                        <span style={{ display:"flex", alignItems:"center", gap:12, flexShrink:0 }}>
+                          <label style={{ display:"flex", alignItems:"center", gap:4, fontSize:11, color:r.applied?T.text:T.red, cursor:"pointer", whiteSpace:"nowrap" }}>
+                            <input type="checkbox" checked={r.applied}
+                              onChange={e=>setItem(r.key,{ applied:e.target.checked, changed:e.target.checked?r.changed:false, reason:r.reason })}
+                              style={{ width:13, height:13, cursor:"pointer" }} />적용
+                          </label>
+                          <label style={{ display:"flex", alignItems:"center", gap:4, fontSize:11, color:r.changed?T.amber:T.muted, cursor:r.applied?"pointer":"not-allowed", opacity:r.applied?1:0.4, whiteSpace:"nowrap" }}>
+                            <input type="checkbox" checked={r.changed} disabled={!r.applied}
+                              onChange={e=>setItem(r.key,{ applied:r.applied, changed:e.target.checked, reason:r.reason })}
+                              style={{ width:13, height:13, cursor:r.applied?"pointer":"not-allowed" }} />변경
+                          </label>
+                        </span>
                       )}
                     </div>
                     {r.outputs && !na && (
@@ -1270,12 +1276,18 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
   const docNo = `PDP-${(form?.client||"").replace(/\s/g,"").slice(0,4).toUpperCase()||"PRJ"}-${new Date().getFullYear()}`;
   const today = new Date().toLocaleDateString("ko-KR");
 
-  // 프로세스 테일러링 확정 상태 (테일러링 단계의 '프로세스 테일러링' 탭에서 수정, 여기서는 내역서로 표시)
+  // 프로세스 테일러링 확정 상태 — 이 화면에서도 방법론 매트릭스와 동일하게 직접 수정 가능
   const procState = tailoring?.process || {};
   const procLevel = procState.level || "L3";
   const procApplicable = resolveProcessTailoring(procState).filter(r => r.status !== "해당없음");
   const procByArea = {};
   procApplicable.forEach(r => { (procByArea[r.area] = procByArea[r.area] || []).push(r); });
+  const setProcItem = (r, patch) => setTailoring && setTailoring(t => {
+    const p = t.process || {};
+    const items = { ...(p.items||{}) };
+    items[r.key] = { applied:r.applied, changed:r.changed, reason:r.reason, ...patch };
+    return { ...t, process: { ...p, level: p.level || "L3", items } };
+  });
 
   // 표 안 인라인 입력 스타일
   const noteInput = { width:"100%", boxSizing:"border-box", background:"transparent", border:"none",
@@ -1397,30 +1409,53 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
               </tbody>
             </table>
 
-            {/* 4. 프로세스 테일러링 내역서 — 내역서 양식 v2.1 컬럼 구성 */}
+            {/* 4. 프로세스 테일러링 내역서 — 방법론 매트릭스와 동일한 컬럼 구성 (체크박스로 직접 수정 가능) */}
             <SectionTitle n="4" title={`프로세스 테일러링 내역서 (적용 등급 ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
             <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
-              ※ 적용여부·사유는 테일러링 단계의 '프로세스 테일러링' 탭에서 수정할 수 있습니다. 필수(●) 프로세스를 변경적용·미적용한 경우 사유가 기재되어야 합니다.
+              ※ 적용 여부·변경 여부·사유는 이 화면 또는 테일러링 단계의 '프로세스 테일러링' 탭에서 수정할 수 있습니다 (프로젝트 저장 시 함께 보존). 필수(●) 프로세스를 변경적용·미적용한 경우 테일러링 내역 및 사유가 기재되어야 합니다.
             </div>
             <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
               <thead>
-                <tr>{["프로세스 영역","세부 프로세스","구분","적용여부","산출물명","테일러링 내역 및 사유"].map(h=>
+                <tr>{["프로세스 영역","세부 프로세스","구분","적용 여부","변경 여부","테일러링 내역 및 사유"].map(h=>
                   <td key={h} style={{...cellHead, textAlign:"center"}}>{h}</td>)}</tr>
               </thead>
               <tbody>
                 {Object.keys(procByArea).map(area=>(
-                  procByArea[area].map((r,i)=>(
-                    <tr key={r.key} style={{ opacity:r.status==="미적용"?0.55:1 }}>
-                      {i===0 && <td style={{...cell, fontWeight:600, verticalAlign:"top"}} rowSpan={procByArea[area].length}>{area}</td>}
-                      <td style={cell}>{r.process}{r.activity && <span style={{ color:T.muted }}> › {r.activity}</span>}</td>
-                      <td style={{...cell, textAlign:"center"}}><Badge color={r.mark==="●"?T.accent:T.amber}>{r.mark==="●"?"필수":"선택"}</Badge></td>
-                      <td style={{...cell, textAlign:"center", color:r.status==="적용"?T.green:r.status==="변경적용"?T.amber:T.red, fontWeight:600 }}>{r.status}</td>
-                      <td style={{...cell, fontSize:10 }}>{r.outputs || ""}</td>
-                      <td style={{...cell, color:r.reason?T.text:(r.mark==="●"&&r.status!=="적용"?T.red:T.muted), fontSize:10 }}>
-                        {r.reason || (r.mark==="●"&&r.status!=="적용" ? "⚠ 사유 미기재" : "")}
-                      </td>
-                    </tr>
-                  ))
+                  procByArea[area].map((r,i)=>{
+                    const violated = r.mark==="●" && r.status!=="적용" && !String(r.reason||"").trim();
+                    return (
+                      <tr key={r.key} style={{ opacity:r.applied?1:0.55 }}>
+                        {i===0 && <td style={{...cell, fontWeight:600, verticalAlign:"top"}} rowSpan={procByArea[area].length}>{area}</td>}
+                        <td style={cell}>
+                          {r.process}{r.activity && <span style={{ color:T.muted }}> › {r.activity}</span>}
+                          {r.outputs && <div style={{ color:T.muted, fontSize:9.5, marginTop:2 }}>산출물: {r.outputs}</div>}
+                        </td>
+                        <td style={{...cell, textAlign:"center"}}>
+                          <Badge color={r.mark==="●"?T.accent:T.amber}>{r.mark==="●"?"필수":"선택"}</Badge>
+                        </td>
+                        <td style={{...cell, textAlign:"center"}}>
+                          <input type="checkbox" checked={r.applied}
+                            onChange={e=>setProcItem(r,{ applied:e.target.checked, changed:e.target.checked?r.changed:false })}
+                            style={{ width:14, height:14, cursor:"pointer" }} />
+                        </td>
+                        <td style={{...cell, textAlign:"center"}}>
+                          {r.applied
+                            ? <input type="checkbox" checked={r.changed}
+                                onChange={e=>setProcItem(r,{ changed:e.target.checked })}
+                                style={{ width:13, height:13, cursor:"pointer" }} />
+                            : <span style={{ fontSize:12, color:T.muted }}>—</span>}
+                        </td>
+                        <td style={{...cell, minWidth:180 }}>
+                          {r.status==="적용"
+                            ? <span style={{ fontSize:11, color:T.muted }}>—</span>
+                            : <input value={r.reason||""}
+                                onChange={e=>setProcItem(r,{ reason:e.target.value })}
+                                placeholder={violated ? "⚠ 필수 — 사유 입력" : (r.applied ? "변경 내역 입력" : "미적용 사유 입력")}
+                                style={{ ...noteInput, borderBottom:`1px dashed ${violated?T.red:T.border}` }} />}
+                        </td>
+                      </tr>
+                    );
+                  })
                 ))}
               </tbody>
             </table>
@@ -2028,23 +2063,26 @@ function PdpDocView({ project }) {
         </tbody>
       </table>
 
-      {/* 4. 프로세스 테일러링 내역서 */}
+      {/* 4. 프로세스 테일러링 내역서 — 방법론 매트릭스와 동일한 컬럼 구성 (읽기 전용) */}
       <SectionTitle n="4" title={`프로세스 테일러링 내역서 (적용 등급 ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
       <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
         <thead>
-          <tr>{["프로세스 영역","세부 프로세스","구분","적용여부","산출물명","테일러링 내역 및 사유"].map(h=>
+          <tr>{["프로세스 영역","세부 프로세스","구분","적용 여부","변경 여부","테일러링 내역 및 사유"].map(h=>
             <td key={h} style={{...cellHead, textAlign:"center"}}>{h}</td>)}</tr>
         </thead>
         <tbody>
           {Object.keys(procByArea).map(area=>(
             procByArea[area].map((r,i)=>(
-              <tr key={r.key} style={{ opacity:r.status==="미적용"?0.55:1 }}>
+              <tr key={r.key} style={{ opacity:r.applied?1:0.55 }}>
                 {i===0 && <td style={{...cell, fontWeight:600, verticalAlign:"top"}} rowSpan={procByArea[area].length}>{area}</td>}
-                <td style={cell}>{r.process}{r.activity && <span style={{ color:T.muted }}> › {r.activity}</span>}</td>
+                <td style={cell}>
+                  {r.process}{r.activity && <span style={{ color:T.muted }}> › {r.activity}</span>}
+                  {r.outputs && <div style={{ color:T.muted, fontSize:9.5, marginTop:2 }}>산출물: {r.outputs}</div>}
+                </td>
                 <td style={{...cell, textAlign:"center"}}><Badge color={r.mark==="●"?T.accent:T.amber}>{r.mark==="●"?"필수":"선택"}</Badge></td>
-                <td style={{...cell, textAlign:"center", color:r.status==="적용"?T.green:r.status==="변경적용"?T.amber:T.red, fontWeight:600 }}>{r.status}</td>
-                <td style={{...cell, fontSize:10 }}>{r.outputs || ""}</td>
-                <td style={{...cell, color:r.reason?T.text:T.muted, fontSize:10 }}>{r.reason || ""}</td>
+                <td style={{...cell, textAlign:"center", fontSize:13, color:r.applied?T.accent:T.muted }}>{r.applied ? "☒" : "☐"}</td>
+                <td style={{...cell, textAlign:"center", fontSize:13, color:r.changed?T.amber:T.muted }}>{r.applied ? (r.changed ? "☒" : "☐") : "—"}</td>
+                <td style={{...cell, color:r.reason?T.text:T.muted, fontSize:10 }}>{r.status==="적용" ? "—" : (r.reason || "")}</td>
               </tr>
             ))
           ))}
