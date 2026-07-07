@@ -445,6 +445,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       const summary = {
         totalDocs: allDocs.length,
         mandatoryCount: allDocs.filter(d => d.priority === "필수").length,
+        source: "wbs",   // WBS 기반 생성 마커 — 구버전 생성분과 구분
       };
 
       // ── AI는 각 문서의 목적 설명(1문장)만 작성 — 실패해도 목록은 유지 ──
@@ -2091,6 +2092,12 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
             <Badge color={T.green}>✓ 산출물 생성 완료</Badge>
             <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
           </div>
+          {deliverablesData.summary?.source !== "wbs" && (
+            <div style={{ fontSize:11, color:T.amber, padding:"8px 12px", background:T.amber+"11", border:`1px solid ${T.amber}44`, borderRadius:8, marginBottom:12, display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
+              <span>⚠ 이전 버전에서 생성된 결과입니다. WBS의 모든 산출물을 반영하려면 재생성하세요.</span>
+              <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:11, padding:"4px 12px" }}>지금 재생성</Btn>
+            </div>
+          )}
           <div style={{ display:"flex", gap:8, marginBottom:12 }}>
             {[{label:"전체",value:deliverablesData.summary?.totalDocs,color:T.accent},{label:"필수",value:deliverablesData.summary?.mandatoryCount,color:T.red}].map(s=>(
               <div key={s.label} style={{ flex:1, padding:"8px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, textAlign:"center" }}>
