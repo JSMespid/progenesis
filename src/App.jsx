@@ -2135,11 +2135,13 @@ function docxP(text, { bold = false, size = 22, spacingAfter = 120 } = {}) {
 }
 function docxTable(rows, headerCols = 0) {
   const borders = '<w:tblBorders><w:top w:val="single" w:sz="4" w:color="999999"/><w:left w:val="single" w:sz="4" w:color="999999"/><w:bottom w:val="single" w:sz="4" w:color="999999"/><w:right w:val="single" w:sz="4" w:color="999999"/><w:insideH w:val="single" w:sz="4" w:color="999999"/><w:insideV w:val="single" w:sz="4" w:color="999999"/></w:tblBorders>';
+  // 셀 내부 여백: 왼쪽 3mm(170twip), 오른쪽 2mm(113twip), 상하 0.7mm(40twip) — 글자가 테두리에 붙지 않게
+  const cellMar = '<w:tblCellMar><w:top w:w="40" w:type="dxa"/><w:left w:w="170" w:type="dxa"/><w:bottom w:w="40" w:type="dxa"/><w:right w:w="113" w:type="dxa"/></w:tblCellMar>';
   const trs = rows.map((cells, ri) => "<w:tr>" + cells.map((c, ci) => {
     const head = ri === 0 && headerCols === -1 ? true : ci < headerCols;
     return `<w:tc><w:tcPr>${head ? '<w:shd w:val="clear" w:fill="EFEFEF"/><w:vAlign w:val="center"/>' : ""}</w:tcPr><w:p>${head ? '<w:pPr><w:jc w:val="center"/></w:pPr>' : ""}<w:r><w:rPr>${head ? "<w:b/>" : ""}<w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t xml:space="preserve">${xesc(c)}</w:t></w:r></w:p></w:tc>`;
   }).join("") + "</w:tr>").join("");
-  return `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/>${borders}</w:tblPr>${trs}</w:tbl><w:p/>`;
+  return `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/>${borders}${cellMar}</w:tblPr>${trs}</w:tbl><w:p/>`;
 }
 function makeDocx({ title, metaRows, purpose }) {
   const body =
