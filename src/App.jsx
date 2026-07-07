@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { SDLC_FACTOR_CRITERIA, criteriaToPromptText } from './sdlcFactorCriteria';
 import TailoringGuideModal from './TailoringGuideModal';
 import { TAILORING_GUIDES, getGuideForOSSP } from './tailoringGuides';
+import { PROCESS_TAILORING_GUIDE, processMark, processKey, resolveProcessTailoring } from './processTailoringGuide';
 
 const T = {
   bg: "#0A0C10", surface: "#111318", border: "#1E2230",
@@ -357,12 +358,19 @@ JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)",
       const tailoringSummary = Object.entries(byPhase)
         .map(([ph, names]) => `${ph}: ${names.join(", ")}`).join(" / ");
 
+      // 프로세스 테일러링(관리 프로세스) 요약 — PDP 개요 작성 근거에 포함
+      const procApplicable2 = resolveProcessTailoring(tailoring.process).filter(r => r.status !== "해당없음");
+      const procChanged = procApplicable2.filter(r => r.status !== "적용");
+      const procSummary = `적용 등급 ${tailoring.process?.level||"L3"} · 적용대상 ${procApplicable2.length}건 (적용 ${procApplicable2.filter(r=>r.status==="적용").length} / 변경적용 ${procApplicable2.filter(r=>r.status==="변경적용").length} / 미적용 ${procApplicable2.filter(r=>r.status==="미적용").length})`
+        + (procChanged.length ? ` — 변경·미적용: ${procChanged.slice(0,10).map(r=>`${r.process}${r.activity?"›"+r.activity:""}(${r.status}${r.reason?": "+r.reason:""})`).join(", ")}` : "");
+
       const result = await callClaude(`당신은 PMBOK 8판에 정통한 품질보증(QA) 전문가입니다. PDP(Project's Defined Process)는 OSSP(Organization's Set of Standard Process)를 테일러링 가이드 기준으로 테일러링한 테일러링결과서입니다.
 프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, SDLC: ${selectedSDLC?.label||"미지정"}, OSSP: ${selectedOSSP?.label}, 기간: ${projectForm.startDate}~${projectForm.endDate}, PM: ${projectForm.pm}
 적용 테일러링 가이드: ${guide.title}
 프로젝트 규모: ${scaleLabel}, 설계방식: ${guide.hasDesignMethod ? (tailoring.method||"UML") : "해당 없음"}
 테일러링 확정 산출물(단계별): ${tailoringSummary}
-PMBOK 8판의 테일러링 원칙과 품질 성과영역 관점을 반영하고, 위 테일러링 기준(규모·설계방식·단계별 산출물)을 근거로 테일러링결과서의 프로젝트 개요를 작성하라.
+프로세스 테일러링(관리 프로세스, 프로세스 테일러링 가이드 V2.0 기준): ${procSummary}
+PMBOK 8판의 테일러링 원칙과 품질 성과영역 관점을 반영하고, 위 테일러링 기준(규모·설계방식·단계별 산출물·관리 프로세스 이행 수준)을 근거로 테일러링결과서의 프로젝트 개요를 작성하라.
 분량 제한(응답 잘림 방지): objectives 최대 4개. 각 문자열은 간결하게.
 PDP JSON만 출력(설명·마크다운 금지): {"overview":{"purpose":"string","scope":"string","objectives":["string"]}}`, 2000);
       setPdpData(result);
@@ -399,10 +407,15 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
           return ov !== undefined ? ov : !(tailoring.excluded||{})[d.code];
         });
       const appliedList = applied.map(d => `${d.code} ${d.name}(${d.phase}${d.required?",필수":",선택"})`).join(", ");
+      // 프로세스 테일러링에서 적용/변경적용으로 확정된 관리 프로세스의 주요 산출물 → 착수 패키지에 반영
+      const procApplied = resolveProcessTailoring(tailoring.process).filter(r => r.status === "적용" || r.status === "변경적용");
+      const procLevel3 = tailoring.process?.level || "L3";
+      const mgmtOutputs = [...new Set(procApplied.flatMap(r => String(r.outputs||"").split(/,|\s\/\s/).map(s=>s.trim()).filter(Boolean)))].slice(0, 45);
       const result = await callClaude(`SI 착수/계획 산출물 패키지 JSON. 프로젝트: ${projectForm.name}, OSSP: ${selectedOSSP?.label}, SDLC: ${selectedSDLC?.label||"미지정"}
 프로젝트 규모: ${scaleLabel}, 설계방식: ${guide.hasDesignMethod ? (tailoring.method||"UML") : "해당 없음"}
 ${guide.title} 기준 적용 산출물(${applied.length}개): ${appliedList}
-위 적용 산출물을 우선 반영하여 산출물 패키지를 구성하라. code는 위 목록의 코드를 사용하라.
+프로세스 테일러링(적용 등급 ${procLevel3}) 확정 관리 프로세스 산출물(${mgmtOutputs.length}종): ${mgmtOutputs.join(", ")}
+위 방법론 적용 산출물을 우선 반영하고, 관리 프로세스 산출물 중 착수·계획 시점에 작성이 필요한 문서(각종 계획서, 프로세스/방법론 테일러링 내역서, 요구사항 추적 매트릭스, 관리대장, Inspection 계획서 등)를 계획문서·품질/위험문서 카테고리에 반드시 포함하라. code는 방법론 산출물은 위 목록의 코드를, 관리 산출물은 "PM01" 형식의 신규 코드를 사용하라.
 {"categories":[{"id":"string","name":"string","icon":"이모지","documents":[{"id":"string","name":"string","code":"string","purpose":"string","template":"목차1;목차2;목차3","priority":"필수|권장|선택","estimatedPages":5,"owner":"string"}]}],"summary":{"totalDocs":15,"mandatoryCount":10,"estimatedDays":14}}
 4개 카테고리: 착수문서(🚀), 계획문서(📋), 기술문서(🔧), 품질/위험문서(🛡). 각 3~5개 문서.`, 8000);
       setDeliverablesData(result);
@@ -777,7 +790,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} onRecommendPBS={onRecommendPBS} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} />}
         {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} />}
-        {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
+        {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} tailoring={tailoring} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
       <div style={{ display:"flex", justifyContent:"space-between" }}>
         <Btn variant="ghost" onClick={()=>step>0?setStep(s=>s-1):nav("dashboard")}>← 이전</Btn>
@@ -965,7 +978,142 @@ function classifyDeliverables(scale, method, guide) {
   return result;
 }
 
+// 테일러링 단계 — [방법론 테일러링(산출물)] / [프로세스 테일러링(관리 프로세스)] 두 탭으로 구성
 function StepTailoring({ tailoring, setTailoring, ossp }) {
+  const [tTab, setTTab] = useState("method");
+  const procLevel = tailoring?.process?.level || "L3";
+  return (
+    <div>
+      <div style={{ display:"flex", gap:3, marginBottom:16, background:T.bg, borderRadius:10, padding:3, border:`1px solid ${T.border}` }}>
+        {[["method","방법론 테일러링 (산출물)"],["process",`프로세스 테일러링 (${procLevel})`]].map(([id,label])=>(
+          <button key={id} onClick={()=>setTTab(id)}
+            style={{ flex:1, padding:"8px 0", borderRadius:7, fontSize:12, fontWeight:tTab===id?700:400,
+              background:tTab===id?T.accent:"transparent", color:tTab===id?"#fff":T.muted,
+              border:"none", cursor:"pointer", fontFamily:"inherit" }}>{label}</button>
+        ))}
+      </div>
+      {tTab==="method"
+        ? <MethodologyTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={ossp} />
+        : <StepProcessTailoring tailoring={tailoring} setTailoring={setTailoring} />}
+    </div>
+  );
+}
+
+// 프로세스 테일러링 — 조직 표준 관리 프로세스(요구사항관리·계획수립·품질보증 등)를
+// 적용 등급(L3/L4/L5) 기준으로 세부 프로세스별 적용/변경적용/미적용 + 사유를 기록
+function StepProcessTailoring({ tailoring, setTailoring }) {
+  const G = PROCESS_TAILORING_GUIDE;
+  const proc = tailoring?.process || {};
+  const level = proc.level || "L3";
+  const setLevel = (v) => setTailoring(t => ({ ...t, process: { ...(t.process||{}), level: v, items: (t.process?.items)||{} } }));
+  const setItem = (key, patch) => setTailoring(t => {
+    const p = t.process || {};
+    const items = { ...(p.items||{}) };
+    items[key] = { ...(items[key]||{}), ...patch };
+    return { ...t, process: { ...p, level: p.level||"L3", items } };
+  });
+
+  const resolved = resolveProcessTailoring({ ...proc, level });
+  const byArea = {};
+  resolved.forEach(r => { (byArea[r.area] = byArea[r.area] || []).push(r); });
+  const applicable = resolved.filter(r => r.status !== "해당없음");
+  const counts = {
+    적용: applicable.filter(r=>r.status==="적용").length,
+    변경적용: applicable.filter(r=>r.status==="변경적용").length,
+    미적용: applicable.filter(r=>r.status==="미적용").length,
+  };
+  // 필수(●)인데 변경적용/미적용이면서 사유 미기재 → 가이드 위반
+  const violations = applicable.filter(r => r.mark==="●" && r.status!=="적용" && !String(r.reason||"").trim());
+
+  return (
+    <div>
+      <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>프로세스 테일러링</h2>
+      <p style={{ fontSize:12, color:T.muted, marginBottom:14 }}>{G.title} 기준 · 관리 프로세스의 이행 수준을 확정합니다.</p>
+
+      {/* 적용 등급 선택 */}
+      <div style={{ marginBottom:14 }}>
+        <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>적용 등급 (Required Maturity Level)</div>
+        <div style={{ display:"flex", gap:8 }}>
+          {G.levels.map(lv=>(
+            <button key={lv} onClick={()=>setLevel(lv)}
+              style={{ flex:1, padding:"8px 0", borderRadius:8, fontSize:12, fontFamily:"inherit",
+                background:level===lv?T.accent:T.bg, color:level===lv?"#fff":T.muted,
+                border:`1px solid ${level===lv?T.accent:T.border}`, cursor:"pointer", fontWeight:level===lv?600:400 }}>{lv}</button>
+          ))}
+        </div>
+        <div style={{ fontSize:10, color:T.muted, marginTop:6, lineHeight:1.6 }}>{G.levelNote}<br/>{G.sizeNote}</div>
+      </div>
+
+      {/* 요약 */}
+      <div style={{ display:"flex", gap:10, marginBottom:10 }}>
+        {[["적용대상",applicable.length,T.accent],["적용",counts.적용,T.green],["변경적용",counts.변경적용,T.amber],["미적용",counts.미적용,T.red]].map(([label,val,color])=>(
+          <div key={label} style={{ flex:1, padding:"10px 14px", borderRadius:9, background:T.bg, border:`1px solid ${T.border}` }}>
+            <div style={{ fontSize:20, fontWeight:700, color }}>{val}</div>
+            <div style={{ fontSize:11, color:T.muted }}>{label}</div>
+          </div>
+        ))}
+      </div>
+      {violations.length > 0 && (
+        <div style={{ fontSize:11, color:T.red, padding:"8px 12px", background:T.red+"11", border:`1px solid ${T.red}44`, borderRadius:8, marginBottom:10 }}>
+          ⚠ 필수(●) 세부 프로세스 {violations.length}건이 변경적용/미적용인데 사유가 없습니다. {G.statusNote}
+        </div>
+      )}
+
+      {/* 영역별 세부 프로세스 목록 */}
+      <div style={{ display:"flex", flexDirection:"column", gap:12, maxHeight:420, overflowY:"auto", paddingRight:4 }}>
+        {Object.keys(byArea).map(area=>(
+          <div key={area}>
+            <div title={G.goals[area] || ""} style={{ fontSize:12, fontWeight:700, color:T.text, marginBottom:6, position:"sticky", top:0, background:T.surface, padding:"2px 0", zIndex:1 }}>
+              {area} <span style={{ color:T.muted, fontWeight:400 }}>({byArea[area].filter(r=>r.status!=="해당없음").length}/{byArea[area].length})</span>
+              {G.goals[area] && <span style={{ color:T.muted, fontWeight:400, fontSize:10, marginLeft:6 }} title={G.goals[area]}>ⓘ 목적</span>}
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+              {byArea[area].map(r=>{
+                const na = r.status === "해당없음";
+                const needReason = r.mark==="●" && r.status!=="적용";
+                const missing = needReason && !String(r.reason||"").trim();
+                return (
+                  <div key={r.key} style={{ padding:"6px 10px", borderRadius:7, background:T.bg,
+                    border:`1px solid ${missing ? T.red+"66" : T.border}`, opacity:na?0.4:1 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <Badge color={r.mark==="●"?T.accent:r.mark==="○"?T.amber:T.muted}>
+                        {r.mark==="●"?"필수":r.mark==="○"?"선택":"해당없음"}
+                      </Badge>
+                      <span title={r.guide || ""} style={{ fontSize:12, color:T.text, flex:1 }}>
+                        {r.process}{r.activity && <span style={{ color:T.muted }}> › {r.activity}</span>}
+                        {r.guide && <span style={{ color:T.muted, fontSize:10, marginLeft:5 }}>ⓘ</span>}
+                      </span>
+                      {!na && (
+                        <select value={r.status} onChange={e=>setItem(r.key,{ status:e.target.value })}
+                          style={{ background:T.surface, border:`1px solid ${r.status==="적용"?T.border:r.status==="변경적용"?T.amber+"88":T.red+"88"}`,
+                            borderRadius:7, padding:"4px 8px", fontSize:11, fontFamily:"inherit", outline:"none", cursor:"pointer",
+                            color:r.status==="적용"?T.text:r.status==="변경적용"?T.amber:T.red }}>
+                          {G.statusOptions.map(o=><option key={o} value={o}>{o}</option>)}
+                        </select>
+                      )}
+                    </div>
+                    {r.outputs && !na && (
+                      <div style={{ fontSize:10, color:T.muted, marginTop:3, paddingLeft:2 }}>산출물: {r.outputs}</div>
+                    )}
+                    {!na && r.status!=="적용" && (
+                      <input value={r.reason} onChange={e=>setItem(r.key,{ reason:e.target.value })}
+                        placeholder={missing ? "⚠ 필수 프로세스 — 테일러링 내역 및 사유를 반드시 입력하세요" : "테일러링 내역 및 사유"}
+                        style={{ width:"100%", boxSizing:"border-box", marginTop:5, background:"transparent",
+                          border:"none", borderBottom:`1px dashed ${missing?T.red:T.border}`, color:T.text,
+                          fontSize:11, fontFamily:"inherit", outline:"none", padding:"3px 2px" }} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MethodologyTailoring({ tailoring, setTailoring, ossp }) {
   const [showGuide, setShowGuide] = useState(false);   // 테일러링 가이드 열람 모달
   const guide = getGuideForOSSP(ossp);                 // 선택한 OSSP에 해당하는 테일러링 가이드
   const scale = tailoring.scale || "중형";
@@ -1122,6 +1270,13 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
   const docNo = `PDP-${(form?.client||"").replace(/\s/g,"").slice(0,4).toUpperCase()||"PRJ"}-${new Date().getFullYear()}`;
   const today = new Date().toLocaleDateString("ko-KR");
 
+  // 프로세스 테일러링 확정 상태 (테일러링 단계의 '프로세스 테일러링' 탭에서 수정, 여기서는 내역서로 표시)
+  const procState = tailoring?.process || {};
+  const procLevel = procState.level || "L3";
+  const procApplicable = resolveProcessTailoring(procState).filter(r => r.status !== "해당없음");
+  const procByArea = {};
+  procApplicable.forEach(r => { (procByArea[r.area] = procByArea[r.area] || []).push(r); });
+
   // 표 안 인라인 입력 스타일
   const noteInput = { width:"100%", boxSizing:"border-box", background:"transparent", border:"none",
     borderBottom:`1px dashed ${T.border}`, color:T.text, fontSize:10.5, fontFamily:"inherit",
@@ -1238,6 +1393,34 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
                       </tr>
                     );
                   })
+                ))}
+              </tbody>
+            </table>
+
+            {/* 4. 프로세스 테일러링 내역서 — 내역서 양식 v2.1 컬럼 구성 */}
+            <SectionTitle n="4" title={`프로세스 테일러링 내역서 (적용 등급 ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
+            <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
+              ※ 적용여부·사유는 테일러링 단계의 '프로세스 테일러링' 탭에서 수정할 수 있습니다. 필수(●) 프로세스를 변경적용·미적용한 경우 사유가 기재되어야 합니다.
+            </div>
+            <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
+              <thead>
+                <tr>{["프로세스 영역","세부 프로세스","구분","적용여부","산출물명","테일러링 내역 및 사유"].map(h=>
+                  <td key={h} style={{...cellHead, textAlign:"center"}}>{h}</td>)}</tr>
+              </thead>
+              <tbody>
+                {Object.keys(procByArea).map(area=>(
+                  procByArea[area].map((r,i)=>(
+                    <tr key={r.key} style={{ opacity:r.status==="미적용"?0.55:1 }}>
+                      {i===0 && <td style={{...cell, fontWeight:600, verticalAlign:"top"}} rowSpan={procByArea[area].length}>{area}</td>}
+                      <td style={cell}>{r.process}{r.activity && <span style={{ color:T.muted }}> › {r.activity}</span>}</td>
+                      <td style={{...cell, textAlign:"center"}}><Badge color={r.mark==="●"?T.accent:T.amber}>{r.mark==="●"?"필수":"선택"}</Badge></td>
+                      <td style={{...cell, textAlign:"center", color:r.status==="적용"?T.green:r.status==="변경적용"?T.amber:T.red, fontWeight:600 }}>{r.status}</td>
+                      <td style={{...cell, fontSize:10 }}>{r.outputs || ""}</td>
+                      <td style={{...cell, color:r.reason?T.text:(r.mark==="●"&&r.status!=="적용"?T.red:T.muted), fontSize:10 }}>
+                        {r.reason || (r.mark==="●"&&r.status!=="적용" ? "⚠ 사유 미기재" : "")}
+                      </td>
+                    </tr>
+                  ))
                 ))}
               </tbody>
             </table>
@@ -1718,12 +1901,14 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
   );
 }
 
-function StepReview({ form, sdlc, ossp, pdpData, wbsData, deliverablesData }) {
+function StepReview({ form, sdlc, ossp, tailoring, pdpData, wbsData, deliverablesData }) {
+  const procApplicable = resolveProcessTailoring(tailoring?.process).filter(r => r.status !== "해당없음");
   const items = [
     {label:"프로젝트명",value:form.name},{label:"고객사",value:form.client},
     {label:"유형",value:form.type},{label:"PM",value:form.pm},
     {label:"기간",value:`${form.startDate}~${form.endDate}`},
     {label:"SDLC",value:sdlc?.label},{label:"OSSP",value:ossp?.label},
+    {label:"프로세스 테일러링",value:`${tailoring?.process?.level||"L3"} · 적용대상 ${procApplicable.length}건`},
     {label:"PDP",value:pdpData?"✓ 생성완료":"—"},{label:"WBS",value:wbsData?`✓ ${wbsData.tasks?.length}개 단계`:"—"},
     {label:"초기 산출물",value:deliverablesData?`✓ ${deliverablesData.summary?.totalDocs}건`:"—"},
   ];
@@ -1766,6 +1951,13 @@ function PdpDocView({ project }) {
   const appliedCount = list.filter(isApplied).length;
   const grouped = {};
   list.forEach(d => { (grouped[d.phase] = grouped[d.phase] || []).push(d); });
+
+  // 프로세스 테일러링 확정 상태 (저장된 tailoring.process 기반)
+  const procState = tailoring.process || {};
+  const procLevel = procState.level || "L3";
+  const procApplicable = resolveProcessTailoring(procState).filter(r => r.status !== "해당없음");
+  const procByArea = {};
+  procApplicable.forEach(r => { (procByArea[r.area] = procByArea[r.area] || []).push(r); });
 
   if (!pdp) return <div style={{ color:T.muted, fontSize:12, padding:20 }}>저장된 PDP가 없습니다.</div>;
 
@@ -1836,10 +2028,33 @@ function PdpDocView({ project }) {
         </tbody>
       </table>
 
+      {/* 4. 프로세스 테일러링 내역서 */}
+      <SectionTitle n="4" title={`프로세스 테일러링 내역서 (적용 등급 ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
+      <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
+        <thead>
+          <tr>{["프로세스 영역","세부 프로세스","구분","적용여부","산출물명","테일러링 내역 및 사유"].map(h=>
+            <td key={h} style={{...cellHead, textAlign:"center"}}>{h}</td>)}</tr>
+        </thead>
+        <tbody>
+          {Object.keys(procByArea).map(area=>(
+            procByArea[area].map((r,i)=>(
+              <tr key={r.key} style={{ opacity:r.status==="미적용"?0.55:1 }}>
+                {i===0 && <td style={{...cell, fontWeight:600, verticalAlign:"top"}} rowSpan={procByArea[area].length}>{area}</td>}
+                <td style={cell}>{r.process}{r.activity && <span style={{ color:T.muted }}> › {r.activity}</span>}</td>
+                <td style={{...cell, textAlign:"center"}}><Badge color={r.mark==="●"?T.accent:T.amber}>{r.mark==="●"?"필수":"선택"}</Badge></td>
+                <td style={{...cell, textAlign:"center", color:r.status==="적용"?T.green:r.status==="변경적용"?T.amber:T.red, fontWeight:600 }}>{r.status}</td>
+                <td style={{...cell, fontSize:10 }}>{r.outputs || ""}</td>
+                <td style={{...cell, color:r.reason?T.text:T.muted, fontSize:10 }}>{r.reason || ""}</td>
+              </tr>
+            ))
+          ))}
+        </tbody>
+      </table>
+
       {/* (구버전 프로젝트 호환) 일정·리스크가 저장돼 있으면 표시 */}
       {pdp.schedule?.phases?.length > 0 && (
         <>
-          <SectionTitle n="4" title="추진 일정 (구버전 저장분)" />
+          <SectionTitle n="5" title="추진 일정 (구버전 저장분)" />
           {pdp.schedule.phases.map((ph,i)=>(
             <div key={i} style={{ fontSize:11, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
               <span style={{ color:T.accent, marginRight:6 }}>■</span>{ph.phase}
@@ -1850,7 +2065,7 @@ function PdpDocView({ project }) {
       )}
       {pdp.risks?.length > 0 && (
         <>
-          <SectionTitle n={pdp.schedule?.phases?.length > 0 ? "5" : "4"} title="주요 리스크 (구버전 저장분)" />
+          <SectionTitle n={pdp.schedule?.phases?.length > 0 ? "6" : "5"} title="주요 리스크 (구버전 저장분)" />
           {pdp.risks.map((r,i)=>(
             <div key={i} style={{ fontSize:11, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
               <Badge color={r.level==="상"?T.red:r.level==="중"?T.amber:T.muted}>{r.level}</Badge>
