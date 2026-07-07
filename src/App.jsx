@@ -1666,6 +1666,23 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
   const notes = tailoring?.notes || {};
   const holidays = wbsSetup?.holidays || [];
   const [showCal, setShowCal] = useState(false);
+  const [showMgmt, setShowMgmt] = useState(false);   // 관리 프로세스 작업 목록 펼침
+
+  // ── 관리 프로세스 작업: 프로세스 테일러링에서 적용 확정된 항목 → WBS 앞부분에 영역 단위로 추가 ──
+  const mgmtExcluded = wbsSetup?.mgmtExcluded || {};   // { key: true } = WBS에서 제외
+  const mgmtAll = resolveProcessTailoring(tailoring?.process).filter(r => r.applied);
+  const mgmtIncluded = mgmtAll.filter(r => !mgmtExcluded[r.key]);
+  const mgmtByArea = {};
+  mgmtIncluded.forEach(r => { (mgmtByArea[r.area] = mgmtByArea[r.area] || []).push(r); });
+  const mgmtAllByArea = {};
+  mgmtAll.forEach(r => { (mgmtAllByArea[r.area] = mgmtAllByArea[r.area] || []).push(r); });
+  const toggleMgmt = (key) => setWbsSetup(s => {
+    const ex = { ...(s.mgmtExcluded || {}) }; ex[key] = !ex[key]; return { ...s, mgmtExcluded: ex };
+  });
+  const setMgmtAll = (val) => setWbsSetup(s => {
+    const ex = {}; if (!val) mgmtAll.forEach(r => { ex[r.key] = true; }); return { ...s, mgmtExcluded: ex };
+  });
+  const firstOutput = (outputs) => String(outputs||"").split(/,|\s\/\s/).map(x=>x.trim()).filter(Boolean)[0] || "";
 
   // ── FBS: PDP(테일러링결과서)에서 적용 확정된 산출물 → 단계별 Activity ──
   const isApplied = (d) => {
@@ -1733,6 +1750,18 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
   function buildWBS() {
     const rows = [];
     let a = 0;
+    // 1) 관리 프로세스 작업 (프로세스 테일러링 적용분) — 영역 단위, 시스템 구성요소 분해 없음
+    for (const area of Object.keys(mgmtByArea)) {
+      a += 1; let b = 0;
+      rows.push({ level: 1, wbsCode: `${a}`, name: area, deliverable: "" });
+      for (const m of mgmtByArea[area]) {
+        b += 1;
+        rows.push({ level: 2, wbsCode: `${a}.${b}`,
+          name: m.activity ? `${m.process} — ${m.activity}` : m.process,
+          deliverable: firstOutput(m.outputs) });
+      }
+    }
+    // 2) 단계별 산출물 작성 작업 (방법론 테일러링 × 시스템 구성요소 매트릭스)
     for (const ph of phases) {
       const acts = fbsByPhase[ph].filter(d => leaves.some((_, li) => selected[selKey(d, li)]));
       if (!acts.length) continue;
@@ -1793,9 +1822,9 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
   return (
     <div>
       <div style={{ marginBottom: 14 }}>
-        <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>WBS 자동 생성 (PBS × FBS 매트릭스)</h2>
+        <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>WBS 자동 생성 (단계별 산출물 × 시스템 구성요소)</h2>
         <p style={{ fontSize: 11, color: T.muted }}>
-          FBS(단계별 확정 산출물)는 PDP에서 자동 구성됩니다. PBS를 정의하고, 매트릭스에서 산출물이 적용될 PBS를 선택한 뒤 WBS를 생성하세요.
+          단계별 산출물은 PDP(테일러링결과서)에서, 관리 프로세스 작업은 프로세스 테일러링에서 자동 구성됩니다. 시스템 구성요소를 정의하고, 매트릭스에서 산출물이 적용될 구성요소를 선택한 뒤 WBS를 생성하세요.
         </p>
       </div>
       {genError && <div style={{ color: T.red, fontSize: 12, padding: 10, background: T.red + "11", borderRadius: 9, marginBottom: 10 }}>{genError}</div>}
@@ -1803,12 +1832,12 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
       {/* 1. PBS 정의 */}
       <div style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>① PBS (제품 분해 구조) <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· {leaves.length}개 요소</span></div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>① 시스템 구성요소 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>(제품 분해 구조, PBS) · {leaves.length}개 요소</span></div>
           <Btn variant="outline" onClick={onRecommendPBS} disabled={generating} style={{ fontSize: 11, padding: "4px 10px" }}>
             {generating ? "추천 중…" : "⚡ AI 추천"}
           </Btn>
         </div>
-        {generating && <div style={{ marginBottom: 6 }}><Spinner text="프로젝트 정보 기반 PBS 작성 중…" /></div>}
+        {generating && <div style={{ marginBottom: 6 }}><Spinner text="프로젝트 정보 기반 시스템 구성요소 구성 중…" /></div>}
         <textarea value={pbsText}
           onChange={e => setWbsSetup(s => ({ ...s, pbsText: e.target.value }))}
           placeholder={"한 줄에 하나씩 \"L1 > L2 > L3\" 형식으로 입력하세요.\n예)\n포털시스템 > 사용자관리 > 로그인\n포털시스템 > 사용자관리 > 권한관리\n포털시스템 > 게시판\n인터페이스 > 공통"}
@@ -1817,15 +1846,15 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
         <div style={{ fontSize: 10, color: T.muted, marginTop: 4 }}>※ L3을 사용하려면 L2가 있어야 합니다. 여러 요소에 공통 적용되는 부분은 L2에 "공통"을 사용하세요 (WBS에서 중복 허용).</div>
       </div>
 
-      {/* 2. PBS × FBS 매트릭스 */}
+      {/* 2. 단계별 산출물 × 시스템 구성요소 매트릭스 */}
       <div style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>② PBS × FBS 매트릭스 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· 선택 {selectedCount}칸</span></div>
-          <Btn onClick={buildWBS} disabled={leaves.length === 0 || selectedCount === 0} style={{ fontSize: 12, padding: "6px 12px" }}>⚙ WBS 생성</Btn>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>② 단계별 산출물 × 시스템 구성요소 매트릭스 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· 선택 {selectedCount}칸</span></div>
+          <Btn onClick={buildWBS} disabled={selectedCount === 0 && mgmtIncluded.length === 0} style={{ fontSize: 12, padding: "6px 12px" }}>⚙ WBS 생성</Btn>
         </div>
         {leaves.length === 0 ? (
           <div style={{ fontSize: 11, color: T.muted, padding: "14px 12px", background: T.bg, border: `1px dashed ${T.border}`, borderRadius: 10 }}>
-            PBS를 먼저 입력하면 매트릭스가 표시됩니다.
+            시스템 구성요소를 먼저 입력하면 매트릭스가 표시됩니다.
           </div>
         ) : (
           <div style={{ overflowX: "auto", maxHeight: 300, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 10 }}>
@@ -1833,7 +1862,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
               <thead>
                 <tr>
                   <td style={{ ...th, textAlign: "left" }} rowSpan={3}>단계</td>
-                  <td style={{ ...th, textAlign: "left", minWidth: 150 }} rowSpan={3}>산출물 (FBS Activity)</td>
+                  <td style={{ ...th, textAlign: "left", minWidth: 150 }} rowSpan={3}>단계별 산출물</td>
                   <td style={th} rowSpan={3}>전체</td>
                   {leaves.map((l, li) => <td key={"h1" + li} style={{ ...th, background: "#16233a" }}>{l.l1}</td>)}
                 </tr>
@@ -1867,12 +1896,56 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
         )}
       </div>
 
-      {/* 3. 일정 계획 (생성 결과 편집) */}
+      {/* 3. 관리 프로세스 작업 — 프로세스 테일러링 적용분을 WBS 앞부분에 영역 단위로 추가 */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>③ 관리 프로세스 작업 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· 프로세스 테일러링 적용 {mgmtAll.length}건 중 {mgmtIncluded.length}건 포함</span></div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: T.muted, cursor: "pointer" }}>
+              <input type="checkbox" checked={mgmtIncluded.length === mgmtAll.length && mgmtAll.length > 0}
+                onChange={e => setMgmtAll(e.target.checked)} style={{ width: 13, height: 13, cursor: "pointer" }} />전체
+            </label>
+            <Btn variant="outline" onClick={() => setShowMgmt(v => !v)} style={{ fontSize: 11, padding: "4px 10px" }}>
+              {showMgmt ? "접기 ▲" : "목록 보기 ▼"}
+            </Btn>
+          </div>
+        </div>
+        <div style={{ fontSize: 10, color: T.muted, marginBottom: showMgmt ? 6 : 0 }}>
+          ※ 프로세스 테일러링에서 적용 확정된 관리 프로세스가 WBS 생성 시 앞부분에 영역 단위 작업으로 추가됩니다 (시스템 구성요소 분해 없음). 제외할 항목은 체크를 해제하세요.
+        </div>
+        {showMgmt && (
+          <div style={{ maxHeight: 260, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 10, padding: "8px 10px", background: T.bg, display: "flex", flexDirection: "column", gap: 8 }}>
+            {Object.keys(mgmtAllByArea).map(area => (
+              <div key={area}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: T.accent, marginBottom: 4 }}>
+                  {area} <span style={{ color: T.muted, fontWeight: 400 }}>({mgmtAllByArea[area].filter(r => !mgmtExcluded[r.key]).length}/{mgmtAllByArea[area].length})</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  {mgmtAllByArea[area].map(r => {
+                    const off = !!mgmtExcluded[r.key];
+                    return (
+                      <label key={r.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: off ? T.muted : T.text, cursor: "pointer", opacity: off ? 0.55 : 1 }}>
+                        <input type="checkbox" checked={!off} onChange={() => toggleMgmt(r.key)} style={{ width: 12, height: 12, cursor: "pointer", flexShrink: 0 }} />
+                        <span style={{ textDecoration: off ? "line-through" : "none" }}>
+                          {r.process}{r.activity && <span style={{ color: T.muted }}> › {r.activity}</span>}
+                        </span>
+                        {firstOutput(r.outputs) && <span style={{ color: T.muted, fontSize: 9.5 }}>→ {firstOutput(r.outputs)}</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 4. 일정 계획 (생성 결과 편집) */}
       {wbsData?.tasks?.length > 0 && (
         <div style={{ animation: "fadeIn .4s" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>③ 일정 계획</div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>④ 일정 계획</div>
               <Badge color={T.green}>✓ {wbsData.tasks.reduce((n, t) => n + 1 + (t.subtasks?.length || 0), 0)}개 항목</Badge>
               {holidays.length > 0 && <Badge color={T.red}>공휴일 {holidays.length}일</Badge>}
             </div>
