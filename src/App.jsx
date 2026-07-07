@@ -2076,10 +2076,11 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// 산출물 ZIP 일괄 다운로드 — 외부 라이브러리 없이 ZIP(무압축 STORED)을 직접 생성.
-// 폴더 구조: 01_단계명/[필수(M)] 코드_산출물명.md + README.md(매니페스트)
-// 각 파일은 표지(메타)·목적·목차 골격이 채워진 스켈레톤 문서 (1차 구현;
-// 2차에서 OSSP 라이브러리의 산출물템플릿 실파일 매칭 예정)
+// 산출물 ZIP 일괄 다운로드 — 외부 라이브러리 없이 각 산출물을 실제 MS Office
+// 파일(docx/xlsx/pptx = OOXML)로 생성해 단계별 폴더 구조의 ZIP으로 묶는다.
+// 형식 자동 배정: 매트릭스·대장·목록·백로그·체크리스트 등 표 성격 → xlsx,
+// 오리엔테이션·교육·데모 자료 → pptx, 그 외 계획서·정의서·보고서 → docx.
+// (1차: 스켈레톤 문서 / 2차: OSSP 라이브러리 산출물템플릿 실파일 매칭 예정)
 // ═══════════════════════════════════════════════════════════════════
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -2091,8 +2092,8 @@ function crc32(bytes) {
   for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
   return (c ^ 0xFFFFFFFF) >>> 0;
 }
-// files: [{ path, content }] → ZIP Blob (UTF-8 파일명 플래그 사용)
-function buildZip(files) {
+// files: [{ path, content: string | Uint8Array }] → ZIP 바이트 (무압축 STORED, UTF-8 파일명)
+function zipBytes(files) {
   const enc = new TextEncoder();
   const u16 = v => [v & 255, (v >>> 8) & 255];
   const u32 = v => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
@@ -2102,7 +2103,7 @@ function buildZip(files) {
   const chunks = []; const central = []; let offset = 0;
   for (const f of files) {
     const nameB = enc.encode(f.path);
-    const dataB = enc.encode(f.content);
+    const dataB = f.content instanceof Uint8Array ? f.content : enc.encode(f.content);
     const crc = crc32(dataB);
     const local = new Uint8Array([...u32(0x04034b50), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(dosTime), ...u16(dosDate),
       ...u32(crc), ...u32(dataB.length), ...u32(dataB.length), ...u16(nameB.length), ...u16(0)]);
@@ -2117,8 +2118,95 @@ function buildZip(files) {
     chunks.push(hdr, e.nameB); cdSize += hdr.length + e.nameB.length;
   }
   chunks.push(new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(central.length), ...u16(central.length), ...u32(cdSize), ...u32(cdStart), ...u16(0)]));
-  return new Blob(chunks, { type: "application/zip" });
+  let total = 0; chunks.forEach(c => { total += c.length; });
+  const out = new Uint8Array(total); let pos = 0;
+  chunks.forEach(c => { out.set(c, pos); pos += c.length; });
+  return out;
 }
+
+const xesc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const XMLH = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+
+// ── DOCX ─────────────────────────────────────────────────────
+function docxP(text, { bold = false, size = 22, spacingAfter = 120 } = {}) {
+  return `<w:p><w:pPr><w:spacing w:after="${spacingAfter}"/></w:pPr><w:r><w:rPr>${bold ? "<w:b/>" : ""}<w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr><w:t xml:space="preserve">${xesc(text)}</w:t></w:r></w:p>`;
+}
+function docxTable(rows, headerCols = 0) {
+  const borders = '<w:tblBorders><w:top w:val="single" w:sz="4" w:color="999999"/><w:left w:val="single" w:sz="4" w:color="999999"/><w:bottom w:val="single" w:sz="4" w:color="999999"/><w:right w:val="single" w:sz="4" w:color="999999"/><w:insideH w:val="single" w:sz="4" w:color="999999"/><w:insideV w:val="single" w:sz="4" w:color="999999"/></w:tblBorders>';
+  const trs = rows.map((cells, ri) => "<w:tr>" + cells.map((c, ci) => {
+    const head = ri === 0 && headerCols === -1 ? true : ci < headerCols;
+    return `<w:tc><w:tcPr>${head ? '<w:shd w:val="clear" w:fill="EFEFEF"/>' : ""}</w:tcPr><w:p><w:r><w:rPr>${head ? "<w:b/>" : ""}<w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t xml:space="preserve">${xesc(c)}</w:t></w:r></w:p></w:tc>`;
+  }).join("") + "</w:tr>").join("");
+  return `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/>${borders}</w:tblPr>${trs}</w:tbl><w:p/>`;
+}
+function makeDocx({ title, metaRows, purpose }) {
+  const body =
+    docxP(title, { bold: true, size: 36, spacingAfter: 240 }) +
+    docxTable(metaRows, 1) +
+    docxP("1. 목적", { bold: true, size: 26, spacingAfter: 160 }) +
+    docxP(purpose || "(작성)") +
+    docxP("2. 본문", { bold: true, size: 26, spacingAfter: 160 }) +
+    docxP("(작성)") +
+    docxP("3. 문서 이력", { bold: true, size: 26, spacingAfter: 160 }) +
+    docxTable([["버전", "일자", "작성자", "변경 내용"], ["V0.1", new Date().toLocaleDateString("ko-KR"), "", "최초 작성 (ProGenesis 자동 생성)"]], -1);
+  const documentXml = XMLH + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
+  return zipBytes([
+    { path: "[Content_Types].xml", content: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
+    { path: "_rels/.rels", content: XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
+    { path: "word/document.xml", content: documentXml },
+  ]);
+}
+
+// ── XLSX ─────────────────────────────────────────────────────
+function colLetter(n) { let s = ""; n += 1; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+function makeXlsx({ sheetName = "Sheet1", rows }) {
+  const rowsXml = rows.map((cells, ri) =>
+    `<row r="${ri + 1}">` + cells.map((c, ci) =>
+      `<c r="${colLetter(ci)}${ri + 1}" t="inlineStr"><is><t xml:space="preserve">${xesc(c)}</t></is></c>`
+    ).join("") + "</row>"
+  ).join("");
+  const sheetXml = XMLH + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowsXml}</sheetData></worksheet>`;
+  const wbXml = XMLH + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xesc(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+  return zipBytes([
+    { path: "[Content_Types].xml", content: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>' },
+    { path: "_rels/.rels", content: XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+    { path: "xl/workbook.xml", content: wbXml },
+    { path: "xl/_rels/workbook.xml.rels", content: XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>' },
+    { path: "xl/worksheets/sheet1.xml", content: sheetXml },
+  ]);
+}
+
+// ── PPTX ─────────────────────────────────────────────────────
+const PPT_THEME = XMLH + `<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="6350"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln><a:ln w="12700"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln><a:ln w="19050"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>`;
+function pptTextBox(id, name, x, y, w, h, text, size, bold, color) {
+  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${xesc(name)}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${w}" cy="${h}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>${text.split("\n").map(line =>
+    `<a:p><a:r><a:rPr lang="ko-KR" sz="${size}"${bold ? ' b="1"' : ""} dirty="0"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:rPr><a:t>${xesc(line)}</a:t></a:r></a:p>`).join("")}</p:txBody></p:sp>`;
+}
+function makePptx({ title, lines }) {
+  const NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
+  const slide1 = XMLH + `<p:sld ${NS}><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>` +
+    pptTextBox(2, "Title", 457200, 1600200, 8229600, 1143000, title, 3200, true, "1F3864") +
+    pptTextBox(3, "Body", 457200, 2971800, 8229600, 2286000, lines.join("\n"), 1600, false, "404040") +
+    `</p:spTree></p:cSld><p:clrMapOvr><a:overrideClrMapping bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr></p:sld>`;
+  const master = XMLH + `<p:sldMaster ${NS}><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst></p:sldMaster>`;
+  const layout = XMLH + `<p:sldLayout ${NS} type="blank"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`;
+  const presentation = XMLH + `<p:presentation ${NS}><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst><p:sldSz cx="9144000" cy="6858000"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>`;
+  const REL = 'xmlns="http://schemas.openxmlformats.org/package/2006/relationships"';
+  return zipBytes([
+    { path: "[Content_Types].xml", content: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>' },
+    { path: "_rels/.rels", content: XMLH + `<Relationships ${REL}><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>` },
+    { path: "ppt/presentation.xml", content: presentation },
+    { path: "ppt/_rels/presentation.xml.rels", content: XMLH + `<Relationships ${REL}><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/></Relationships>` },
+    { path: "ppt/slideMasters/slideMaster1.xml", content: master },
+    { path: "ppt/slideMasters/_rels/slideMaster1.xml.rels", content: XMLH + `<Relationships ${REL}><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/></Relationships>` },
+    { path: "ppt/slideLayouts/slideLayout1.xml", content: layout },
+    { path: "ppt/slideLayouts/_rels/slideLayout1.xml.rels", content: XMLH + `<Relationships ${REL}><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>` },
+    { path: "ppt/theme/theme1.xml", content: PPT_THEME },
+    { path: "ppt/slides/slide1.xml", content: slide1 },
+    { path: "ppt/slides/_rels/slide1.xml.rels", content: XMLH + `<Relationships ${REL}><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>` },
+  ]);
+}
+
 
 // 우선순위 표시: 방법론 테일러링의 M/O 표기와 통일 (구버전 "필수"/"선택" 저장분 호환)
 function prioInfo(p) {
@@ -2128,67 +2216,72 @@ function prioInfo(p) {
   return { label: "선택(O)", color: T.muted };
 }
 
-// 산출물 스켈레톤 문서 (Markdown)
-function deliverableSkeleton(doc, catName, meta) {
-  const today = new Date().toLocaleDateString("ko-KR");
-  return `# ${doc.name}
-
-| 항목 | 내용 |
-|---|---|
-| 문서 코드 | ${doc.code || "-"} |
-| 단계/프로세스 | ${catName} |
-| 구분 | ${prioInfo(doc.priority).label} |
-| 프로젝트명 | ${meta.name || ""} |
-| 고객사 | ${meta.client || ""} |
-| PM | ${meta.pm || ""} |
-| 프로젝트 기간 | ${meta.startDate || ""} ~ ${meta.endDate || ""} |
-| 작성일 | ${today} |
-| 버전 | V0.1 (초안) |
-
-## 1. 목적
-${doc.purpose || "(작성)"}
-
-## 2. 본문
-(작성)
-
-## 3. 문서 이력
-| 버전 | 일자 | 작성자 | 변경 내용 |
-|---|---|---|---|
-| V0.1 | ${today} |  | 최초 작성 (ProGenesis 자동 생성) |
-`;
+// 산출물 이름으로 Office 형식 자동 배정
+function pickOfficeFormat(name) {
+  const n = String(name || "");
+  if (/오리엔테이션|교육|발표|데모 자료/.test(n)) return "pptx";
+  if (/매트릭스|대장|목록|리스트|백로그|체크리스트|WBS|추적표|현황|내역서|데이터|Data|차트|조견표/.test(n)) return "xlsx";
+  return "docx";
 }
 
-// 산출물 전체를 폴더 구조 ZIP으로 다운로드
+// 산출물 1건 → Office 파일 바이트 생성
+function officeFileForDoc(doc, catName, meta) {
+  const fmt = pickOfficeFormat(doc.name);
+  const today = new Date().toLocaleDateString("ko-KR");
+  const prio = prioInfo(doc.priority).label;
+  const period = `${meta.startDate || ""} ~ ${meta.endDate || ""}`;
+  if (fmt === "xlsx") {
+    const sheetName = String(doc.name).replace(/[\\/?*\[\]:]/g, " ").slice(0, 28).trim() || "Sheet1";
+    return { ext: "xlsx", bytes: makeXlsx({ sheetName, rows: [
+      ["문서명", doc.name], ["문서 코드", doc.code || "-"], ["단계/프로세스", catName], ["구분", prio],
+      ["프로젝트명", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
+      ["프로젝트 기간", period], ["작성일", today], ["버전", "V0.1 (초안)"],
+      ["목적", doc.purpose || ""], [],
+      ["No", "항목", "내용", "작성자", "일자", "비고"],
+      ["1", "", "", "", "", ""], ["2", "", "", "", "", ""], ["3", "", "", "", "", ""],
+    ] }) };
+  }
+  if (fmt === "pptx") {
+    return { ext: "pptx", bytes: makePptx({ title: doc.name, lines: [
+      `프로젝트: ${meta.name || ""}`,
+      `고객사: ${meta.client || ""} · PM: ${meta.pm || ""}`,
+      `단계/프로세스: ${catName} · ${prio}`,
+      `목적: ${doc.purpose || ""}`,
+      `작성일: ${today} · V0.1 (초안)`,
+    ] }) };
+  }
+  return { ext: "docx", bytes: makeDocx({ title: doc.name, purpose: doc.purpose, metaRows: [
+    ["항목", "내용"], ["문서 코드", doc.code || "-"], ["단계/프로세스", catName], ["구분", prio],
+    ["프로젝트명", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
+    ["프로젝트 기간", period], ["작성일", today], ["버전", "V0.1 (초안)"],
+  ] }) };
+}
+
+// 산출물 전체를 폴더 구조 ZIP으로 다운로드 (각 파일은 실제 Office 문서)
 function downloadDeliverablesZip(deliverables, meta) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
   const cats = deliverables?.categories || [];
-  const files = [];
-  const rows = [];
+  const files = []; const manifest = [];
   let total = 0, mand = 0;
   cats.forEach((cat, ci) => {
     const folder = `${String(ci + 1).padStart(2, "0")}_${sanitize(cat.name)}`;
     (cat.documents || []).forEach(doc => {
       const pi = prioInfo(doc.priority);
+      const of = officeFileForDoc(doc, cat.name, meta);
       const codePart = sanitize(doc.code || "");
-      const fname = `[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.md`;
-      files.push({ path: `${folder}/${fname}`, content: deliverableSkeleton(doc, cat.name, meta) });
-      rows.push(`| ${folder} | ${doc.code || "-"} | ${doc.name} | ${pi.label} | ${doc.purpose || ""} |`);
+      files.push({ path: `${folder}/[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`, content: of.bytes });
+      manifest.push([folder, doc.code || "-", doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
       total += 1; if (pi.label === "필수(M)") mand += 1;
     });
   });
-  const readme = `# ${meta.name || "프로젝트"} — 산출물 패키지
-
-- 생성일: ${new Date().toLocaleString("ko-KR")}
-- 고객사: ${meta.client || ""} / PM: ${meta.pm || ""}
-- 전체 ${total}건 (필수(M) ${mand} · 선택(O) ${total - mand})
-- 각 문서는 스켈레톤(표지·목적·목차 골격)입니다. 내용을 채워 사용하세요.
-
-| 폴더 | 코드 | 산출물 | 구분 | 목적 |
-|---|---|---|---|---|
-${rows.join("\n")}
-`;
-  files.unshift({ path: "README.md", content: readme });
-  const blob = buildZip(files);
+  files.unshift({ path: "00_산출물목록.xlsx", content: makeXlsx({ sheetName: "산출물목록", rows: [
+    ["프로젝트", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
+    ["생성일", new Date().toLocaleString("ko-KR")],
+    ["전체", `${total}건 (필수(M) ${mand} · 선택(O) ${total - mand})`], [],
+    ["폴더", "코드", "산출물", "형식", "구분", "목적"],
+    ...manifest,
+  ] }) });
+  const blob = new Blob([zipBytes(files)], { type: "application/zip" });
   const url = URL.createObjectURL(blob);
   const aEl = document.createElement("a");
   aEl.href = url; aEl.download = `${sanitize(meta.name) || "project"}_산출물.zip`;
