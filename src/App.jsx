@@ -434,7 +434,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
           documents.push({
             id: `${t.id}-${documents.length}`, code, name,
             purpose: `${t.phase} 단계 산출물`,
-            priority: ref ? (ref.required ? "필수" : "선택") : "선택",
+            priority: ref ? (ref.required ? "필수(M)" : "선택(O)") : "선택(O)",
           });
         });
         return { id: t.id, name: t.phase, icon: PHASE_ICONS[ti % PHASE_ICONS.length], documents };
@@ -444,7 +444,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       if (allDocs.length === 0) throw new Error("WBS에 산출물이 지정된 작업이 없습니다. WBS 단계의 산출물 열을 확인하세요.");
       const summary = {
         totalDocs: allDocs.length,
-        mandatoryCount: allDocs.filter(d => d.priority === "필수").length,
+        mandatoryCount: allDocs.filter(d => String(d.priority||"").startsWith("필수")).length,
         source: "wbs",   // WBS 기반 생성 마커 — 구버전 생성분과 구분
       };
 
@@ -830,7 +830,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} onRecommendPBS={onRecommendPBS} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} />}
-        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} />}
+        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} form={form} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} tailoring={tailoring} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
       <div style={{ display:"flex", justifyContent:"space-between" }}>
@@ -2075,9 +2075,132 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
   );
 }
 
-function StepDeliverables({ deliverablesData, generating, genError, onGenerate }) {
+// ═══════════════════════════════════════════════════════════════════
+// 산출물 ZIP 일괄 다운로드 — 외부 라이브러리 없이 ZIP(무압축 STORED)을 직접 생성.
+// 폴더 구조: 01_단계명/[필수(M)] 코드_산출물명.md + README.md(매니페스트)
+// 각 파일은 표지(메타)·목적·목차 골격이 채워진 스켈레톤 문서 (1차 구현;
+// 2차에서 OSSP 라이브러리의 산출물템플릿 실파일 매칭 예정)
+// ═══════════════════════════════════════════════════════════════════
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c; }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+// files: [{ path, content }] → ZIP Blob (UTF-8 파일명 플래그 사용)
+function buildZip(files) {
+  const enc = new TextEncoder();
+  const u16 = v => [v & 255, (v >>> 8) & 255];
+  const u32 = v => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+  const now = new Date();
+  const dosTime = ((now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)) & 0xFFFF;
+  const dosDate = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xFFFF;
+  const chunks = []; const central = []; let offset = 0;
+  for (const f of files) {
+    const nameB = enc.encode(f.path);
+    const dataB = enc.encode(f.content);
+    const crc = crc32(dataB);
+    const local = new Uint8Array([...u32(0x04034b50), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(dosTime), ...u16(dosDate),
+      ...u32(crc), ...u32(dataB.length), ...u32(dataB.length), ...u16(nameB.length), ...u16(0)]);
+    chunks.push(local, nameB, dataB);
+    central.push({ nameB, crc, size: dataB.length, offset });
+    offset += local.length + nameB.length + dataB.length;
+  }
+  const cdStart = offset; let cdSize = 0;
+  for (const e of central) {
+    const hdr = new Uint8Array([...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(dosTime), ...u16(dosDate),
+      ...u32(e.crc), ...u32(e.size), ...u32(e.size), ...u16(e.nameB.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(e.offset)]);
+    chunks.push(hdr, e.nameB); cdSize += hdr.length + e.nameB.length;
+  }
+  chunks.push(new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(central.length), ...u16(central.length), ...u32(cdSize), ...u32(cdStart), ...u16(0)]));
+  return new Blob(chunks, { type: "application/zip" });
+}
+
+// 우선순위 표시: 방법론 테일러링의 M/O 표기와 통일 (구버전 "필수"/"선택" 저장분 호환)
+function prioInfo(p) {
+  const s = String(p || "");
+  if (s.startsWith("필수")) return { label: "필수(M)", color: T.red };
+  if (s.startsWith("권장")) return { label: "권장", color: T.amber };
+  return { label: "선택(O)", color: T.muted };
+}
+
+// 산출물 스켈레톤 문서 (Markdown)
+function deliverableSkeleton(doc, catName, meta) {
+  const today = new Date().toLocaleDateString("ko-KR");
+  return `# ${doc.name}
+
+| 항목 | 내용 |
+|---|---|
+| 문서 코드 | ${doc.code || "-"} |
+| 단계/프로세스 | ${catName} |
+| 구분 | ${prioInfo(doc.priority).label} |
+| 프로젝트명 | ${meta.name || ""} |
+| 고객사 | ${meta.client || ""} |
+| PM | ${meta.pm || ""} |
+| 프로젝트 기간 | ${meta.startDate || ""} ~ ${meta.endDate || ""} |
+| 작성일 | ${today} |
+| 버전 | V0.1 (초안) |
+
+## 1. 목적
+${doc.purpose || "(작성)"}
+
+## 2. 본문
+(작성)
+
+## 3. 문서 이력
+| 버전 | 일자 | 작성자 | 변경 내용 |
+|---|---|---|---|
+| V0.1 | ${today} |  | 최초 작성 (ProGenesis 자동 생성) |
+`;
+}
+
+// 산출물 전체를 폴더 구조 ZIP으로 다운로드
+function downloadDeliverablesZip(deliverables, meta) {
+  const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
+  const cats = deliverables?.categories || [];
+  const files = [];
+  const rows = [];
+  let total = 0, mand = 0;
+  cats.forEach((cat, ci) => {
+    const folder = `${String(ci + 1).padStart(2, "0")}_${sanitize(cat.name)}`;
+    (cat.documents || []).forEach(doc => {
+      const pi = prioInfo(doc.priority);
+      const codePart = sanitize(doc.code || "");
+      const fname = `[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.md`;
+      files.push({ path: `${folder}/${fname}`, content: deliverableSkeleton(doc, cat.name, meta) });
+      rows.push(`| ${folder} | ${doc.code || "-"} | ${doc.name} | ${pi.label} | ${doc.purpose || ""} |`);
+      total += 1; if (pi.label === "필수(M)") mand += 1;
+    });
+  });
+  const readme = `# ${meta.name || "프로젝트"} — 산출물 패키지
+
+- 생성일: ${new Date().toLocaleString("ko-KR")}
+- 고객사: ${meta.client || ""} / PM: ${meta.pm || ""}
+- 전체 ${total}건 (필수(M) ${mand} · 선택(O) ${total - mand})
+- 각 문서는 스켈레톤(표지·목적·목차 골격)입니다. 내용을 채워 사용하세요.
+
+| 폴더 | 코드 | 산출물 | 구분 | 목적 |
+|---|---|---|---|---|
+${rows.join("\n")}
+`;
+  files.unshift({ path: "README.md", content: readme });
+  const blob = buildZip(files);
+  const url = URL.createObjectURL(blob);
+  const aEl = document.createElement("a");
+  aEl.href = url; aEl.download = `${sanitize(meta.name) || "project"}_산출물.zip`;
+  document.body.appendChild(aEl); aEl.click(); aEl.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
+function StepDeliverables({ deliverablesData, generating, genError, onGenerate, form }) {
   const [expanded, setExpanded] = useState({});   // { 카테고리id: true } — 여러 카테고리 동시 펼침 유지
   const toggleCat = (id) => setExpanded(m => ({ ...m, [id]: !m[id] }));
+  const total = deliverablesData?.summary?.totalDocs || 0;
+  const mand = deliverablesData?.summary?.mandatoryCount || 0;
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
@@ -2090,7 +2213,10 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
         <div style={{ animation:"fadeIn .4s" }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
             <Badge color={T.green}>✓ 산출물 생성 완료</Badge>
-            <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
+            <div style={{ display:"flex", gap:6 }}>
+              <Btn onClick={()=>downloadDeliverablesZip(deliverablesData, form||{})} style={{ fontSize:11, padding:"4px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
+              <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
+            </div>
           </div>
           {deliverablesData.summary?.source !== "wbs" && (
             <div style={{ fontSize:11, color:T.amber, padding:"8px 12px", background:T.amber+"11", border:`1px solid ${T.amber}44`, borderRadius:8, marginBottom:12, display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
@@ -2099,7 +2225,7 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
             </div>
           )}
           <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-            {[{label:"전체",value:deliverablesData.summary?.totalDocs,color:T.accent},{label:"필수",value:deliverablesData.summary?.mandatoryCount,color:T.red}].map(s=>(
+            {[{label:"전체",value:total,color:T.accent},{label:"필수(M)",value:mand,color:T.red},{label:"선택(O)",value:total-mand,color:T.amber}].map(s=>(
               <div key={s.label} style={{ flex:1, padding:"8px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, textAlign:"center" }}>
                 <div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>{s.label}</div>
                 <div style={{ fontSize:16, fontWeight:700, color:s.color }}>{s.value}</div>
@@ -2118,7 +2244,7 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
                   <div key={doc.id} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 12px", borderTop:`1px solid ${T.border}` }}>
                     <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
                     <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
-                    <Badge color={doc.priority==="필수"?T.red:doc.priority==="권장"?T.amber:T.muted}>{doc.priority}</Badge>
+                    <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
                   </div>
                 ))}
               </div>
@@ -2411,8 +2537,11 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
       {tab==="wbs" && <WbsScheduleView wbs={project.wbs} />}
       {tab==="deliverables" && project.deliverables && (
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          <div style={{ display:"flex", justifyContent:"flex-end" }}>
+            <Btn onClick={()=>downloadDeliverablesZip(project.deliverables, project)} style={{ fontSize:11, padding:"5px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
+          </div>
           <div style={{ display:"flex", gap:10 }}>
-            {[{label:"전체",value:project.deliverables.summary?.totalDocs,color:T.accent},{label:"필수",value:project.deliverables.summary?.mandatoryCount,color:T.red}].map(s=>(
+            {[{label:"전체",value:project.deliverables.summary?.totalDocs||0,color:T.accent},{label:"필수(M)",value:project.deliverables.summary?.mandatoryCount||0,color:T.red},{label:"선택(O)",value:(project.deliverables.summary?.totalDocs||0)-(project.deliverables.summary?.mandatoryCount||0),color:T.amber}].map(s=>(
               <Card key={s.label} style={{ flex:1, padding:"12px 14px", textAlign:"center" }}><div style={{ fontSize:10, color:T.muted, marginBottom:3 }}>{s.label}</div><div style={{ fontSize:20, fontWeight:700, color:s.color }}>{s.value}</div></Card>
             ))}
           </div>
@@ -2423,7 +2552,7 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
                 <div key={doc.id} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 0", borderTop:`1px solid ${T.border}` }}>
                   <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
                   <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
-                  <Badge color={doc.priority==="필수"?T.red:doc.priority==="권장"?T.amber:T.muted}>{doc.priority}</Badge>
+                  <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
                 </div>
               ))}
             </Card>
