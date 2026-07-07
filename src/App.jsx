@@ -396,9 +396,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   async function generateDeliverables() {
     setGenerating(true); setGenError(null); setDeliverablesData(null);
     try {
-      // 선택한 OSSP의 테일러링 가이드로 확정된 적용 산출물 목록 구성
+      // ── 산출물 목록은 테일러링 확정 결과에서 결정적으로 구성 (WBS와 동일 기준) ──
       const guide = getGuideForOSSP(selectedOSSP);
-      const scaleLabel = guide.scaleOptions?.find(o=>o.value===(tailoring.scale||"중형"))?.label || (tailoring.scale||"중형");
       const pdpNotes = tailoring.notes || {};
       const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide)
         .filter(d => {
@@ -406,19 +405,65 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
           const ov = pdpNotes[`${d.phase}:${d.code}`]?.applied;   // PDP 화면에서 수정한 적용 여부 우선
           return ov !== undefined ? ov : !(tailoring.excluded||{})[d.code];
         });
-      const appliedList = applied.map(d => `${d.code} ${d.name}(${d.phase}${d.required?",필수":",선택"})`).join(", ");
-      // 프로세스 테일러링에서 적용/변경적용으로 확정된 관리 프로세스의 주요 산출물 → 착수 패키지에 반영
-      const procApplied = resolveProcessTailoring(tailoring.process).filter(r => r.status === "적용" || r.status === "변경적용");
-      const procLevel3 = tailoring.process?.level || "L3";
-      const mgmtOutputs = [...new Set(procApplied.flatMap(r => String(r.outputs||"").split(/,|\s\/\s/).map(s=>s.trim()).filter(Boolean)))].slice(0, 45);
-      const result = await callClaude(`SI 착수/계획 산출물 패키지 JSON. 프로젝트: ${projectForm.name}, OSSP: ${selectedOSSP?.label}, SDLC: ${selectedSDLC?.label||"미지정"}
-프로젝트 규모: ${scaleLabel}, 설계방식: ${guide.hasDesignMethod ? (tailoring.method||"UML") : "해당 없음"}
-${guide.title} 기준 적용 산출물(${applied.length}개): ${appliedList}
-프로세스 테일러링(적용 등급 ${procLevel3}) 확정 관리 프로세스 산출물(${mgmtOutputs.length}종): ${mgmtOutputs.join(", ")}
-위 방법론 적용 산출물을 우선 반영하고, 관리 프로세스 산출물 중 착수·계획 시점에 작성이 필요한 문서(각종 계획서, 프로세스/방법론 테일러링 내역서, 요구사항 추적 매트릭스, 관리대장, Inspection 계획서 등)를 계획문서·품질/위험문서 카테고리에 반드시 포함하라. code는 방법론 산출물은 위 목록의 코드를, 관리 산출물은 "PM01" 형식의 신규 코드를 사용하라.
-{"categories":[{"id":"string","name":"string","icon":"이모지","documents":[{"id":"string","name":"string","code":"string","purpose":"string","template":"목차1;목차2;목차3","priority":"필수|권장|선택","estimatedPages":5,"owner":"string"}]}],"summary":{"totalDocs":15,"mandatoryCount":10,"estimatedDays":14}}
-4개 카테고리: 착수문서(🚀), 계획문서(📋), 기술문서(🔧), 품질/위험문서(🛡). 각 3~5개 문서.`, 8000);
-      setDeliverablesData(result);
+      const byPhase = {};
+      applied.forEach(d => { (byPhase[d.phase] = byPhase[d.phase] || []).push(d); });
+
+      // 관리 프로세스 산출물 — WBS와 동일하게 적용 확정 프로세스의 대표 산출물 (중복 제거)
+      const firstOut = (outputs) => {
+        const toks = String(outputs||"").split(/,|\s\/\s/).map(x=>x.trim()).filter(Boolean);
+        return toks.find(t => t.length >= 2 && t !== "예") || toks[0] || "";   // "예, ..." 같은 예시 접두 토큰 제외
+      };
+      const mgmtApplied = resolveProcessTailoring(tailoring.process).filter(r => r.applied);
+      const mgmtDocs = new Map();
+      mgmtApplied.forEach(r => {
+        const name = firstOut(r.outputs);
+        if (name && !mgmtDocs.has(name)) mgmtDocs.set(name, r);
+      });
+
+      const PHASE_ICONS = ["📌","📋","🔧","🧪","🚀","🛠","📈","🧭","📦"];
+      const categories = [];
+      // 1) 관리 프로세스 (프로세스 테일러링 적용분)
+      if (mgmtDocs.size > 0) {
+        categories.push({
+          id: "mgmt", name: "관리 프로세스", icon: "🛡",
+          documents: [...mgmtDocs].map(([name, r], i) => ({
+            id: `pm${i+1}`, code: `PM${String(i+1).padStart(2,"0")}`, name,
+            purpose: `${r.area} · ${r.process}${r.activity ? ` › ${r.activity}` : ""} 수행 산출물`,
+            priority: r.mark === "●" ? "필수" : "선택",
+          })),
+        });
+      }
+      // 2) 방법론 전 단계 산출물 (테일러링 확정분 전체 — WBS의 단계별 산출물과 동일)
+      guide.phaseOrder.filter(ph => byPhase[ph]?.length).forEach((ph, pi) => {
+        categories.push({
+          id: `ph${pi}`, name: ph, icon: PHASE_ICONS[pi % PHASE_ICONS.length],
+          documents: byPhase[ph].map(d => ({
+            id: d.code, code: d.code, name: d.name,
+            purpose: `${ph} 단계 산출물${d.note ? ` (${d.note})` : ""}`,
+            priority: d.required ? "필수" : "선택",
+          })),
+        });
+      });
+
+      const allDocs = categories.flatMap(c => c.documents);
+      if (allDocs.length === 0) throw new Error("적용 확정된 산출물이 없습니다. 테일러링 단계를 먼저 완료하세요.");
+      const summary = {
+        totalDocs: allDocs.length,
+        mandatoryCount: allDocs.filter(d => d.priority === "필수").length,
+      };
+
+      // ── AI는 각 문서의 목적 설명(1문장)만 작성 — 실패해도 목록은 유지 ──
+      try {
+        const result = await callClaude(`당신은 PMBOK 8판에 정통한 품질보증(QA) 전문가입니다. 아래 SI 프로젝트 산출물 각각의 목적을 한국어 1문장(30자 이내)으로 작성하라.
+프로젝트: ${projectForm.name}, 고객사: ${projectForm.client}, OSSP: ${selectedOSSP?.label}, SDLC: ${selectedSDLC?.label||"미지정"}
+산출물 목록: ${allDocs.map(d => `${d.code} ${d.name}`).join(", ")}
+JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 8000);
+        if (result?.purposes) {
+          allDocs.forEach(d => { if (result.purposes[d.code]) d.purpose = String(result.purposes[d.code]); });
+        }
+      } catch (_) { /* 목적 생성 실패는 무시 — 기본 설명 유지 */ }
+
+      setDeliverablesData({ categories, summary });
     } catch(e) { setGenError("산출물 생성 실패: "+e.message); }
     setGenerating(false);
   }
@@ -635,14 +680,14 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
     { label:"전체 프로젝트", value:projects.length, color:T.accent },
     { label:"PDP 생성", value:projects.filter(p=>p.pdp).length, color:T.green },
     { label:"WBS 생성", value:projects.filter(p=>p.wbs).length, color:T.amber },
-    { label:"초기 산출물", value:projects.filter(p=>p.deliverables).length, color:"#C084FC" },
+    { label:"산출물", value:projects.filter(p=>p.deliverables).length, color:"#C084FC" },
   ];
   const STEP_LABELS = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   return (
     <div style={{ padding:"20px 16px", maxWidth:1100, margin:"0 auto" }}>
       <div style={{ marginBottom:20 }}>
         <h1 style={{ fontSize:20, fontWeight:700, letterSpacing:-0.5, marginBottom:4 }}>프로젝트 착수 자동화 플랫폼</h1>
-        <p style={{ color:T.muted, fontSize:12 }}>OSSP 테일러링 → PDP → WBS → 착수 산출물까지 AI로 완성</p>
+        <p style={{ color:T.muted, fontSize:12 }}>OSSP 테일러링 → PDP → WBS → 산출물까지 AI로 완성</p>
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10, marginBottom:20 }}>
         {stats.map(s=><Card key={s.label} style={{ padding:"14px 16px" }}><div style={{ fontSize:10, color:T.muted, marginBottom:4 }}>{s.label}</div><div style={{ fontSize:26, fontWeight:700, color:s.color, lineHeight:1 }}>{s.value}</div></Card>)}
@@ -702,7 +747,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
       </Card>
       <Card style={{ padding:18 }}>
         <h2 style={{ fontSize:13, fontWeight:600, marginBottom:12 }}>추천 시작 흐름</h2>
-        {["프로젝트 기본정보 입력","OSSP 선택 & 테일러링","PDP 자동 생성 (AI)","WBS 자동 생성 (AI)","착수/계획 산출물 생성 (AI)","프로젝트 착수 완료"].map((s,i)=>(
+        {["프로젝트 기본정보 입력","OSSP 선택 & 테일러링","PDP 자동 생성 (AI)","WBS 자동 생성 (AI)","산출물 생성 (AI)","프로젝트 착수 완료"].map((s,i)=>(
           <div key={s} style={{ display:"flex", gap:10, alignItems:"flex-start", marginBottom:8 }}>
             <div style={{ width:20, height:20, borderRadius:"50%", background:T.accentDim, color:T.accent, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:700, flexShrink:0 }}>{i+1}</div>
             <div style={{ fontSize:12, color:T.muted, lineHeight:1.5 }}>{s}</div>
@@ -1673,7 +1718,10 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
   const mgmtItems = resolveProcessTailoring(tailoring?.process).filter(r => r.applied);
   const mgmtByArea = {};
   mgmtItems.forEach(r => { (mgmtByArea[r.area] = mgmtByArea[r.area] || []).push(r); });
-  const firstOutput = (outputs) => String(outputs||"").split(/,|\s\/\s/).map(x=>x.trim()).filter(Boolean)[0] || "";
+  const firstOutput = (outputs) => {
+    const toks = String(outputs||"").split(/,|\s\/\s/).map(x=>x.trim()).filter(Boolean);
+    return toks.find(t => t.length >= 2 && t !== "예") || toks[0] || "";   // "예, ..." 같은 예시 접두 토큰 제외
+  };
 
   // ── FBS: PDP(테일러링결과서)에서 적용 확정된 산출물 → 단계별 Activity ──
   const isApplied = (d) => {
@@ -2036,7 +2084,7 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
-        <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>착수 산출물 자동생성</h2><p style={{ fontSize:11, color:T.muted }}>AI가 초기 문서 패키지를 구성합니다.</p></div>
+        <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>산출물 자동생성</h2><p style={{ fontSize:11, color:T.muted }}>WBS에 반영되는 모든 단계의 산출물 문서 패키지를 구성합니다 (관리 프로세스 + 방법론 전 단계).</p></div>
         {!deliverablesData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ AI 생성</Btn>}
       </div>
       {generating && <Spinner />}
@@ -2048,7 +2096,7 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
             <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
           </div>
           <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-            {[{label:"전체",value:deliverablesData.summary?.totalDocs,color:T.accent},{label:"필수",value:deliverablesData.summary?.mandatoryCount,color:T.red},{label:"소요일",value:deliverablesData.summary?.estimatedDays+"일",color:T.amber}].map(s=>(
+            {[{label:"전체",value:deliverablesData.summary?.totalDocs,color:T.accent},{label:"필수",value:deliverablesData.summary?.mandatoryCount,color:T.red}].map(s=>(
               <div key={s.label} style={{ flex:1, padding:"8px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, textAlign:"center" }}>
                 <div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>{s.label}</div>
                 <div style={{ fontSize:16, fontWeight:700, color:s.color }}>{s.value}</div>
@@ -2088,7 +2136,7 @@ function StepReview({ form, sdlc, ossp, tailoring, pdpData, wbsData, deliverable
     {label:"SDLC",value:sdlc?.label},{label:"OSSP",value:ossp?.label},
     {label:"프로세스 테일러링",value:`${tailoring?.process?.level||"L3"} · 적용대상 ${procApplicable.length}건`},
     {label:"PDP",value:pdpData?"✓ 생성완료":"—"},{label:"WBS",value:wbsData?`✓ ${wbsData.tasks?.length}개 단계`:"—"},
-    {label:"초기 산출물",value:deliverablesData?`✓ ${deliverablesData.summary?.totalDocs}건`:"—"},
+    {label:"산출물",value:deliverablesData?`✓ ${deliverablesData.summary?.totalDocs}건`:"—"},
   ];
   return (
     <div>
@@ -2361,7 +2409,7 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
       {tab==="deliverables" && project.deliverables && (
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
           <div style={{ display:"flex", gap:10 }}>
-            {[{label:"전체",value:project.deliverables.summary?.totalDocs,color:T.accent},{label:"필수",value:project.deliverables.summary?.mandatoryCount,color:T.red},{label:"소요일",value:project.deliverables.summary?.estimatedDays+"일",color:T.amber}].map(s=>(
+            {[{label:"전체",value:project.deliverables.summary?.totalDocs,color:T.accent},{label:"필수",value:project.deliverables.summary?.mandatoryCount,color:T.red}].map(s=>(
               <Card key={s.label} style={{ flex:1, padding:"12px 14px", textAlign:"center" }}><div style={{ fontSize:10, color:T.muted, marginBottom:3 }}>{s.label}</div><div style={{ fontSize:20, fontWeight:700, color:s.color }}>{s.value}</div></Card>
             ))}
           </div>
