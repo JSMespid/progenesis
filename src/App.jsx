@@ -195,6 +195,7 @@ export default function ProGenesis() {
   const [deliverablesData, setDeliverablesData] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
+  const [editingId, setEditingId] = useState(null);   // 완료된 프로젝트 수정 모드: 수정 대상 프로젝트 id
 
   const nav = (p) => { setPage(p); setGenError(null); setMenuOpen(false); };
 
@@ -438,6 +439,27 @@ ${guide.title} 기준 적용 산출물(${applied.length}개): ${appliedList}
     setDeliverablesData(d.deliverablesData || null);
   }
 
+  // 완료(저장)된 프로젝트를 위저드로 다시 열어 수정 — 저장된 데이터를 위저드 상태로 복원
+  function editProject(p) {
+    setEditingId(p.id);
+    setProjectForm({ name:p.name||"", client:p.client||"", type:p.type||"신규개발", startDate:p.startDate||"", endDate:p.endDate||"", pm:p.pm||"" });
+    setSelectedOSSP(p.ossp||null);
+    const t = p.tailoring || {};
+    setSelectedSDLC(t.sdlc||null);
+    setSdlcFactors(t.sdlc_factors||{ req_clarity:"보통", req_volatility:"보통", delivery:"단계적", risk:"보통", regulation:"보통", team:"집중" });
+    setSdlcRecommendation(null);
+    setTailoring({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준", review_cycle:"격주", test_level:"통합", risk:"강화", ...t });
+    setPdpData(p.pdp||null);
+    setWbsData(p.wbs||null);
+    // 매트릭스 선택(selected)은 프로젝트에 저장되지 않으므로 비움 — 일정표(wbsData)는 그대로 복원됨.
+    // 구조를 다시 생성하려면 매트릭스를 재선택 후 "WBS 생성"을 누르면 됨.
+    setWbsSetup({ pbsText:p.wbs?.pbsText||"", selected:{}, holidays:p.wbs?.holidays||[] });
+    setDeliverablesData(p.deliverables||null);
+    setGenError(null);
+    setWizardStep(7);   // 완료(최종 확인) 단계에서 시작 — 상단 스텝을 눌러 어느 단계로든 이동 가능
+    nav("new_project");
+  }
+
   async function finishProject() {
     const newProject = {
       name:projectForm.name, client:projectForm.client, type:projectForm.type,
@@ -448,9 +470,14 @@ ${guide.title} 기준 적용 산출물(${applied.length}개): ${appliedList}
       pdp:pdpData, wbs:wbsData, deliverables:deliverablesData,
     };
     try {
-      await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(newProject) });
+      const res = await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(newProject) });
+      // 수정 모드: 새 버전 저장이 성공한 경우에만 기존 프로젝트 제거 (실패 시 데이터 유실 방지)
+      if (res.ok && editingId) {
+        await fetch(`/api/projects?id=${editingId}`, { method:'DELETE' });
+      }
       await fetchProjects();
     } catch(e) { console.error(e); }
+    setEditingId(null);
     setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",startDate:"",endDate:"",pm:"" });
     setSelectedOSSP(null); setTailoring({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준",review_cycle:"격주",test_level:"통합",risk:"강화" });
     setSelectedSDLC(null); setSdlcRecommendation(null);
@@ -478,8 +505,9 @@ ${guide.title} 기준 적용 산출물(${applied.length}개): ${appliedList}
       sdlcFactors={sdlcFactors} setSdlcFactors={setSdlcFactors}
       selectedSDLC={selectedSDLC} setSelectedSDLC={setSelectedSDLC}
       sdlcRecommendation={sdlcRecommendation} recommending={recommending} onRecommendSDLC={recommendSDLC}
+      editing={!!editingId}
       onSaveDraft={saveDraft} loadDraft={loadDraft} onRestoreDraft={restoreDraft} onClearDraft={clearDraft} />,
-    project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} />,
+    project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} onEdit={editProject} />,
     ossp: <OSSPPage nav={nav} customOSSP={customOSSP} builtinOSSP={builtinOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
     regulation: <LibraryPage nav={nav} kind="regulation"
       title="규제 (Regulation / Compliance)" subtitle="프로젝트가 준수해야 할 규제·컴플라이언스 자산"
@@ -657,7 +685,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
   const steps = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   const canNext = [
     form.name&&form.client&&form.startDate&&form.endDate&&form.pm,  // 0 기본정보
@@ -686,8 +714,9 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
     <div style={{ padding:"16px", maxWidth:960, margin:"0 auto" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
         <button onClick={()=>nav("dashboard")} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:20 }}>←</button>
-        <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>새 프로젝트 생성</h1><p style={{ fontSize:11, color:T.muted }}>STEP {step+1}/{steps.length} — {steps[step]}</p></div>
+        <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>{editing ? "프로젝트 수정" : "새 프로젝트 생성"}</h1><p style={{ fontSize:11, color:T.muted }}>STEP {step+1}/{steps.length} — {steps[step]}</p></div>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          {editing && <Badge color={T.amber}>수정 모드</Badge>}
           {saveMsg && <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>✓ {saveMsg}</span>}
           <Btn variant="outline" onClick={handleSave} style={{ fontSize:12, padding:"6px 12px" }}>임시저장</Btn>
         </div>
@@ -737,7 +766,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       </Card>
       <div style={{ display:"flex", justifyContent:"space-between" }}>
         <Btn variant="ghost" onClick={()=>step>0?setStep(s=>s-1):nav("dashboard")}>← 이전</Btn>
-        {step<steps.length-1 ? <Btn disabled={!canNext[step]} onClick={()=>setStep(s=>s+1)}>다음 →</Btn> : <Btn onClick={onFinish}>✓ 완료</Btn>}
+        {step<steps.length-1 ? <Btn disabled={!canNext[step]} onClick={()=>setStep(s=>s+1)}>다음 →</Btn> : <Btn onClick={onFinish}>{editing ? "✓ 수정 저장" : "✓ 완료"}</Btn>}
       </div>
     </div>
   );
@@ -1886,7 +1915,7 @@ function WbsScheduleView({ wbs }) {
   );
 }
 
-function ProjectDetail({ project, nav, onDelete }) {
+function ProjectDetail({ project, nav, onDelete, onEdit }) {
   const [tab, setTab] = useState("overview");
   const [confirmDelete, setConfirmDelete] = useState(false);
   if (!project) return <div style={{ padding:40, color:T.muted }}>프로젝트를 선택하세요.</div>;
@@ -1895,6 +1924,7 @@ function ProjectDetail({ project, nav, onDelete }) {
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
         <button onClick={()=>nav("dashboard")} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:20 }}>←</button>
         <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>{project.name}</h1><p style={{ fontSize:11, color:T.muted }}>{project.client} · {project.ossp?.label} · PM: {project.pm}</p></div>
+        <Btn variant="outline" onClick={()=>onEdit && onEdit(project)} style={{ fontSize:12, padding:"6px 10px" }}>✎ 수정</Btn>
         {confirmDelete
           ? <div style={{ display:"flex", gap:6 }}><Btn variant="danger" onClick={()=>onDelete(project.id)} style={{ fontSize:12, padding:"6px 10px" }}>삭제확인</Btn><Btn variant="ghost" onClick={()=>setConfirmDelete(false)} style={{ fontSize:12, padding:"6px 10px" }}>취소</Btn></div>
           : <Btn variant="ghost" onClick={()=>setConfirmDelete(true)} style={{ color:T.red, fontSize:12, padding:"6px 10px" }}>삭제</Btn>
