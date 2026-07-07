@@ -92,7 +92,9 @@ export function processKey(item) {
 }
 
 // 저장된 테일러링 상태(tailoring.process)와 가이드를 결합해 항목별 확정 상태를 계산
-// 반환: [{ ...item, key, mark, status("적용"|"변경적용"|"미적용"|"해당없음"), reason }]
+// 저장 모델: items[key] = { applied: bool(적용 여부), changed: bool(변경 여부), reason: string }
+// (구버전 { status: "적용"|"변경적용"|"미적용" } 저장분도 자동 변환)
+// 반환: [{ ...item, key, mark, applied, changed, status("적용"|"변경적용"|"미적용"|"해당없음"), reason }]
 export function resolveProcessTailoring(processState) {
   const level = processState?.level || "L3";
   const saved = processState?.items || {};
@@ -100,7 +102,15 @@ export function resolveProcessTailoring(processState) {
     const key = processKey(it);
     const mark = processMark(it, level);
     const s = saved[key] || {};
-    const status = mark === "-" ? "해당없음" : (s.status || "적용");
-    return { ...it, key, mark, status, reason: s.reason || "" };
+    let applied = s.applied, changed = s.changed;
+    if (applied === undefined && s.status) {           // 구버전 status 문자열 호환
+      applied = s.status !== "미적용";
+      changed = s.status === "변경적용";
+    }
+    if (applied === undefined) applied = true;         // 기본값: 적용
+    changed = !!changed && !!applied;                  // 변경 여부는 적용 상태에서만 유효
+    const na = mark === "-";
+    const status = na ? "해당없음" : (!applied ? "미적용" : (changed ? "변경적용" : "적용"));
+    return { ...it, key, mark, applied: na ? false : !!applied, changed, status, reason: s.reason || "" };
   });
 }
