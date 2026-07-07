@@ -288,15 +288,30 @@ export default function ProGenesis() {
   if (start > -1 && end > start) {
     try { return JSON.parse(cleaned.slice(start, end + 1)); } catch (_) {}
   }
-  // 2) 응답이 중간에 잘린 경우: 열린 괄호 수만큼 닫아 복구 시도
+  // 2) 응답이 중간에 잘린 경우: 문자열·배열·객체 상태를 추적해 순서대로 닫아 복구 시도
+  //    (예: {"reason":"요구사항이 ← 문자열이 열린 채 잘려도 복구 가능)
   if (start > -1) {
     const frag = cleaned.slice(start);
-    const opens = (frag.match(/{/g)||[]).length;
-    const closes = (frag.match(/}/g)||[]).length;
-    if (opens > closes) {
-      const repaired = frag.replace(/,\s*$/,"") + "}".repeat(opens - closes);
-      try { return JSON.parse(repaired); } catch (_) {}
+    let inStr = false, esc = false;
+    const stack = [];
+    for (const ch of frag) {
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+      } else {
+        if (ch === '"') inStr = true;
+        else if (ch === "{") stack.push("}");
+        else if (ch === "[") stack.push("]");
+        else if (ch === "}" || ch === "]") stack.pop();
+      }
     }
+    let repaired = frag;
+    if (inStr) repaired += '"';                    // 열린 문자열 닫기
+    repaired = repaired.replace(/,\s*$/, "");      // 끝에 남은 쉼표 제거
+    repaired = repaired.replace(/:\s*$/, ':""');   // 값 없이 끝난 키 보정
+    while (stack.length) repaired += stack.pop();  // 열린 배열/객체를 역순으로 닫기
+    try { return JSON.parse(repaired); } catch (_) {}
   }
   // 3) 그래도 실패하면 원문 앞부분을 포함해 원인 파악을 돕는다
   throw new Error("AI 응답을 JSON으로 해석할 수 없습니다. 응답 일부: " + cleaned.slice(0, 120));
