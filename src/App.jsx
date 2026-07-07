@@ -1623,7 +1623,7 @@ function countWorkdays(a, b, hol) {
   while (x <= b && g < 3700) { if (isWorkday(x, hol)) c++; x = addDaysStr(x, 1); g++; }
   return c;
 }
-// 전진 일정 재계산: 선행(FS) 종료 다음 근무일 → 시작일, 시작일+공수 → 종료일. 연쇄 전파.
+// 전진 일정 재계산: 선행(FS) 종료일 → 시작일(동일 날짜), 시작일+공수 → 종료일. 연쇄 전파.
 function recalcSchedule(tasks, holidays) {
   const all = []; tasks.forEach(t => (t.subtasks || []).forEach(s => all.push(s)));
   const byCode = {}; all.forEach(s => { byCode[s.wbsCode] = s; });
@@ -1632,13 +1632,15 @@ function recalcSchedule(tasks, holidays) {
     let changed = false;
     for (const s of all) {
       if (s.pred) {
+        // 선행(FS) 작업의 종료일을 그대로 시작일로 사용 (여러 개면 가장 늦은 종료일)
         const fins = String(s.pred).split(",").map(x => byCode[x.trim()]).filter(p => p && p.finish).map(p => p.finish);
         if (fins.length) {
-          const ns = nextWorkday(addDaysStr(fins.sort().slice(-1)[0], 1), holidays);
+          const ns = fins.sort().slice(-1)[0];
           if (s.start !== ns) { s.start = ns; changed = true; }
         }
       }
-      if (s.start && !isWorkday(s.start, holidays)) {
+      // 직접 입력한 시작일만 근무일로 스냅 (선행에서 온 시작일은 선행 종료일과 정확히 일치시킴)
+      if (!s.pred && s.start && !isWorkday(s.start, holidays)) {
         const ns = nextWorkday(s.start, holidays);
         if (ns !== s.start) { s.start = ns; changed = true; }
       }
@@ -1988,7 +1990,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
                 <div style={{ fontWeight: 700, color: T.text, marginBottom: 4 }}>일정 계산 규칙 (근무일 기준)</div>
                 <div>· 시작일 + 투입공수(근무일) → 종료일 자동 계산 (주말·공휴일 제외)</div>
                 <div>· 종료일을 직접 수정하면 투입공수를 역산</div>
-                <div>· 선행에 선행 WBS 코드 입력(쉼표 구분, FS 관계) → 선행 종료 다음 근무일로 시작일 자동 이동</div>
+                <div>· 선행에 선행 WBS 코드 입력(쉼표 구분) → 선행 작업의 종료일이 시작일로 자동 입력 (여러 개면 가장 늦은 종료일)</div>
                 <div>· 공휴일 변경 시 전체 일정 즉시 재계산</div>
                 {holidays.length > 0 && (
                   <div style={{ marginTop: 6 }}>
@@ -2346,9 +2348,9 @@ function makeWbsGanttXlsx(wbs, meta) {
       cells.push(cStr(r, 2, it.deliverable || "", S.txt));
       cells.push(cStr(r, 3, it.assignee || "", S.ctr));
       cells.push(cStr(r, 4, it.pred || "", S.ctr));
-      // F 시작일: 선행이 있으면 위쪽 행에서 종료일 조회 후 다음 근무일 (선행은 위쪽 행만 참조 — 순환 참조 방지)
+      // F 시작일: 선행이 있으면 위쪽 행에서 선행 종료일을 그대로 사용 (선행은 위쪽 행만 참조 — 순환 참조 방지)
       if (r > DATA_START) {
-        const f = `IF($E${r}="",${staticStart},IFERROR(WORKDAY(INDEX($G$${DATA_START}:$G$${r - 1},MATCH($E${r},$A$${DATA_START}:$A$${r - 1},0)),1,HolidayList),${staticStart}))`;
+        const f = `IF($E${r}="",${staticStart},IFERROR(INDEX($G$${DATA_START}:$G$${r - 1},MATCH($E${r},$A$${DATA_START}:$A$${r - 1},0)),${staticStart}))`;
         cells.push(cFml(r, 5, f, S.date));
       } else {
         cells.push(startFn ? cFml(r, 5, startFn, S.date) : cEmpty(r, 5, S.date));
@@ -2436,7 +2438,7 @@ function makeWbsGanttXlsx(wbs, meta) {
     ["   · D3 셀의 날짜를 바꾸면 간트 차트가 해당 날짜부터 표시됩니다.", false],
     ["3. 일정 자동 계산 (근무일 기준)", true],
     ["   · 시작일(F) + 공수(H) → 종료일(G) 자동 계산: 주말(토·일)과 공휴일 시트의 날짜를 제외합니다.", false],
-    ["   · 선행(E)에 선행 작업의 WBS 코드를 입력하면 시작일이 '선행 종료일 다음 근무일'로 자동 계산됩니다.", false],
+    ["   · 선행(E)에 선행 작업의 WBS 코드를 입력하면 선행 작업의 종료일이 시작일로 자동 입력됩니다.", false],
     ["   · 제약: 선행은 자신보다 위쪽 행의 작업만 참조할 수 있습니다 (순환 참조 방지). 쉼표로 여러 개를 입력하면 자동 계산 대신 저장된 날짜가 유지됩니다.", false],
     ["4. 진척률과 상태", true],
     ["   · 진척률(I)을 입력하면 막대 위에 진한 색으로 진척 구간이 표시됩니다 (0%~100%).", false],
