@@ -396,57 +396,52 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   async function generateDeliverables() {
     setGenerating(true); setGenError(null); setDeliverablesData(null);
     try {
-      // ── 산출물 목록은 테일러링 확정 결과에서 결정적으로 구성 (WBS와 동일 기준) ──
+      // ── WBS의 최하위 Task에 지정된 산출물을 그대로 수집 (단계별 카테고리, 단계 내 중복 제거) ──
+      // WBS 화면에서 직접 수정·추가한 산출물명까지 그대로 반영된다.
+      if (!wbsData?.tasks?.length) throw new Error("WBS가 없습니다. WBS 단계에서 먼저 WBS를 생성하세요.");
+
+      // 우선순위(필수/선택)·코드 매핑용 참조: 방법론 테일러링 확정 산출물 + 관리 프로세스 산출물
       const guide = getGuideForOSSP(selectedOSSP);
       const pdpNotes = tailoring.notes || {};
-      const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide)
+      const methodApplied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide)
         .filter(d => {
-          if (d.required) return true;   // 필수(M) 산출물은 항상 적용 (테일러링 대상 아님)
-          const ov = pdpNotes[`${d.phase}:${d.code}`]?.applied;   // PDP 화면에서 수정한 적용 여부 우선
+          if (d.required) return true;
+          const ov = pdpNotes[`${d.phase}:${d.code}`]?.applied;
           return ov !== undefined ? ov : !(tailoring.excluded||{})[d.code];
         });
-      const byPhase = {};
-      applied.forEach(d => { (byPhase[d.phase] = byPhase[d.phase] || []).push(d); });
-
-      // 관리 프로세스 산출물 — WBS와 동일하게 적용 확정 프로세스의 대표 산출물 (중복 제거)
+      const nameRef = new Map();   // 산출물명 → { code, required, mgmt }
+      methodApplied.forEach(d => { if (!nameRef.has(d.name)) nameRef.set(d.name, { code:d.code, required:d.required, mgmt:false }); });
       const firstOut = (outputs) => {
         const toks = String(outputs||"").split(/,|\s\/\s/).map(x=>x.trim()).filter(Boolean);
-        return toks.find(t => t.length >= 2 && t !== "예") || toks[0] || "";   // "예, ..." 같은 예시 접두 토큰 제외
+        return toks.find(t => t.length >= 2 && t !== "예") || toks[0] || "";
       };
-      const mgmtApplied = resolveProcessTailoring(tailoring.process).filter(r => r.applied);
-      const mgmtDocs = new Map();
-      mgmtApplied.forEach(r => {
-        const name = firstOut(r.outputs);
-        if (name && !mgmtDocs.has(name)) mgmtDocs.set(name, r);
+      resolveProcessTailoring(tailoring.process).filter(r => r.applied).forEach(r => {
+        const n = firstOut(r.outputs);
+        if (n && !nameRef.has(n)) nameRef.set(n, { code:null, required: r.mark === "●", mgmt:true });
       });
 
-      const PHASE_ICONS = ["📌","📋","🔧","🧪","🚀","🛠","📈","🧭","📦"];
-      const categories = [];
-      // 1) 관리 프로세스 (프로세스 테일러링 적용분)
-      if (mgmtDocs.size > 0) {
-        categories.push({
-          id: "mgmt", name: "관리 프로세스", icon: "🛡",
-          documents: [...mgmtDocs].map(([name, r], i) => ({
-            id: `pm${i+1}`, code: `PM${String(i+1).padStart(2,"0")}`, name,
-            purpose: `${r.area} · ${r.process}${r.activity ? ` › ${r.activity}` : ""} 수행 산출물`,
-            priority: r.mark === "●" ? "필수" : "선택",
-          })),
+      const PHASE_ICONS = ["🛡","📌","📋","🔧","🧪","🚀","🛠","📈","🧭","📦"];
+      let pmSeq = 0, dSeq = 0;
+      const categories = wbsData.tasks.map((t, ti) => {
+        const seen = new Set();
+        const documents = [];
+        (t.subtasks || []).forEach(s => {
+          const name = String(s.deliverable || "").trim();
+          if (!name || seen.has(name)) return;
+          seen.add(name);
+          const ref = nameRef.get(name);
+          const code = ref?.code || (ref?.mgmt ? `PM${String(++pmSeq).padStart(2,"0")}` : `D${String(++dSeq).padStart(2,"0")}`);
+          documents.push({
+            id: `${t.id}-${documents.length}`, code, name,
+            purpose: `${t.phase} 단계 산출물`,
+            priority: ref ? (ref.required ? "필수" : "선택") : "선택",
+          });
         });
-      }
-      // 2) 방법론 전 단계 산출물 (테일러링 확정분 전체 — WBS의 단계별 산출물과 동일)
-      guide.phaseOrder.filter(ph => byPhase[ph]?.length).forEach((ph, pi) => {
-        categories.push({
-          id: `ph${pi}`, name: ph, icon: PHASE_ICONS[pi % PHASE_ICONS.length],
-          documents: byPhase[ph].map(d => ({
-            id: d.code, code: d.code, name: d.name,
-            purpose: `${ph} 단계 산출물${d.note ? ` (${d.note})` : ""}`,
-            priority: d.required ? "필수" : "선택",
-          })),
-        });
-      });
+        return { id: t.id, name: t.phase, icon: PHASE_ICONS[ti % PHASE_ICONS.length], documents };
+      }).filter(c => c.documents.length > 0);
 
       const allDocs = categories.flatMap(c => c.documents);
-      if (allDocs.length === 0) throw new Error("적용 확정된 산출물이 없습니다. 테일러링 단계를 먼저 완료하세요.");
+      if (allDocs.length === 0) throw new Error("WBS에 산출물이 지정된 작업이 없습니다. WBS 단계의 산출물 열을 확인하세요.");
       const summary = {
         totalDocs: allDocs.length,
         mandatoryCount: allDocs.filter(d => d.priority === "필수").length,
@@ -2080,7 +2075,8 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
 }
 
 function StepDeliverables({ deliverablesData, generating, genError, onGenerate }) {
-  const [expandedCat, setExpandedCat] = useState(null);
+  const [expanded, setExpanded] = useState({});   // { 카테고리id: true } — 여러 카테고리 동시 펼침 유지
+  const toggleCat = (id) => setExpanded(m => ({ ...m, [id]: !m[id] }));
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
@@ -2106,12 +2102,12 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate }
           <div style={{ display:"flex", flexDirection:"column", gap:6, maxHeight:420, overflowY:"auto" }}>
             {deliverablesData.categories?.map(cat=>(
               <div key={cat.id} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", flexShrink:0 }}>
-                <div onClick={()=>setExpandedCat(expandedCat===cat.id?null:cat.id)} style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 12px", cursor:"pointer" }}>
+                <div onClick={()=>toggleCat(cat.id)} style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 12px", cursor:"pointer" }}>
                   <span>{cat.icon}</span>
                   <span style={{ fontWeight:600, fontSize:13, flex:1 }}>{cat.name}</span>
-                  <span style={{ fontSize:11, color:T.muted }}>{cat.documents?.length}건 {expandedCat===cat.id?"▲":"▼"}</span>
+                  <span style={{ fontSize:11, color:T.muted }}>{cat.documents?.length}건 {expanded[cat.id]?"▲":"▼"}</span>
                 </div>
-                {expandedCat===cat.id && cat.documents?.map(doc=>(
+                {expanded[cat.id] && cat.documents?.map(doc=>(
                   <div key={doc.id} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 12px", borderTop:`1px solid ${T.border}` }}>
                     <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
                     <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
