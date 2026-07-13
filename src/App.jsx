@@ -440,6 +440,23 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         return { id: t.id, name: t.phase, icon: PHASE_ICONS[ti % PHASE_ICONS.length], documents };
       }).filter(c => c.documents.length > 0);
 
+      // ── 테일러링결과서(PDP)는 프로젝트 계획수립 산출물에 항상 포함 (필수) ──
+      {
+        const PDP_DOC_NAME = "테일러링결과서";
+        let planCat = categories.find(c => c.name === "프로젝트 계획수립");
+        if (!planCat) {
+          planCat = { id: "cat-plan", name: "프로젝트 계획수립", icon: "📌", documents: [] };
+          categories.unshift(planCat);
+        }
+        if (!planCat.documents.some(d => d.name === PDP_DOC_NAME)) {
+          planCat.documents.unshift({
+            id: `${planCat.id}-pdp`, code: "PDP", name: PDP_DOC_NAME,
+            purpose: "OSSP를 테일러링가이드 기준으로 테일러링한 결과서",
+            priority: "필수(M)",
+          });
+        }
+      }
+
       const allDocs = categories.flatMap(c => c.documents);
       if (allDocs.length === 0) throw new Error("WBS에 산출물이 지정된 작업이 없습니다. WBS 단계의 산출물 열을 확인하세요.");
       const summary = {
