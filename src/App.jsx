@@ -2780,14 +2780,32 @@ function normDocName(s) {
   x = x.replace(/[\s_\-·.]/g, "");
   return x.toLowerCase();
 }
-const _osspTplCache = {};   // ossp_id → 산출물템플릿 파일 목록 (세션 캐시)
+const _osspTplCache = {};   // ossp_id(또는 "*"=전체) → 산출물템플릿 파일 목록 (세션 캐시)
 async function fetchOsspTemplates(osspId) {
-  if (_osspTplCache[osspId]) return _osspTplCache[osspId];
-  const res = await fetch(`/api/ossp-files?ossp_id=${osspId}`);
+  const key = osspId || "*";
+  if (_osspTplCache[key]) return _osspTplCache[key];
+  const res = await fetch(osspId ? `/api/ossp-files?ossp_id=${osspId}` : "/api/ossp-files");
   const data = await res.json();
   const list = (Array.isArray(data) ? data : []).filter(f => f.category === "산출물템플릿");
-  _osspTplCache[osspId] = list;
+  _osspTplCache[key] = list;
   return list;
+}
+// 위저드의 내장 OSSP는 하드코딩 id("waterfall" 등)라 DB UUID가 아님 → 이름으로 DB 행을 찾아 UUID 해석
+const _osspListCache = { list: null };
+async function resolveOsspDbId(ossp) {
+  if (!ossp) return null;
+  const id = String(ossp.id || "");
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return id;
+  try {
+    if (!_osspListCache.list) {
+      const res = await fetch("/api/ossp");
+      const data = await res.json();
+      _osspListCache.list = Array.isArray(data) ? data : [];
+    }
+    const name = ossp.label || ossp.name || "";
+    const row = _osspListCache.list.find(o => o.name === name);
+    return row?.id || null;
+  } catch (_) { return null; }
 }
 function findTemplateFor(docName, templates) {
   const target = normDocName(docName);
@@ -2818,9 +2836,14 @@ function isDynamicDoc(doc, wbs, ctx) {
 }
 // 산출물 1건 → 파일 결정: 특수 산출물 → OSSP 템플릿 실파일 → 스켈레톤 순
 async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
-  if (!isDynamicDoc(doc, wbs, ctx) && ctx?.ossp?.id) {
+  if (!isDynamicDoc(doc, wbs, ctx)) {
     try {
-      const tpl = findTemplateFor(doc.name, await fetchOsspTemplates(ctx.ossp.id));
+      // 1) 선택된 OSSP의 산출물템플릿에서 우선 매칭 (내장 OSSP는 이름 → DB UUID 해석)
+      let tpl = null;
+      const dbId = await resolveOsspDbId(ctx?.ossp);
+      if (dbId) tpl = findTemplateFor(doc.name, await fetchOsspTemplates(dbId));
+      // 2) 없으면 전체 OSSP 라이브러리의 산출물템플릿에서 폴백 매칭
+      if (!tpl) tpl = findTemplateFor(doc.name, await fetchOsspTemplates(null));
       if (tpl) {
         const bytes = await fetchTemplateBytes(tpl);
         if (bytes) {
