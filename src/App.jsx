@@ -1755,6 +1755,19 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
   const rowAllOn = (d) => leaves.length > 0 && leaves.every((_, li) => selected[selKey(d, li)]);
   const selectedCount = Object.values(selected).filter(Boolean).length;
 
+  // ── 공통: 시스템 구성요소로 분해하지 않고 산출물 1건으로 작성 (구성요소 선택과 상호배타) ──
+  const common = wbsSetup?.common || {};
+  const comKey = (d) => `${d.phase}|${d.code}`;
+  const toggleCommon = (d) => setWbsSetup(s => {
+    const com = { ...(s.common || {}) };
+    const k = `${d.phase}|${d.code}`;
+    com[k] = !com[k];
+    const sel = { ...(s.selected || {}) };
+    if (com[k]) leaves.forEach((_, li) => { delete sel[`${d.phase}|${d.code}|${li}`]; });
+    return { ...s, common: com, selected: sel };
+  });
+  const commonCount = Object.values(common).filter(Boolean).length;
+
   // ── 공휴일 토글: 설정 저장 + 기존 일정 즉시 재계산 ──
   const toggleHoliday = (ds) => {
     const nh = holidays.includes(ds) ? holidays.filter(x => x !== ds) : [...holidays, ds].sort();
@@ -1800,12 +1813,17 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
     }
     // 2) 단계별 산출물 작성 작업 (방법론 테일러링 × 시스템 구성요소 매트릭스)
     for (const ph of phases) {
-      const acts = fbsByPhase[ph].filter(d => leaves.some((_, li) => selected[selKey(d, li)]));
+      const acts = fbsByPhase[ph].filter(d => common[comKey(d)] || leaves.some((_, li) => selected[selKey(d, li)]));
       if (!acts.length) continue;
       a += 1; let b = 0;
       rows.push({ level: 1, wbsCode: `${a}`, name: ph, deliverable: "" });
       for (const d of acts) {
         b += 1;
+        if (common[comKey(d)]) {
+          // 공통: 시스템 구성요소 분해 없이 산출물 작성 1건으로 종료
+          rows.push({ level: 2, wbsCode: `${a}.${b}`, name: `${d.name} 작성`, deliverable: d.name });
+          continue;
+        }
         rows.push({ level: 2, wbsCode: `${a}.${b}`, name: `${d.name} 작성`, deliverable: "" });
         let c = 0, dd = 0, e = 0;
         const seenL1 = new Set(), seenL2 = new Set();
@@ -1886,8 +1904,8 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
       {/* 2. 단계별 산출물 × 시스템 구성요소 매트릭스 */}
       <div style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>② 단계별 산출물 × 시스템 구성요소 매트릭스 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· 선택 {selectedCount}칸</span></div>
-          <Btn onClick={buildWBS} disabled={selectedCount === 0 && mgmtItems.length === 0} style={{ fontSize: 12, padding: "6px 12px" }}>⚙ WBS 생성</Btn>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>② 단계별 산출물 × 시스템 구성요소 매트릭스 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· 선택 {selectedCount}칸{commonCount > 0 ? ` · 공통 ${commonCount}건` : ""}</span></div>
+          <Btn onClick={buildWBS} disabled={selectedCount === 0 && commonCount === 0 && mgmtItems.length === 0} style={{ fontSize: 12, padding: "6px 12px" }}>⚙ WBS 생성</Btn>
         </div>
         {leaves.length === 0 ? (
           <div style={{ fontSize: 11, color: T.muted, padding: "14px 12px", background: T.bg, border: `1px dashed ${T.border}`, borderRadius: 10 }}>
@@ -1901,6 +1919,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
                   <td style={{ ...th, textAlign: "left" }} rowSpan={3}>단계</td>
                   <td style={{ ...th, textAlign: "left", minWidth: 150 }} rowSpan={3}>단계별 산출물</td>
                   <td style={th} rowSpan={3}>전체</td>
+                  <td style={th} rowSpan={3}>공통</td>
                   {leaves.map((l, li) => <td key={"h1" + li} style={{ ...th, background: "#16233a" }}>{l.l1}</td>)}
                 </tr>
                 <tr>{leaves.map((l, li) => <td key={"h2" + li} style={th}>{l.l2 || "—"}</td>)}</tr>
@@ -1913,13 +1932,17 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
                       {i === 0 && <td style={{ ...cell, fontWeight: 600, verticalAlign: "top", whiteSpace: "nowrap" }} rowSpan={fbsByPhase[ph].length}>{ph}</td>}
                       <td style={{ ...cell, whiteSpace: "nowrap" }}><span style={{ color: T.muted, fontFamily: "monospace", fontSize: 9.5, marginRight: 5 }}>{d.code}</span>{d.name}</td>
                       <td style={{ ...cell, textAlign: "center" }}>
-                        <input type="checkbox" checked={rowAllOn(d)} onChange={e => setRowAll(d, e.target.checked)} style={{ width: 12, height: 12, cursor: "pointer" }} />
+                        <input type="checkbox" checked={rowAllOn(d)} disabled={!!common[comKey(d)]} onChange={e => setRowAll(d, e.target.checked)} style={{ width: 12, height: 12, cursor: common[comKey(d)] ? "not-allowed" : "pointer", opacity: common[comKey(d)] ? 0.35 : 1 }} />
+                      </td>
+                      <td style={{ ...cell, textAlign: "center", background: common[comKey(d)] ? T.accentDim : "transparent" }}>
+                        <input type="checkbox" checked={!!common[comKey(d)]} onChange={() => toggleCommon(d)} style={{ width: 12, height: 12, cursor: "pointer" }} />
                       </td>
                       {leaves.map((_, li) => {
+                        const isCom = !!common[comKey(d)];
                         const on = !!selected[selKey(d, li)];
                         return (
-                          <td key={li} onClick={() => toggleCell(d, li)}
-                            style={{ ...cell, textAlign: "center", cursor: "pointer", background: on ? T.accentDim : "transparent", color: on ? "#bfd4ff" : T.muted, userSelect: "none" }}>
+                          <td key={li} onClick={() => { if (!isCom) toggleCell(d, li); }}
+                            style={{ ...cell, textAlign: "center", cursor: isCom ? "not-allowed" : "pointer", background: on ? T.accentDim : "transparent", color: on ? "#bfd4ff" : T.muted, userSelect: "none", opacity: isCom ? 0.4 : 1 }}>
                             {on ? "●" : ""}
                           </td>
                         );
