@@ -2122,7 +2122,8 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
 // 파일(docx/xlsx/pptx = OOXML)로 생성해 단계별 폴더 구조의 ZIP으로 묶는다.
 // 형식 자동 배정: 매트릭스·대장·목록·백로그·체크리스트 등 표 성격 → xlsx,
 // 오리엔테이션·교육·데모 자료 → pptx, 그 외 계획서·정의서·보고서 → docx.
-// (1차: 스켈레톤 문서 / 2차: OSSP 라이브러리 산출물템플릿 실파일 매칭 예정)
+// OSSP 라이브러리 '산출물템플릿'에 이름이 일치하는 실파일이 있으면 그 파일을 사용,
+// 없으면 스켈레톤 문서를 생성한다 (WBS·테일러링결과서는 동적 실데이터 문서가 우선).
 // ═══════════════════════════════════════════════════════════════════
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -2767,6 +2768,71 @@ function wbsXlsxRows(wbs, meta) {
   return rows;
 }
 
+// ── OSSP 라이브러리 산출물템플릿 매칭 ─────────────────────────
+// 템플릿 파일명 정규화: 폴더 경로·확장자·버전 표기(_v2.0 등)·선두 코드(RD1202 - 등)·괄호·구분자 제거
+function normDocName(s) {
+  let x = String(s || "");
+  x = x.split("/").pop();
+  x = x.replace(/\.[A-Za-z0-9]+$/, "");
+  x = x.replace(/[\s_\-]*v\d+([._\s]\d+)*$/i, "");
+  x = x.replace(/^[A-Za-z]{1,4}\d{3,5}\s*[-–—_.]?\s*/, "");
+  x = x.replace(/\(.*?\)/g, "");
+  x = x.replace(/[\s_\-·.]/g, "");
+  return x.toLowerCase();
+}
+const _osspTplCache = {};   // ossp_id → 산출물템플릿 파일 목록 (세션 캐시)
+async function fetchOsspTemplates(osspId) {
+  if (_osspTplCache[osspId]) return _osspTplCache[osspId];
+  const res = await fetch(`/api/ossp-files?ossp_id=${osspId}`);
+  const data = await res.json();
+  const list = (Array.isArray(data) ? data : []).filter(f => f.category === "산출물템플릿");
+  _osspTplCache[osspId] = list;
+  return list;
+}
+function findTemplateFor(docName, templates) {
+  const target = normDocName(docName);
+  if (!target) return null;
+  let exact = null, partial = null;
+  for (const f of templates) {
+    const t = normDocName(f.file_name);
+    if (!t) continue;
+    if (t === target) { exact = f; break; }
+    if (!partial && (t.includes(target) || target.includes(t))) partial = f;
+  }
+  return exact || partial;
+}
+async function fetchTemplateBytes(f) {
+  const res = await fetch(`/api/ossp-files?path=${encodeURIComponent(f.file_url)}&name=${encodeURIComponent(f.file_name)}`);
+  const data = await res.json();
+  if (!data?.url) return null;
+  const fileRes = await fetch(data.url);
+  if (!fileRes.ok) return null;
+  return new Uint8Array(await fileRes.arrayBuffer());
+}
+// 동적 실데이터로 생성해야 하는 특수 산출물 여부 (템플릿보다 우선)
+function isDynamicDoc(doc, wbs, ctx) {
+  const n = String(doc.name || "").replace(/\s/g, "");
+  if (n.toUpperCase() === "WBS" && wbs?.tasks?.length) return true;
+  if (n === "테일러링결과서" && ctx?.tailoring) return true;
+  return false;
+}
+// 산출물 1건 → 파일 결정: 특수 산출물 → OSSP 템플릿 실파일 → 스켈레톤 순
+async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
+  if (!isDynamicDoc(doc, wbs, ctx) && ctx?.ossp?.id) {
+    try {
+      const tpl = findTemplateFor(doc.name, await fetchOsspTemplates(ctx.ossp.id));
+      if (tpl) {
+        const bytes = await fetchTemplateBytes(tpl);
+        if (bytes) {
+          const ext = (String(tpl.file_name).split(".").pop() || "bin").toLowerCase();
+          return { ext, bytes };
+        }
+      }
+    } catch (_) { /* 템플릿 조회·다운로드 실패 시 스켈레톤 폴백 */ }
+  }
+  return officeFileForDoc(doc, catName, meta, wbs, ctx);
+}
+
 // 산출물 1건 → Office 파일 바이트 생성 (wbs: WBS 산출물에 일정 계획 원본을 담기 위한 전달)
 function officeFileForDoc(doc, catName, meta, wbs, ctx) {
   // 산출물명이 'WBS'면 스켈레톤 대신 ④ 일정 계획 전체를 담은 간트 워크북(수식·조건부 서식, 일/주 전환)을 생성
@@ -2809,15 +2875,18 @@ function officeFileForDoc(doc, catName, meta, wbs, ctx) {
 }
 
 // 산출물 1건만 개별 다운로드 (ZIP 내부와 동일한 파일명 규칙)
-function downloadSingleDeliverable(doc, catName, meta, wbs, ctx) {
+const OFFICE_MIME = {
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  doc: "application/msword", xls: "application/vnd.ms-excel", ppt: "application/vnd.ms-powerpoint",
+  pdf: "application/pdf", txt: "text/plain", zip: "application/zip",
+};
+async function downloadSingleDeliverable(doc, catName, meta, wbs, ctx) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
   const pi = prioInfo(doc.priority);
-  const of = officeFileForDoc(doc, catName, meta, wbs, ctx);
-  const mime = {
-    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  }[of.ext] || "application/octet-stream";
+  const of = await resolveDeliverableFile(doc, catName, meta, wbs, ctx);
+  const mime = OFFICE_MIME[of.ext] || "application/octet-stream";
   const codePart = sanitize(doc.code || "");
   const blob = new Blob([of.bytes], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -2828,22 +2897,23 @@ function downloadSingleDeliverable(doc, catName, meta, wbs, ctx) {
 }
 
 // 산출물 전체를 폴더 구조 ZIP으로 다운로드 (각 파일은 실제 Office 문서)
-function downloadDeliverablesZip(deliverables, meta, wbs, ctx) {
+async function downloadDeliverablesZip(deliverables, meta, wbs, ctx) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
   const cats = deliverables?.categories || [];
   const files = []; const manifest = [];
   let total = 0, mand = 0;
-  cats.forEach((cat, ci) => {
+  for (let ci = 0; ci < cats.length; ci++) {
+    const cat = cats[ci];
     const folder = `${String(ci + 1).padStart(2, "0")}_${sanitize(cat.name)}`;
-    (cat.documents || []).forEach(doc => {
+    for (const doc of (cat.documents || [])) {
       const pi = prioInfo(doc.priority);
-      const of = officeFileForDoc(doc, cat.name, meta, wbs, ctx);
+      const of = await resolveDeliverableFile(doc, cat.name, meta, wbs, ctx);
       const codePart = sanitize(doc.code || "");
       files.push({ path: `${folder}/[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`, content: of.bytes });
       manifest.push([folder, doc.code || "-", doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
       total += 1; if (pi.label === "필수(M)") mand += 1;
-    });
-  });
+    }
+  }
   files.unshift({ path: "00_산출물목록.xlsx", content: makeXlsx({ sheetName: "산출물목록", rows: [
     ["프로젝트", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
     ["생성일", new Date().toLocaleString("ko-KR")],
