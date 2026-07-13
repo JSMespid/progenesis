@@ -847,7 +847,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} onRecommendPBS={onRecommendPBS} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} />}
-        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} />}
+        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} pdpCtx={{ ossp:selectedOSSP, sdlc:selectedSDLC, tailoring, pdp:pdpData }} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} tailoring={tailoring} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
       <div style={{ display:"flex", justifyContent:"space-between" }}>
@@ -2193,12 +2193,108 @@ function makeDocx({ title, metaRows, purpose }) {
     docxP("(작성)") +
     docxP("3. 문서 이력", { bold: true, size: 26, spacingAfter: 160 }) +
     docxTable([["버전", "일자", "작성자", "변경 내용"], ["V0.1", new Date().toLocaleDateString("ko-KR"), "", "최초 작성 (ProGenesis 자동 생성)"]], -1);
+  return docxPackage(body);
+}
+// 본문(body XML) → docx 파일 바이트 (공통 패키징)
+function docxPackage(body) {
   const documentXml = XMLH + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
   return zipBytes([
     { path: "[Content_Types].xml", content: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
     { path: "_rels/.rels", content: XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
     { path: "word/document.xml", content: documentXml },
   ]);
+}
+
+// ── 테일러링결과서(PDP) 실문서 — PDP 화면(StepPDP)과 동일한 구성의 docx ──
+function makePdpDocx(meta, ctx) {
+  const ossp = ctx?.ossp || null;
+  const sdlc = ctx?.sdlc || null;
+  const tailoring = ctx?.tailoring || {};
+  const pdp = ctx?.pdp || {};
+  const guide = getGuideForOSSP(ossp);
+  const scale = tailoring.scale || "중형";
+  const method = tailoring.method || "UML";
+  const excluded = tailoring.excluded || {};
+  const notes = tailoring.notes || {};
+  const scaleLabel = guide.scaleOptions?.find(o => o.value === scale)?.label || scale;
+  const list = classifyDeliverables(scale, method, guide);
+  const isApplied = (d) => {
+    if (d.required) return true;
+    const ov = notes[`${d.phase}:${d.code}`]?.applied;
+    return ov !== undefined ? ov : !excluded[d.code];
+  };
+  const appliedCount = list.filter(isApplied).length;
+  const grouped = {};
+  list.forEach(d => { (grouped[d.phase] = grouped[d.phase] || []).push(d); });
+  const docNo = `PDP-${(meta.client || "").replace(/\s/g, "").slice(0, 4).toUpperCase() || "PRJ"}-${new Date().getFullYear()}`;
+  const today = new Date().toLocaleDateString("ko-KR");
+
+  const procState = tailoring.process || {};
+  const procLevel = procState.level || "L3";
+  const procApplicable = resolveProcessTailoring(procState).filter(r => r.status !== "해당없음");
+  const procByArea = {};
+  procApplicable.forEach(r => { (procByArea[r.area] = procByArea[r.area] || []).push(r); });
+
+  // 3. 산출물 테일러링 매트릭스 (화면과 동일 컬럼)
+  const delivRows = [["단계", "코드", "산출물", "구분", "적용 여부", "변경 여부", "테일러링 내역 및 사유"]];
+  (guide.phaseOrder || Object.keys(grouped)).filter(ph => grouped[ph]?.length).forEach(ph => {
+    grouped[ph].forEach((d, i) => {
+      const n = notes[`${d.phase}:${d.code}`] || {};
+      const on = isApplied(d);
+      delivRows.push([
+        i === 0 ? ph : "", d.code, d.name + (d.note ? ` (${d.note})` : ""),
+        d.required ? "필수" : "선택",
+        d.required ? "적용(고정)" : (on ? "적용" : "미적용"),
+        d.required ? "—" : (n.changed ? "변경" : "—"),
+        d.required ? "—" : (n.reason || ""),
+      ]);
+    });
+  });
+
+  // 4. 프로세스 테일러링 내역서 (화면과 동일 컬럼)
+  const procRows = [["프로세스 영역", "세부 프로세스", "구분", "적용 여부", "변경 여부", "테일러링 내역 및 사유"]];
+  Object.keys(procByArea).forEach(area => {
+    procByArea[area].forEach((r, i) => {
+      const req = r.mark === "●";
+      procRows.push([
+        i === 0 ? area : "",
+        (r.activity ? `${r.process} › ${r.activity}` : r.process) + (r.outputs ? ` — 산출물: ${r.outputs}` : ""),
+        req ? "필수" : "선택",
+        req ? "적용(고정)" : (r.applied ? "적용" : "미적용"),
+        req ? "—" : (r.applied && r.changed ? "변경" : "—"),
+        req || r.status === "적용" ? "—" : (r.reason || ""),
+      ]);
+    });
+  });
+
+  const objectives = pdp.overview?.objectives || [];
+  const body =
+    docxP("프로젝트 정의 프로세스 (PDP)", { bold: true, size: 36, spacingAfter: 60 }) +
+    docxP("테일러링결과서 · Tailoring Result", { size: 22, spacingAfter: 60 }) +
+    docxP(meta.name || "", { bold: true, size: 26, spacingAfter: 240 }) +
+    docxTable([
+      ["문서번호", docNo], ["버전", "V1.0"],
+      ["고객사", meta.client || "-"], ["작성일", today],
+      ["기준 OSSP", ossp?.label || "-"], ["SDLC", sdlc?.label || "-"],
+    ], 1) +
+    docxP("1. 프로젝트 개요", { bold: true, size: 26, spacingAfter: 160 }) +
+    docxP(pdp.overview?.purpose || "(미작성 — PDP 단계에서 생성)") +
+    (pdp.overview?.scope ? docxP("범위: " + pdp.overview.scope) : "") +
+    objectives.map(o => docxP("▸ " + o, { spacingAfter: 60 })).join("") +
+    docxP("2. 테일러링 기준", { bold: true, size: 26, spacingAfter: 160 }) +
+    docxTable([
+      ["적용 가이드", guide.title || "-"],
+      ["프로젝트 규모", scaleLabel],
+      ["설계방식", guide.hasDesignMethod ? method : "해당 없음"],
+      ["규모 판정 기준", (guide.sizeNote || "").replace(/^※\s*/, "")],
+    ], 1) +
+    docxP(`3. 산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
+    docxP("※ 필수(M) 산출물은 항상 적용되며 수정할 수 없습니다. 선택(O) 산출물은 테일러링 결과에 따라 적용 여부·변경 여부·사유를 기록합니다.", { size: 18, spacingAfter: 100 }) +
+    docxTable(delivRows, -1) +
+    docxP(`4. 프로세스 테일러링 내역서 (적용 등급 ${procLevel} · 적용대상 ${procApplicable.length}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
+    docxP("※ 필수(●) 프로세스는 항상 적용되며 수정할 수 없습니다.", { size: 18, spacingAfter: 100 }) +
+    docxTable(procRows, -1);
+  return docxPackage(body);
 }
 
 // ── XLSX ─────────────────────────────────────────────────────
@@ -2672,10 +2768,14 @@ function wbsXlsxRows(wbs, meta) {
 }
 
 // 산출물 1건 → Office 파일 바이트 생성 (wbs: WBS 산출물에 일정 계획 원본을 담기 위한 전달)
-function officeFileForDoc(doc, catName, meta, wbs) {
+function officeFileForDoc(doc, catName, meta, wbs, ctx) {
   // 산출물명이 'WBS'면 스켈레톤 대신 ④ 일정 계획 전체를 담은 간트 워크북(수식·조건부 서식, 일/주 전환)을 생성
   if (String(doc.name||"").replace(/\s/g,"").toUpperCase() === "WBS" && wbs?.tasks?.length) {
     return { ext: "xlsx", bytes: makeWbsGanttXlsx(wbs, meta) };
+  }
+  // 산출물명이 '테일러링결과서'면 스켈레톤 대신 PDP 화면과 동일한 구성의 실제 문서를 생성
+  if (String(doc.name||"").replace(/\s/g,"") === "테일러링결과서" && ctx?.tailoring) {
+    return { ext: "docx", bytes: makePdpDocx(meta, ctx) };
   }
   const fmt = pickOfficeFormat(doc.name);
   const today = new Date().toLocaleDateString("ko-KR");
@@ -2709,10 +2809,10 @@ function officeFileForDoc(doc, catName, meta, wbs) {
 }
 
 // 산출물 1건만 개별 다운로드 (ZIP 내부와 동일한 파일명 규칙)
-function downloadSingleDeliverable(doc, catName, meta, wbs) {
+function downloadSingleDeliverable(doc, catName, meta, wbs, ctx) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
   const pi = prioInfo(doc.priority);
-  const of = officeFileForDoc(doc, catName, meta, wbs);
+  const of = officeFileForDoc(doc, catName, meta, wbs, ctx);
   const mime = {
     docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2728,7 +2828,7 @@ function downloadSingleDeliverable(doc, catName, meta, wbs) {
 }
 
 // 산출물 전체를 폴더 구조 ZIP으로 다운로드 (각 파일은 실제 Office 문서)
-function downloadDeliverablesZip(deliverables, meta, wbs) {
+function downloadDeliverablesZip(deliverables, meta, wbs, ctx) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
   const cats = deliverables?.categories || [];
   const files = []; const manifest = [];
@@ -2737,7 +2837,7 @@ function downloadDeliverablesZip(deliverables, meta, wbs) {
     const folder = `${String(ci + 1).padStart(2, "0")}_${sanitize(cat.name)}`;
     (cat.documents || []).forEach(doc => {
       const pi = prioInfo(doc.priority);
-      const of = officeFileForDoc(doc, cat.name, meta, wbs);
+      const of = officeFileForDoc(doc, cat.name, meta, wbs, ctx);
       const codePart = sanitize(doc.code || "");
       files.push({ path: `${folder}/[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`, content: of.bytes });
       manifest.push([folder, doc.code || "-", doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
@@ -2759,7 +2859,7 @@ function downloadDeliverablesZip(deliverables, meta, wbs) {
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
-function StepDeliverables({ deliverablesData, generating, genError, onGenerate, form, wbs }) {
+function StepDeliverables({ deliverablesData, generating, genError, onGenerate, form, wbs, pdpCtx }) {
   const [expanded, setExpanded] = useState({});   // { 카테고리id: true } — 여러 카테고리 동시 펼침 유지
   const toggleCat = (id) => setExpanded(m => ({ ...m, [id]: !m[id] }));
   const total = deliverablesData?.summary?.totalDocs || 0;
@@ -2777,7 +2877,7 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate, 
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
             <Badge color={T.green}>✓ 산출물 생성 완료</Badge>
             <div style={{ display:"flex", gap:6 }}>
-              <Btn onClick={()=>downloadDeliverablesZip(deliverablesData, form||{}, wbs)} style={{ fontSize:11, padding:"4px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
+              <Btn onClick={()=>downloadDeliverablesZip(deliverablesData, form||{}, wbs, pdpCtx)} style={{ fontSize:11, padding:"4px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
               <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
             </div>
           </div>
@@ -2808,7 +2908,7 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate, 
                     <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
                     <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
                     <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
-                    <button onClick={()=>downloadSingleDeliverable(doc, cat.name, form||{}, wbs)} title="이 산출물만 다운로드"
+                    <button onClick={()=>downloadSingleDeliverable(doc, cat.name, form||{}, wbs, pdpCtx)} title="이 산출물만 다운로드"
                       style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
                   </div>
                 ))}
@@ -3070,6 +3170,8 @@ function WbsScheduleView({ wbs }) {
 
 function ProjectDetail({ project, nav, onDelete, onEdit }) {
   const [tab, setTab] = useState("overview");
+  // 테일러링결과서 실문서 생성용 컨텍스트 (SDLC는 tailoring JSON에 함께 저장됨)
+  const pdpCtx = { ossp:project.ossp||null, sdlc:project.tailoring?.sdlc||null, tailoring:project.tailoring||null, pdp:project.pdp||null };
   const [confirmDelete, setConfirmDelete] = useState(false);
   if (!project) return <div style={{ padding:40, color:T.muted }}>프로젝트를 선택하세요.</div>;
   return (
@@ -3103,7 +3205,7 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
       {tab==="deliverables" && project.deliverables && (
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
           <div style={{ display:"flex", justifyContent:"flex-end" }}>
-            <Btn onClick={()=>downloadDeliverablesZip(project.deliverables, project, project.wbs)} style={{ fontSize:11, padding:"5px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
+            <Btn onClick={()=>downloadDeliverablesZip(project.deliverables, project, project.wbs, pdpCtx)} style={{ fontSize:11, padding:"5px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
           </div>
           <div style={{ display:"flex", gap:10 }}>
             {[{label:"전체",value:project.deliverables.summary?.totalDocs||0,color:T.accent},{label:"필수(M)",value:project.deliverables.summary?.mandatoryCount||0,color:T.red},{label:"선택(O)",value:(project.deliverables.summary?.totalDocs||0)-(project.deliverables.summary?.mandatoryCount||0),color:T.amber}].map(s=>(
@@ -3118,7 +3220,7 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
                   <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
                   <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
                   <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
-                  <button onClick={()=>downloadSingleDeliverable(doc, cat.name, project, project.wbs)} title="이 산출물만 다운로드"
+                  <button onClick={()=>downloadSingleDeliverable(doc, cat.name, project, project.wbs, pdpCtx)} title="이 산출물만 다운로드"
                     style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
                 </div>
               ))}
