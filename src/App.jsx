@@ -2957,9 +2957,14 @@ async function downloadSingleDeliverable(doc, catName, meta, wbs, ctx) {
 }
 
 // 산출물 전체를 폴더 구조 ZIP으로 다운로드 (각 파일은 실제 Office 문서)
-async function downloadDeliverablesZip(deliverables, meta, wbs, ctx) {
+// onProgress?: ({ percent, label }) => void — 건별 파일 생성 진행률 보고 (템플릿 조회·문서 생성이 오래 걸릴 수 있음)
+async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress) {
+  const report = (percent, label) => { try { onProgress && onProgress({ percent, label }); } catch (_) {} };
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
   const cats = deliverables?.categories || [];
+  const allCount = cats.reduce((n, c) => n + (c.documents?.length || 0), 0);
+  let done = 0;
+  report(2, `산출물 파일 생성 준비 중… (총 ${allCount}건)`);
   const files = []; const manifest = [];
   let total = 0, mand = 0;
   for (let ci = 0; ci < cats.length; ci++) {
@@ -2967,13 +2972,17 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx) {
     const folder = `${String(ci + 1).padStart(2, "0")}_${sanitize(cat.name)}`;
     for (const doc of (cat.documents || [])) {
       const pi = prioInfo(doc.priority);
+      // 2~92% 구간을 건수 비례로 배분 — 파일 하나 생성할 때마다 전진
+      report(2 + (done / Math.max(1, allCount)) * 90, `${doc.name} 생성 중… (${done + 1}/${allCount})`);
       const of = await resolveDeliverableFile(doc, cat.name, meta, wbs, ctx);
+      done += 1;
       const codePart = sanitize(doc.code || "");
       files.push({ path: `${folder}/[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`, content: of.bytes });
       manifest.push([folder, doc.code || "-", doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
       total += 1; if (pi.label === "필수(M)") mand += 1;
     }
   }
+  report(94, "산출물 목록 작성·ZIP 압축 중…");
   files.unshift({ path: "00_산출물목록.xlsx", content: makeXlsx({ sheetName: "산출물목록", rows: [
     ["프로젝트", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
     ["생성일", new Date().toLocaleString("ko-KR")],
@@ -2982,6 +2991,7 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx) {
     ...manifest,
   ] }) });
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
+  report(100, `ZIP 다운로드 시작 — 산출물 ${allCount}건`);
   const url = URL.createObjectURL(blob);
   const aEl = document.createElement("a");
   aEl.href = url; aEl.download = `${sanitize(meta.name) || "project"}_산출물.zip`;
@@ -2992,6 +3002,21 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx) {
 function StepDeliverables({ deliverablesData, generating, genProgress, genError, onGenerate, form, wbs, pdpCtx }) {
   const [expanded, setExpanded] = useState({});   // { 카테고리id: true } — 여러 카테고리 동시 펼침 유지
   const toggleCat = (id) => setExpanded(m => ({ ...m, [id]: !m[id] }));
+  const [zipProgress, setZipProgress] = useState(null);   // 전체 ZIP 다운로드 진행 상황
+  const [zipping, setZipping] = useState(false);
+  const [zipError, setZipError] = useState(null);
+  async function handleZipDownload() {
+    if (zipping) return;
+    setZipping(true); setZipError(null);
+    try {
+      await downloadDeliverablesZip(deliverablesData, form||{}, wbs, pdpCtx, setZipProgress);
+      setTimeout(() => setZipProgress(p => (p && p.percent >= 100 ? null : p)), 1500);
+    } catch (e) {
+      setZipProgress(null);
+      setZipError("ZIP 다운로드 실패: " + e.message);
+    }
+    setZipping(false);
+  }
   const total = deliverablesData?.summary?.totalDocs || 0;
   const mand = deliverablesData?.summary?.mandatoryCount || 0;
   return (
@@ -3011,10 +3036,16 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
             <Badge color={T.green}>✓ 산출물 생성 완료</Badge>
             <div style={{ display:"flex", gap:6 }}>
-              <Btn onClick={()=>downloadDeliverablesZip(deliverablesData, form||{}, wbs, pdpCtx)} style={{ fontSize:11, padding:"4px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
-              <Btn variant="outline" onClick={onGenerate} disabled={generating} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
+              <Btn onClick={handleZipDownload} disabled={zipping} style={{ fontSize:11, padding:"4px 12px" }}>{zipping ? "⏳ 생성 중…" : "⬇ 전체 ZIP 다운로드"}</Btn>
+              <Btn variant="outline" onClick={onGenerate} disabled={generating || zipping} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
             </div>
           </div>
+          {(zipping || zipProgress) && (
+            <GenProgressBar
+              progress={zipProgress || { percent: 2, label: "ZIP 생성 준비 중…" }}
+              subText="산출물별 템플릿 조회·문서 생성 후 ZIP으로 압축합니다. 건수가 많으면 시간이 걸릴 수 있습니다." />
+          )}
+          {zipError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9, marginBottom:12 }}>{zipError}</div>}
           {deliverablesData.summary?.source !== "wbs" && (
             <div style={{ fontSize:11, color:T.amber, padding:"8px 12px", background:T.amber+"11", border:`1px solid ${T.amber}44`, borderRadius:8, marginBottom:12, display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
               <span>⚠ 이전 버전에서 생성된 결과입니다. WBS의 모든 산출물을 반영하려면 재생성하세요.</span>
@@ -3307,6 +3338,21 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
   // 테일러링결과서 실문서 생성용 컨텍스트 (SDLC는 tailoring JSON에 함께 저장됨)
   const pdpCtx = { ossp:project.ossp||null, sdlc:project.tailoring?.sdlc||null, tailoring:project.tailoring||null, pdp:project.pdp||null };
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [zipProgress, setZipProgress] = useState(null);   // 전체 ZIP 다운로드 진행 상황
+  const [zipping, setZipping] = useState(false);
+  const [zipError, setZipError] = useState(null);
+  async function handleZipDownload() {
+    if (zipping) return;
+    setZipping(true); setZipError(null);
+    try {
+      await downloadDeliverablesZip(project.deliverables, project, project.wbs, pdpCtx, setZipProgress);
+      setTimeout(() => setZipProgress(p => (p && p.percent >= 100 ? null : p)), 1500);
+    } catch (e) {
+      setZipProgress(null);
+      setZipError("ZIP 다운로드 실패: " + e.message);
+    }
+    setZipping(false);
+  }
   if (!project) return <div style={{ padding:40, color:T.muted }}>프로젝트를 선택하세요.</div>;
   return (
     <div style={{ padding:"16px", maxWidth:1000, margin:"0 auto" }}>
@@ -3339,8 +3385,14 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
       {tab==="deliverables" && project.deliverables && (
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
           <div style={{ display:"flex", justifyContent:"flex-end" }}>
-            <Btn onClick={()=>downloadDeliverablesZip(project.deliverables, project, project.wbs, pdpCtx)} style={{ fontSize:11, padding:"5px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
+            <Btn onClick={handleZipDownload} disabled={zipping} style={{ fontSize:11, padding:"5px 12px" }}>{zipping ? "⏳ 생성 중…" : "⬇ 전체 ZIP 다운로드"}</Btn>
           </div>
+          {(zipping || zipProgress) && (
+            <GenProgressBar
+              progress={zipProgress || { percent: 2, label: "ZIP 생성 준비 중…" }}
+              subText="산출물별 템플릿 조회·문서 생성 후 ZIP으로 압축합니다. 건수가 많으면 시간이 걸릴 수 있습니다." />
+          )}
+          {zipError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9 }}>{zipError}</div>}
           <div style={{ display:"flex", gap:10 }}>
             {[{label:"전체",value:project.deliverables.summary?.totalDocs||0,color:T.accent},{label:"필수(M)",value:project.deliverables.summary?.mandatoryCount||0,color:T.red},{label:"선택(O)",value:(project.deliverables.summary?.totalDocs||0)-(project.deliverables.summary?.mandatoryCount||0),color:T.amber}].map(s=>(
               <Card key={s.label} style={{ flex:1, padding:"12px 14px", textAlign:"center" }}><div style={{ fontSize:10, color:T.muted, marginBottom:3 }}>{s.label}</div><div style={{ fontSize:20, fontWeight:700, color:s.color }}>{s.value}</div></Card>
