@@ -72,6 +72,28 @@ function Spinner({ text="AI 생성 중…" }) {
   );
 }
 
+// 생성 진행 상황 표시 — 단계 라벨 + 퍼센트 바 (AI 호출처럼 오래 걸리는 작업용)
+function GenProgressBar({ progress, subText }) {
+  if (!progress) return null;
+  const pct = Math.min(100, Math.round(progress.percent || 0));
+  const done = pct >= 100;
+  return (
+    <div style={{ padding:"14px 16px", background:T.bg, border:`1px solid ${done ? T.green+"55" : T.border}`, borderRadius:10, marginBottom:12, animation:"fadeIn .3s" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:10 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, fontWeight:600, color: done ? T.green : T.text, minWidth:0 }}>
+          {!done && <div style={{ width:14, height:14, border:`2px solid ${T.border}`, borderTop:`2px solid ${T.accent}`, borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />}
+          <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{done ? "✓ " : ""}{progress.label}</span>
+        </div>
+        <div style={{ fontSize:13, fontWeight:700, color: done ? T.green : T.accent, fontFamily:"monospace", flexShrink:0 }}>{pct}%</div>
+      </div>
+      <div style={{ height:8, background:T.border, borderRadius:99, overflow:"hidden" }}>
+        <div style={{ height:"100%", width:`${pct}%`, background: done ? T.green : T.accent, borderRadius:99, transition:"width .4s ease" }} />
+      </div>
+      {subText && !done && <div style={{ fontSize:10, color:T.muted, marginTop:6 }}>{subText}</div>}
+    </div>
+  );
+}
+
 const OSSP_OPTIONS = [
   { id:"waterfall", label:"Waterfall", desc:"전통적 순차 개발", phases:["요구분석","설계","구현","테스트","배포","유지보수"] },
   { id:"agile", label:"Agile/Scrum", desc:"반복·점진적 개발", phases:["스프린트 계획","백로그 관리","개발","리뷰","회고","릴리즈"] },
@@ -196,6 +218,7 @@ export default function ProGenesis() {
   const [deliverablesData, setDeliverablesData] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
+  const [genProgress, setGenProgress] = useState(null);   // 산출물 생성 진행 상황: { percent, label }
   const [editingId, setEditingId] = useState(null);   // 완료된 프로젝트 수정 모드: 수정 대상 프로젝트 id
 
   const nav = (p) => { setPage(p); setGenError(null); setMenuOpen(false); };
@@ -395,6 +418,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
 
   async function generateDeliverables() {
     setGenerating(true); setGenError(null); setDeliverablesData(null);
+    setGenProgress({ percent: 5, label: "WBS 산출물 수집 중…" });
+    let progTimer = null;   // AI 호출 중 진행률을 점진 증가시키는 타이머
     try {
       // ── WBS의 최하위 Task에 지정된 산출물을 그대로 수집 (단계별 카테고리, 단계 내 중복 제거) ──
       // WBS 화면에서 직접 수정·추가한 산출물명까지 그대로 반영된다.
@@ -466,6 +491,11 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       };
 
       // ── AI는 각 문서의 목적 설명(1문장)만 작성 — 실패해도 목록은 유지 ──
+      // AI 호출은 응답 시점을 알 수 없으므로 90%까지 점진적으로 차오르게 표시
+      setGenProgress({ percent: 30, label: `AI가 산출물 ${allDocs.length}건의 목적 설명 작성 중…` });
+      progTimer = setInterval(() => {
+        setGenProgress(p => (p && p.percent < 90) ? { ...p, percent: Math.min(90, p.percent + Math.max(0.4, (90 - p.percent) * 0.05)) } : p);
+      }, 400);
       try {
         const result = await callClaude(`당신은 PMBOK 8판에 정통한 품질보증(QA) 전문가입니다. 아래 SI 프로젝트 산출물 각각의 목적을 한국어 1문장(30자 이내)으로 작성하라.
 프로젝트: ${projectForm.name}, 고객사: ${projectForm.client}, OSSP: ${selectedOSSP?.label}, SDLC: ${selectedSDLC?.label||"미지정"}
@@ -476,8 +506,15 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
         }
       } catch (_) { /* 목적 생성 실패는 무시 — 기본 설명 유지 */ }
 
+      if (progTimer) { clearInterval(progTimer); progTimer = null; }
+      setGenProgress({ percent: 100, label: "산출물 생성 완료" });
       setDeliverablesData({ categories, summary });
-    } catch(e) { setGenError("산출물 생성 실패: "+e.message); }
+      setTimeout(() => setGenProgress(p => (p && p.percent >= 100 ? null : p)), 1500);
+    } catch(e) {
+      if (progTimer) { clearInterval(progTimer); progTimer = null; }
+      setGenProgress(null);
+      setGenError("산출물 생성 실패: "+e.message);
+    }
     setGenerating(false);
   }
 
@@ -584,7 +621,7 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
       draft={loadDraft()} onContinueDraft={()=>{ restoreDraft(); nav("new_project"); }} onDiscardDraft={()=>{ clearDraft(); setPage("dashboard"); }} />,
     new_project: <NewProjectWizard step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
-      pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError}
+      pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError} genProgress={genProgress}
       onGeneratePDP={generatePDP} onRecommendPBS={recommendPBS} setWbsData={setWbsData}
       wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} onGenerateDeliverables={generateDeliverables}
       onFinish={finishProject} nav={nav} customOSSP={customOSSP}
@@ -771,7 +808,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
   const steps = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   const canNext = [
     form.name&&form.client&&form.startDate&&form.endDate&&form.pm,  // 0 기본정보
@@ -847,7 +884,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} onRecommendPBS={onRecommendPBS} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} />}
-        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} pdpCtx={{ ossp:selectedOSSP, sdlc:selectedSDLC, tailoring, pdp:pdpData }} />}
+        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genProgress={genProgress} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} pdpCtx={{ ossp:selectedOSSP, sdlc:selectedSDLC, tailoring, pdp:pdpData }} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} tailoring={tailoring} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
       <div style={{ display:"flex", justifyContent:"space-between" }}>
@@ -2952,7 +2989,7 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx) {
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
-function StepDeliverables({ deliverablesData, generating, genError, onGenerate, form, wbs, pdpCtx }) {
+function StepDeliverables({ deliverablesData, generating, genProgress, genError, onGenerate, form, wbs, pdpCtx }) {
   const [expanded, setExpanded] = useState({});   // { 카테고리id: true } — 여러 카테고리 동시 펼침 유지
   const toggleCat = (id) => setExpanded(m => ({ ...m, [id]: !m[id] }));
   const total = deliverablesData?.summary?.totalDocs || 0;
@@ -2963,7 +3000,11 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate, 
         <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>산출물 자동생성</h2><p style={{ fontSize:11, color:T.muted }}>WBS에 반영되는 모든 단계의 산출물 문서 패키지를 구성합니다 (관리 프로세스 + 방법론 전 단계).</p></div>
         {!deliverablesData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ AI 생성</Btn>}
       </div>
-      {generating && <Spinner />}
+      {(generating || genProgress) && (
+        <GenProgressBar
+          progress={genProgress || { percent: 5, label: "산출물 생성 준비 중…" }}
+          subText="AI 호출 상황에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />
+      )}
       {genError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9 }}>{genError}</div>}
       {deliverablesData && (
         <div style={{ animation:"fadeIn .4s" }}>
@@ -2971,7 +3012,7 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate, 
             <Badge color={T.green}>✓ 산출물 생성 완료</Badge>
             <div style={{ display:"flex", gap:6 }}>
               <Btn onClick={()=>downloadDeliverablesZip(deliverablesData, form||{}, wbs, pdpCtx)} style={{ fontSize:11, padding:"4px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
-              <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
+              <Btn variant="outline" onClick={onGenerate} disabled={generating} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
             </div>
           </div>
           {deliverablesData.summary?.source !== "wbs" && (
