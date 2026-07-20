@@ -72,6 +72,28 @@ function Spinner({ text="AI 생성 중…" }) {
   );
 }
 
+// 생성 진행 상황 표시 — 단계 라벨 + 퍼센트 바 (AI 호출처럼 오래 걸리는 작업용)
+function GenProgressBar({ progress, subText }) {
+  if (!progress) return null;
+  const pct = Math.min(100, Math.round(progress.percent || 0));
+  const done = pct >= 100;
+  return (
+    <div style={{ padding:"14px 16px", background:T.bg, border:`1px solid ${done ? T.green+"55" : T.border}`, borderRadius:10, marginBottom:12, animation:"fadeIn .3s" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, gap:10 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, fontWeight:600, color: done ? T.green : T.text, minWidth:0 }}>
+          {!done && <div style={{ width:14, height:14, border:`2px solid ${T.border}`, borderTop:`2px solid ${T.accent}`, borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />}
+          <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{done ? "✓ " : ""}{progress.label}</span>
+        </div>
+        <div style={{ fontSize:13, fontWeight:700, color: done ? T.green : T.accent, fontFamily:"monospace", flexShrink:0 }}>{pct}%</div>
+      </div>
+      <div style={{ height:8, background:T.border, borderRadius:99, overflow:"hidden" }}>
+        <div style={{ height:"100%", width:`${pct}%`, background: done ? T.green : T.accent, borderRadius:99, transition:"width .4s ease" }} />
+      </div>
+      {subText && !done && <div style={{ fontSize:10, color:T.muted, marginTop:6 }}>{subText}</div>}
+    </div>
+  );
+}
+
 const OSSP_OPTIONS = [
   { id:"waterfall", label:"Waterfall", desc:"전통적 순차 개발", phases:["요구분석","설계","구현","테스트","배포","유지보수"] },
   { id:"agile", label:"Agile/Scrum", desc:"반복·점진적 개발", phases:["스프린트 계획","백로그 관리","개발","리뷰","회고","릴리즈"] },
@@ -181,7 +203,7 @@ export default function ProGenesis() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
-  const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", startDate:"", endDate:"", pm:"" });
+  const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", startDate:"", endDate:"", pm:"", clientLogo:null, companyLogo:null });
   const [selectedOSSP, setSelectedOSSP] = useState(null);
   const [customOSSP, setCustomOSSP] = useState([]);
   const [builtinOSSP, setBuiltinOSSP] = useState([]);   // DB에 시딩된 기본 제공 방법론 (자산 업로드용 UUID 보유)
@@ -196,6 +218,7 @@ export default function ProGenesis() {
   const [deliverablesData, setDeliverablesData] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
+  const [genProgress, setGenProgress] = useState(null);   // 산출물 생성 진행 상황: { percent, label }
   const [editingId, setEditingId] = useState(null);   // 완료된 프로젝트 수정 모드: 수정 대상 프로젝트 id
 
   const nav = (p) => { setPage(p); setGenError(null); setMenuOpen(false); };
@@ -395,6 +418,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
 
   async function generateDeliverables() {
     setGenerating(true); setGenError(null); setDeliverablesData(null);
+    setGenProgress({ percent: 5, label: "WBS 산출물 수집 중…" });
+    let progTimer = null;   // AI 호출 중 진행률을 점진 증가시키는 타이머
     try {
       // ── WBS의 최하위 Task에 지정된 산출물을 그대로 수집 (단계별 카테고리, 단계 내 중복 제거) ──
       // WBS 화면에서 직접 수정·추가한 산출물명까지 그대로 반영된다.
@@ -420,19 +445,34 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         if (n && !nameRef.has(n)) nameRef.set(n, { code:null, required: r.mark === "●", mgmt:true });
       });
 
+      // ── 개수 대사(對査)용 집계 — 최하위 Task 1건 = 산출물 1건(1:1)이 원칙 ──
+      let leafTotal = 0, leafWithDeliv = 0, dupIncluded = 0, pdpInjected = false;
+      wbsData.tasks.forEach(t => (t.subtasks || []).forEach(s => {
+        leafTotal += 1;
+        if (String(s.deliverable || "").trim()) leafWithDeliv += 1;
+      }));
+
       const PHASE_ICONS = ["🛡","📌","📋","🔧","🧪","🚀","🛠","📈","🧭","📦"];
+      // 같은 산출물명은 같은 코드를 공유 (동일 문서 유형이 여러 Task에서 산출되는 경우)
       let pmSeq = 0, dSeq = 0;
+      const codeByName = new Map();
       const categories = wbsData.tasks.map((t, ti) => {
         const seen = new Set();
         const documents = [];
         (t.subtasks || []).forEach(s => {
           const name = String(s.deliverable || "").trim();
-          if (!name || seen.has(name)) return;
-          seen.add(name);
+          if (!name) return;   // 산출물 미지정 Task만 제외 — 지정된 Task는 중복이라도 전부 1:1 반영
+          if (seen.has(name)) dupIncluded += 1; else seen.add(name);
+          let code = codeByName.get(name);
+          if (!code) {
+            const ref = nameRef.get(name);
+            code = ref?.code || (ref?.mgmt ? `PM${String(++pmSeq).padStart(2,"0")}` : `D${String(++dSeq).padStart(2,"0")}`);
+            codeByName.set(name, code);
+          }
           const ref = nameRef.get(name);
-          const code = ref?.code || (ref?.mgmt ? `PM${String(++pmSeq).padStart(2,"0")}` : `D${String(++dSeq).padStart(2,"0")}`);
           documents.push({
             id: `${t.id}-${documents.length}`, code, name,
+            wbsNo: s.wbsCode || "", taskName: s.task || "",
             purpose: `${t.phase} 단계 산출물`,
             priority: ref ? (ref.required ? "필수(M)" : "선택(O)") : "선택(O)",
           });
@@ -449,6 +489,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
           categories.unshift(planCat);
         }
         if (!planCat.documents.some(d => d.name === PDP_DOC_NAME)) {
+          pdpInjected = true;
           planCat.documents.unshift({
             id: `${planCat.id}-pdp`, code: "PDP", name: PDP_DOC_NAME,
             purpose: "OSSP를 테일러링가이드 기준으로 테일러링한 결과서",
@@ -463,21 +504,35 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         totalDocs: allDocs.length,
         mandatoryCount: allDocs.filter(d => String(d.priority||"").startsWith("필수")).length,
         source: "wbs",   // WBS 기반 생성 마커 — 구버전 생성분과 구분
+        // 개수 대사 내역: 최하위 Task 수 → 산출물 지정(1:1 전부 반영) → PDP 추가 = totalDocs
+        recon: { leafTotal, leafWithDeliv, dupIncluded, pdpInjected },
       };
 
       // ── AI는 각 문서의 목적 설명(1문장)만 작성 — 실패해도 목록은 유지 ──
+      // AI 호출은 응답 시점을 알 수 없으므로 90%까지 점진적으로 차오르게 표시
+      setGenProgress({ percent: 30, label: `AI가 산출물 ${allDocs.length}건의 목적 설명 작성 중…` });
+      progTimer = setInterval(() => {
+        setGenProgress(p => (p && p.percent < 90) ? { ...p, percent: Math.min(90, p.percent + Math.max(0.4, (90 - p.percent) * 0.05)) } : p);
+      }, 400);
       try {
         const result = await callClaude(`당신은 PMBOK 8판에 정통한 품질보증(QA) 전문가입니다. 아래 SI 프로젝트 산출물 각각의 목적을 한국어 1문장(30자 이내)으로 작성하라.
 프로젝트: ${projectForm.name}, 고객사: ${projectForm.client}, OSSP: ${selectedOSSP?.label}, SDLC: ${selectedSDLC?.label||"미지정"}
-산출물 목록: ${allDocs.map(d => `${d.code} ${d.name}`).join(", ")}
+산출물 목록: ${[...new Map(allDocs.map(d => [d.code, d])).values()].map(d => `${d.code} ${d.name}`).join(", ")}
 JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 8000);
         if (result?.purposes) {
           allDocs.forEach(d => { if (result.purposes[d.code]) d.purpose = String(result.purposes[d.code]); });
         }
       } catch (_) { /* 목적 생성 실패는 무시 — 기본 설명 유지 */ }
 
+      if (progTimer) { clearInterval(progTimer); progTimer = null; }
+      setGenProgress({ percent: 100, label: "산출물 생성 완료" });
       setDeliverablesData({ categories, summary });
-    } catch(e) { setGenError("산출물 생성 실패: "+e.message); }
+      setTimeout(() => setGenProgress(p => (p && p.percent >= 100 ? null : p)), 1500);
+    } catch(e) {
+      if (progTimer) { clearInterval(progTimer); progTimer = null; }
+      setGenProgress(null);
+      setGenError("산출물 생성 실패: "+e.message);
+    }
     setGenerating(false);
   }
 
@@ -528,7 +583,8 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
   // 완료(저장)된 프로젝트를 위저드로 다시 열어 수정 — 저장된 데이터를 위저드 상태로 복원
   function editProject(p) {
     setEditingId(p.id);
-    setProjectForm({ name:p.name||"", client:p.client||"", type:p.type||"신규개발", startDate:p.startDate||"", endDate:p.endDate||"", pm:p.pm||"" });
+    setProjectForm({ name:p.name||"", client:p.client||"", type:p.type||"신규개발", startDate:p.startDate||"", endDate:p.endDate||"", pm:p.pm||"",
+      clientLogo:p.tailoring?.logos?.client||null, companyLogo:p.tailoring?.logos?.company||null });
     setSelectedOSSP(p.ossp||null);
     const t = p.tailoring || {};
     setSelectedSDLC(t.sdlc||null);
@@ -552,7 +608,8 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
       start_date:projectForm.startDate, end_date:projectForm.endDate, pm:projectForm.pm,
       status:"진행중", ossp:selectedOSSP,
       // sdlc 전용 컬럼 없이 tailoring(JSON)에 함께 보존 → DB 스키마 변경 불필요
-      tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors },
+      tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors,
+        logos:{ client:projectForm.clientLogo||null, company:projectForm.companyLogo||null } },
       pdp:pdpData, wbs:wbsData, deliverables:deliverablesData,
     };
     try {
@@ -584,7 +641,7 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
       draft={loadDraft()} onContinueDraft={()=>{ restoreDraft(); nav("new_project"); }} onDiscardDraft={()=>{ clearDraft(); setPage("dashboard"); }} />,
     new_project: <NewProjectWizard step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
-      pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError}
+      pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError} genProgress={genProgress}
       onGeneratePDP={generatePDP} onRecommendPBS={recommendPBS} setWbsData={setWbsData}
       wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} onGenerateDeliverables={generateDeliverables}
       onFinish={finishProject} nav={nav} customOSSP={customOSSP}
@@ -771,7 +828,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
   const steps = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   const canNext = [
     form.name&&form.client&&form.startDate&&form.endDate&&form.pm,  // 0 기본정보
@@ -847,7 +904,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} onRecommendPBS={onRecommendPBS} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} />}
-        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} pdpCtx={{ ossp:selectedOSSP, sdlc:selectedSDLC, tailoring, pdp:pdpData }} />}
+        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genProgress={genProgress} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} pdpCtx={{ ossp:selectedOSSP, sdlc:selectedSDLC, tailoring, pdp:pdpData }} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} tailoring={tailoring} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
       <div style={{ display:"flex", justifyContent:"space-between" }}>
@@ -860,6 +917,22 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
 
 function StepInfo({ form, setForm }) {
   const f = k => v => setForm(p=>({...p,[k]:v}));
+  // 로고 업로드: dataURL + 원본 크기(폭/높이) 저장 — docx 임베드 시 비율 유지에 사용
+  const readLogo = k => e => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 1024 * 1024) { alert("로고 이미지는 1MB 이하로 올려주세요."); return; }
+    const rd = new FileReader();
+    rd.onload = () => {
+      const dataUrl = rd.result;
+      const img = new Image();
+      img.onload = () => setForm(p => ({ ...p, [k]: { dataUrl, w: img.naturalWidth || 300, h: img.naturalHeight || 100 } }));
+      img.onerror = () => alert("이미지를 읽을 수 없습니다. PNG 또는 JPG 파일을 사용해 주세요.");
+      img.src = dataUrl;
+    };
+    rd.readAsDataURL(file);
+  };
   return (
     <div>
       <h2 style={{ fontSize:15, fontWeight:600, marginBottom:16 }}>프로젝트 기본 정보</h2>
@@ -870,6 +943,29 @@ function StepInfo({ form, setForm }) {
         <Input label="PM *" value={form.pm} onChange={f("pm")} placeholder="예: 홍길동" />
         <Input label="시작일 *" type="date" value={form.startDate} onChange={f("startDate")} />
         <Input label="종료일 *" type="date" value={form.endDate} onChange={f("endDate")} />
+        <div>
+          <div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>문서 로고</div>
+          <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>산출물 문서(docx)의 표지와 문서 정보 표에 삽입됩니다. (PNG/JPG · 1MB 이하)</div>
+          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+            {[["clientLogo","고객사 로고"],["companyLogo","우리회사 로고"]].map(([k,label])=>(
+              <div key={k} style={{ flex:1, minWidth:220, border:`1px dashed ${T.border}`, borderRadius:10, padding:12 }}>
+                <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>{label}</div>
+                {form[k]?.dataUrl ? (
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <img src={form[k].dataUrl} alt={label} style={{ height:34, maxWidth:170, objectFit:"contain", background:"#fff", borderRadius:6, padding:"2px 6px" }} />
+                    <button onClick={()=>setForm(p=>({ ...p, [k]:null }))}
+                      style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.red, cursor:"pointer", fontSize:11, padding:"4px 10px", fontFamily:"inherit" }}>제거</button>
+                  </div>
+                ) : (
+                  <label style={{ display:"inline-block", cursor:"pointer", fontSize:12, color:T.accent, border:`1px solid ${T.accent}`, borderRadius:8, padding:"6px 12px" }}>
+                    이미지 선택
+                    <input type="file" accept="image/png,image/jpeg" onChange={readLogo(k)} style={{ display:"none" }} />
+                  </label>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -2016,6 +2112,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>④ 일정 계획</div>
               <Badge color={T.green}>✓ {wbsData.tasks.reduce((n, t) => n + 1 + (t.subtasks?.length || 0), 0)}개 항목</Badge>
+              <Badge color={T.accent}>단계 {wbsData.tasks.length} · 최하위 Task {wbsData.tasks.reduce((n, t) => n + (t.subtasks?.length || 0), 0)}건 · 산출물 {wbsData.tasks.reduce((n, t) => n + (t.subtasks || []).filter(s => String(s.deliverable || "").trim()).length, 0)}건</Badge>
               {holidays.length > 0 && <Badge color={T.red}>공휴일 {holidays.length}일</Badge>}
             </div>
             <Btn variant="outline" onClick={() => setShowCal(v => !v)} style={{ fontSize: 11, padding: "4px 10px" }}>
@@ -2171,8 +2268,8 @@ const xesc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").r
 const XMLH = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
 
 // ── DOCX ─────────────────────────────────────────────────────
-function docxP(text, { bold = false, size = 22, spacingAfter = 120 } = {}) {
-  return `<w:p><w:pPr><w:spacing w:after="${spacingAfter}"/></w:pPr><w:r><w:rPr>${bold ? "<w:b/>" : ""}<w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr><w:t xml:space="preserve">${xesc(text)}</w:t></w:r></w:p>`;
+function docxP(text, { bold = false, italic = false, size = 22, spacingAfter = 120, align = "" } = {}) {
+  return `<w:p><w:pPr><w:spacing w:after="${spacingAfter}"/>${align ? `<w:jc w:val="${align}"/>` : ""}</w:pPr><w:r><w:rPr>${bold ? "<w:b/>" : ""}${italic ? "<w:i/>" : ""}<w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr><w:t xml:space="preserve">${xesc(text)}</w:t></w:r></w:p>`;
 }
 function docxTable(rows, headerCols = 0) {
   const borders = '<w:tblBorders><w:top w:val="single" w:sz="4" w:color="999999"/><w:left w:val="single" w:sz="4" w:color="999999"/><w:bottom w:val="single" w:sz="4" w:color="999999"/><w:right w:val="single" w:sz="4" w:color="999999"/><w:insideH w:val="single" w:sz="4" w:color="999999"/><w:insideV w:val="single" w:sz="4" w:color="999999"/></w:tblBorders>';
@@ -2184,7 +2281,124 @@ function docxTable(rows, headerCols = 0) {
   }).join("") + "</w:tr>").join("");
   return `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/>${borders}${cellMar}</w:tblPr>${trs}</w:tbl><w:p/>`;
 }
-function makeDocx({ title, metaRows, purpose }) {
+
+// dataURL(PNG/JPEG) → { ext, bytes } — 로고 임베드용
+function dataUrlToBytes(dataUrl) {
+  const m = /^data:(image\/(png|jpe?g));base64,(.*)$/i.exec(String(dataUrl || ""));
+  if (!m) return null;
+  const bin = atob(m[3]);
+  const b = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+  return { ext: m[2].toLowerCase() === "png" ? "png" : "jpeg", bytes: b };
+}
+// 인라인 이미지 run (cx/cy: EMU, 1cm = 360000)
+function docxImageRun(relId, cx, cy, id) {
+  return `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="${id}" name="Logo${id}"/><wp:cNvGraphicFramePr/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${id}" name="Logo${id}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+}
+// 서명 줄: 상단 가로선 + "작성자:      일자:" (첨부 양식의 서명란)
+function docxSignLine(label) {
+  return `<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="6" w:space="1" w:color="000000"/></w:pBdr><w:tabs><w:tab w:val="left" w:pos="4800"/></w:tabs><w:spacing w:before="240" w:after="300"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr><w:t xml:space="preserve">${xesc(label)}: </w:t></w:r><w:r><w:tab/></w:r><w:r><w:rPr><w:b/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr><w:t xml:space="preserve">일자: </w:t></w:r></w:p>`;
+}
+// 2페이지 상단 문서 정보 표: 좌측 로고(세로 병합) + 제목(가로 병합) + 프로젝트/단계/시스템/문서번호/작성자/작성일자
+function docxInfoHeaderTable({ logoXml, title, rows }) {
+  const borders = '<w:tblBorders><w:top w:val="single" w:sz="6" w:color="000000"/><w:left w:val="single" w:sz="6" w:color="000000"/><w:bottom w:val="single" w:sz="6" w:color="000000"/><w:right w:val="single" w:sz="6" w:color="000000"/><w:insideH w:val="single" w:sz="4" w:color="666666"/><w:insideV w:val="single" w:sz="4" w:color="666666"/></w:tblBorders>';
+  const cellMar = '<w:tblCellMar><w:top w:w="40" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="40" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar>';
+  const grid = [1700, 1300, 2200, 1300, 2526].map(w => `<w:gridCol w:w="${w}"/>`).join("");
+  const tc = (xml, { span, vmerge, shade, center, w } = {}) =>
+    `<w:tc><w:tcPr>${w ? `<w:tcW w:w="${w}" w:type="dxa"/>` : ""}${span ? `<w:gridSpan w:val="${span}"/>` : ""}${vmerge ? `<w:vMerge${vmerge === "restart" ? ' w:val="restart"' : ""}/>` : ""}${shade ? '<w:shd w:val="clear" w:fill="EFEFEF"/>' : ""}<w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="${center ? "center" : "left"}"/></w:pPr>${xml}</w:p></w:tc>`;
+  const txt = (t, { bold, size = 20 } = {}) => `<w:r><w:rPr>${bold ? "<w:b/>" : ""}<w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr><w:t xml:space="preserve">${xesc(t)}</w:t></w:r>`;
+  const r1 = `<w:tr><w:trPr><w:trHeight w:val="560"/></w:trPr>${tc(logoXml, { vmerge: "restart", center: true, w: 1700 })}${tc(txt(title, { bold: true, size: 32 }), { span: 4, center: true })}</w:tr>`;
+  const rs = rows.map(cs => `<w:tr>${tc("", { vmerge: true, w: 1700 })}${tc(txt(cs[0], { bold: true }), { shade: true, center: true, w: 1300 })}${tc(txt(cs[1]), { w: 2200 })}${tc(txt(cs[2], { bold: true }), { shade: true, center: true, w: 1300 })}${tc(txt(cs[3]), { w: 2526 })}</w:tr>`).join("");
+  return `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/>${borders}${cellMar}</w:tblPr><w:tblGrid>${grid}</w:tblGrid>${r1}${rs}</w:tbl><w:p/>`;
+}
+// 로고 소스 통일: 위저드는 form.clientLogo/companyLogo, 저장된 프로젝트는 tailoring.logos
+function getDocLogos(meta) {
+  const l = meta?.tailoring?.logos || {};
+  return { client: meta?.clientLogo || l.client || null, company: meta?.companyLogo || l.company || null };
+}
+function makeDocx({ title, metaRows, purpose, doc, catName, meta }) {
+  // ── 신규 양식 (doc·meta 전달 시): 표지 → 문서정보표·사용권한·제.개정 이력 → 본문 ──
+  if (doc && meta) {
+    const logos = getDocLogos(meta);
+    // 로고 미디어는 문서 전체(본문·머리말·꼬리말)에서 공유 — 파트별로 관계(relId)만 따로 부여
+    const media = [];
+    const regLogo = (logo, base) => {
+      const parsed = logo?.dataUrl ? dataUrlToBytes(logo.dataUrl) : null;
+      if (!parsed) return null;
+      const fileName = `${base}.${parsed.ext}`;
+      media.push({ fileName, bytes: parsed.bytes });
+      const ratio = (Number(logo.w) > 0 && Number(logo.h) > 0) ? Number(logo.w) / Number(logo.h) : 3;
+      return { fileName, ratio: Math.min(ratio, 8) };   // 최대 8:1 비율 제한
+    };
+    const cl = regLogo(logos.client, "logo_client");
+    const co = regLogo(logos.company, "logo_company");
+    // hEmu: 표시 높이(EMU, 1cm=360000) — 표지 0.9cm, 머리말·꼬리말 0.6cm
+    const mkRun = (info, relId, idNum, hEmu) => info ? docxImageRun(relId, Math.max(1, Math.round(hEmu * info.ratio)), hEmu, idNum) : "";
+    const clientRun = mkRun(cl, "rIdImg1", 1, 324000);
+    const companyRun = mkRun(co, "rIdImg2", 2, 324000);
+    const today = new Date().toISOString().slice(0, 10);
+    const pageBreak = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+    const rightImgP = run => `<w:p><w:pPr><w:jc w:val="right"/><w:spacing w:after="140"/></w:pPr>${run}</w:p>`;
+
+    // 1페이지: 표지 (우측 정렬)
+    const cover =
+      docxP("", { spacingAfter: 2600 }) +
+      docxP(title, { bold: true, size: 44, align: "right", spacingAfter: 500 }) +
+      docxP(meta.name || "{프로젝트 명}", { bold: true, italic: true, size: 32, align: "right", spacingAfter: 420 }) +
+      docxP(`문서번호 : ${doc.code || "-"}`, { size: 24, align: "right", spacingAfter: 420 }) +
+      docxP("Version 0.1", { bold: true, italic: true, size: 28, align: "right", spacingAfter: 260 }) +
+      docxP(today, { size: 20, align: "right", spacingAfter: 600 }) +
+      (clientRun ? rightImgP(clientRun) : docxP("고객사로고", { bold: true, size: 24, align: "right", spacingAfter: 140 })) +
+      (companyRun ? rightImgP(companyRun) : docxP("우리회사로고", { bold: true, size: 24, align: "right", spacingAfter: 140 })) +
+      pageBreak;
+
+    // 2페이지: 문서 정보 표 + 사용권한 + 제.개정 이력
+    const infoTable = docxInfoHeaderTable({
+      logoXml: mkRun(cl, "rIdImg1", 3, 324000) || `<w:r><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t>고객사로고</w:t></w:r>`,
+      title,
+      rows: [
+        ["프로젝트", meta.name || "", "단계", catName || ""],
+        ["시스템", meta.name || "", "문서번호", doc.code || "-"],
+        ["작성자", meta.pm || "", "작성일자", today],
+      ],
+    });
+    const usage =
+      docxP("사 용 권 한", { bold: true, size: 32, align: "center", spacingAfter: 320 }) +
+      docxP("본 문서에 대한 서명은 당사 내부에서 본 문서에 대하여 수행 및 유지관리의 책임이 있음을 인정하는 것임.", { size: 22, spacingAfter: 260 }) +
+      docxP("본 문서는 작성, 검토, 승인하여 승인된 원본을 보관한다.", { italic: true, size: 20, align: "center", spacingAfter: 260 }) +
+      docxSignLine("작성자") +
+      docxSignLine("검토자") +
+      docxP("본인은 서명으로써 본 문서가 당사의 업무활동 범위 내에서 사용될 것을 인가함.", { size: 22, spacingAfter: 260 }) +
+      docxSignLine("승인자");
+    const history =
+      docxP("제.개정 이력", { bold: true, size: 32, align: "center", spacingAfter: 260 }) +
+      docxTable([["버전", "변경일자", "제.개정 내용", "작성자"], ...Array.from({ length: 10 }, () => [" ", " ", " ", " "])], -1);
+
+    // 3페이지: 본문 스켈레톤
+    const bodyPage =
+      docxP("1. 목적", { bold: true, size: 26, spacingAfter: 160 }) +
+      docxP(purpose || "(작성)") +
+      docxP("2. 본문", { bold: true, size: 26, spacingAfter: 160 }) +
+      docxP("(작성)");
+
+    // ── 머리말(좌: 고객사로고 · 우: 우리회사로고) / 꼬리말(좌: 고객사로고 · 중앙: 쪽번호 · 우: 우리회사로고) ──
+    // 표지(1페이지)는 titlePg로 머리말·꼬리말 미표시 — 첨부 양식과 동일
+    const tabDefs = '<w:tabs><w:tab w:val="center" w:pos="4513"/><w:tab w:val="right" w:pos="9026"/></w:tabs>';
+    const smallTxt = t => `<w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="808080"/></w:rPr><w:t xml:space="preserve">${xesc(t)}</w:t></w:r>`;
+    const pageFld = '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>';
+    const hdrXml = `<w:p><w:pPr>${tabDefs}<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="999999"/></w:pBdr><w:spacing w:after="0"/></w:pPr>${mkRun(cl, "rIdH1", 1, 216000) || smallTxt("고객사로고")}<w:r><w:tab/></w:r><w:r><w:tab/></w:r>${mkRun(co, "rIdH2", 2, 216000) || smallTxt("우리회사로고")}</w:p>`;
+    const ftrXml = `<w:p><w:pPr>${tabDefs}<w:pBdr><w:top w:val="single" w:sz="4" w:space="1" w:color="999999"/></w:pBdr><w:spacing w:before="0" w:after="0"/></w:pPr>${mkRun(cl, "rIdF1", 1, 216000) || smallTxt("고객사로고")}<w:r><w:tab/></w:r>${pageFld}<w:r><w:tab/></w:r>${mkRun(co, "rIdF2", 2, 216000) || smallTxt("우리회사로고")}</w:p>`;
+
+    return docxPackage(cover + infoTable + usage + history + pageBreak + bodyPage, {
+      media,
+      bodyImages: [cl && { relId: "rIdImg1", fileName: cl.fileName }, co && { relId: "rIdImg2", fileName: co.fileName }].filter(Boolean),
+      header: { xml: hdrXml, images: [cl && { relId: "rIdH1", fileName: cl.fileName }, co && { relId: "rIdH2", fileName: co.fileName }].filter(Boolean) },
+      footer: { xml: ftrXml, images: [cl && { relId: "rIdF1", fileName: cl.fileName }, co && { relId: "rIdF2", fileName: co.fileName }].filter(Boolean) },
+      titlePg: true,
+    });
+  }
+
+  // ── 구 양식 (호환): doc·meta 미전달 호출부 ──
   const body =
     docxP(title, { bold: true, size: 36, spacingAfter: 240 }) +
     docxTable(metaRows, 1) +
@@ -2197,12 +2411,49 @@ function makeDocx({ title, metaRows, purpose }) {
   return docxPackage(body);
 }
 // 본문(body XML) → docx 파일 바이트 (공통 패키징)
-function docxPackage(body) {
-  const documentXml = XMLH + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
+// opts: { media:[{fileName,bytes}], bodyImages:[{relId,fileName}], header:{xml,images}, footer:{xml,images}, titlePg }
+// 하위 호환: opts 미전달 시 기존과 동일한 단순 문서 생성 (makePdpDocx 등)
+function docxPackage(body, opts = {}) {
+  const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"';
+  const media = opts.media || [];
+  const relXml = imgs => XMLH + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${(imgs || []).map(im => `<Relationship Id="${im.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${im.fileName}"/>`).join("")}</Relationships>`;
+  const files = [];
+  const overrides = ['<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'];
+  const docRelsExtra = [];
+  let sectExtra = "";
+  if (opts.header) {
+    files.push({ path: "word/header2.xml", content: XMLH + `<w:hdr ${NS}>${opts.header.xml}</w:hdr>` });
+    files.push({ path: "word/_rels/header2.xml.rels", content: relXml(opts.header.images) });
+    overrides.push('<Override PartName="/word/header2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>');
+    docRelsExtra.push('<Relationship Id="rIdHdr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header2.xml"/>');
+    sectExtra += '<w:headerReference w:type="default" r:id="rIdHdr"/>';
+  }
+  if (opts.footer) {
+    files.push({ path: "word/footer2.xml", content: XMLH + `<w:ftr ${NS}>${opts.footer.xml}</w:ftr>` });
+    files.push({ path: "word/_rels/footer2.xml.rels", content: relXml(opts.footer.images) });
+    overrides.push('<Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>');
+    docRelsExtra.push('<Relationship Id="rIdFtr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer2.xml"/>');
+    sectExtra += '<w:footerReference w:type="default" r:id="rIdFtr"/>';
+  }
+  if (opts.titlePg && (opts.header || opts.footer)) {
+    // 표지(첫 페이지)에는 머리말·꼬리말을 표시하지 않음 — 빈 first 파트로 대체
+    files.push({ path: "word/header1.xml", content: XMLH + `<w:hdr ${NS}><w:p/></w:hdr>` });
+    files.push({ path: "word/footer1.xml", content: XMLH + `<w:ftr ${NS}><w:p/></w:ftr>` });
+    overrides.push('<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>');
+    overrides.push('<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>');
+    docRelsExtra.push('<Relationship Id="rIdHdr1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>');
+    docRelsExtra.push('<Relationship Id="rIdFtr1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>');
+    sectExtra += '<w:headerReference w:type="first" r:id="rIdHdr1"/><w:footerReference w:type="first" r:id="rIdFtr1"/><w:titlePg/>';
+  }
+  const documentXml = XMLH + `<w:document ${NS}><w:body>${body}<w:sectPr>${sectExtra}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="567" w:footer="567"/></w:sectPr></w:body></w:document>`;
+  const docRels = XMLH + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${(opts.bodyImages || []).map(im => `<Relationship Id="${im.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${im.fileName}"/>`).join("")}${docRelsExtra.join("")}</Relationships>`;
   return zipBytes([
-    { path: "[Content_Types].xml", content: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
+    { path: "[Content_Types].xml", content: XMLH + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/>${overrides.join("")}</Types>` },
     { path: "_rels/.rels", content: XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
+    { path: "word/_rels/document.xml.rels", content: docRels },
     { path: "word/document.xml", content: documentXml },
+    ...files,
+    ...media.map(m => ({ path: `word/media/${m.fileName}`, content: m.bytes })),
   ]);
 }
 
@@ -2890,11 +3141,7 @@ function officeFileForDoc(doc, catName, meta, wbs, ctx) {
       `작성일: ${today} · V0.1 (초안)`,
     ] }) };
   }
-  return { ext: "docx", bytes: makeDocx({ title: doc.name, purpose: doc.purpose, metaRows: [
-    ["항목", "내용"], ["문서 코드", doc.code || "-"], ["단계/프로세스", catName], ["구분", prio],
-    ["프로젝트명", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
-    ["프로젝트 기간", period], ["작성일", today], ["버전", "V0.1 (초안)"],
-  ] }) };
+  return { ext: "docx", bytes: makeDocx({ title: doc.name, purpose: doc.purpose, doc, catName, meta }) };
 }
 
 // 산출물 1건만 개별 다운로드 (ZIP 내부와 동일한 파일명 규칙)
@@ -2911,18 +3158,24 @@ async function downloadSingleDeliverable(doc, catName, meta, wbs, ctx) {
   const of = await resolveDeliverableFile(doc, catName, meta, wbs, ctx);
   const mime = OFFICE_MIME[of.ext] || "application/octet-stream";
   const codePart = sanitize(doc.code || "");
+  const wbsPart = sanitize(doc.wbsNo || "");
   const blob = new Blob([of.bytes], { type: mime });
   const url = URL.createObjectURL(blob);
   const aEl = document.createElement("a");
-  aEl.href = url; aEl.download = `[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`;
+  aEl.href = url; aEl.download = `[${pi.label}] ${wbsPart ? wbsPart + "_" : ""}${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`;
   document.body.appendChild(aEl); aEl.click(); aEl.remove();
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
 // 산출물 전체를 폴더 구조 ZIP으로 다운로드 (각 파일은 실제 Office 문서)
-async function downloadDeliverablesZip(deliverables, meta, wbs, ctx) {
+// onProgress?: ({ percent, label }) => void — 건별 파일 생성 진행률 보고 (템플릿 조회·문서 생성이 오래 걸릴 수 있음)
+async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress) {
+  const report = (percent, label) => { try { onProgress && onProgress({ percent, label }); } catch (_) {} };
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
   const cats = deliverables?.categories || [];
+  const allCount = cats.reduce((n, c) => n + (c.documents?.length || 0), 0);
+  let done = 0;
+  report(2, `산출물 파일 생성 준비 중… (총 ${allCount}건)`);
   const files = []; const manifest = [];
   let total = 0, mand = 0;
   for (let ci = 0; ci < cats.length; ci++) {
@@ -2930,21 +3183,27 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx) {
     const folder = `${String(ci + 1).padStart(2, "0")}_${sanitize(cat.name)}`;
     for (const doc of (cat.documents || [])) {
       const pi = prioInfo(doc.priority);
+      // 2~92% 구간을 건수 비례로 배분 — 파일 하나 생성할 때마다 전진
+      report(2 + (done / Math.max(1, allCount)) * 90, `${doc.name} 생성 중… (${done + 1}/${allCount})`);
       const of = await resolveDeliverableFile(doc, cat.name, meta, wbs, ctx);
+      done += 1;
       const codePart = sanitize(doc.code || "");
-      files.push({ path: `${folder}/[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`, content: of.bytes });
-      manifest.push([folder, doc.code || "-", doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
+      const wbsPart = sanitize(doc.wbsNo || "");   // 동일 산출물명이 여러 Task에 있어도 WBS 번호로 파일명 구분
+      files.push({ path: `${folder}/[${pi.label}] ${wbsPart ? wbsPart + "_" : ""}${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`, content: of.bytes });
+      manifest.push([folder, doc.wbsNo || "-", doc.code || "-", doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
       total += 1; if (pi.label === "필수(M)") mand += 1;
     }
   }
+  report(94, "산출물 목록 작성·ZIP 압축 중…");
   files.unshift({ path: "00_산출물목록.xlsx", content: makeXlsx({ sheetName: "산출물목록", rows: [
     ["프로젝트", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
     ["생성일", new Date().toLocaleString("ko-KR")],
     ["전체", `${total}건 (필수(M) ${mand} · 선택(O) ${total - mand})`], [],
-    ["폴더", "코드", "산출물", "형식", "구분", "목적"],
+    ["폴더", "WBS", "코드", "산출물", "형식", "구분", "목적"],
     ...manifest,
   ] }) });
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
+  report(100, `ZIP 다운로드 시작 — 산출물 ${allCount}건`);
   const url = URL.createObjectURL(blob);
   const aEl = document.createElement("a");
   aEl.href = url; aEl.download = `${sanitize(meta.name) || "project"}_산출물.zip`;
@@ -2952,9 +3211,24 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx) {
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
-function StepDeliverables({ deliverablesData, generating, genError, onGenerate, form, wbs, pdpCtx }) {
+function StepDeliverables({ deliverablesData, generating, genProgress, genError, onGenerate, form, wbs, pdpCtx }) {
   const [expanded, setExpanded] = useState({});   // { 카테고리id: true } — 여러 카테고리 동시 펼침 유지
   const toggleCat = (id) => setExpanded(m => ({ ...m, [id]: !m[id] }));
+  const [zipProgress, setZipProgress] = useState(null);   // 전체 ZIP 다운로드 진행 상황
+  const [zipping, setZipping] = useState(false);
+  const [zipError, setZipError] = useState(null);
+  async function handleZipDownload() {
+    if (zipping) return;
+    setZipping(true); setZipError(null);
+    try {
+      await downloadDeliverablesZip(deliverablesData, form||{}, wbs, pdpCtx, setZipProgress);
+      setTimeout(() => setZipProgress(p => (p && p.percent >= 100 ? null : p)), 1500);
+    } catch (e) {
+      setZipProgress(null);
+      setZipError("ZIP 다운로드 실패: " + e.message);
+    }
+    setZipping(false);
+  }
   const total = deliverablesData?.summary?.totalDocs || 0;
   const mand = deliverablesData?.summary?.mandatoryCount || 0;
   return (
@@ -2963,24 +3237,34 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate, 
         <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>산출물 자동생성</h2><p style={{ fontSize:11, color:T.muted }}>WBS에 반영되는 모든 단계의 산출물 문서 패키지를 구성합니다 (관리 프로세스 + 방법론 전 단계).</p></div>
         {!deliverablesData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ AI 생성</Btn>}
       </div>
-      {generating && <Spinner />}
+      {(generating || genProgress) && (
+        <GenProgressBar
+          progress={genProgress || { percent: 5, label: "산출물 생성 준비 중…" }}
+          subText="AI 호출 상황에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />
+      )}
       {genError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9 }}>{genError}</div>}
       {deliverablesData && (
         <div style={{ animation:"fadeIn .4s" }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
             <Badge color={T.green}>✓ 산출물 생성 완료</Badge>
             <div style={{ display:"flex", gap:6 }}>
-              <Btn onClick={()=>downloadDeliverablesZip(deliverablesData, form||{}, wbs, pdpCtx)} style={{ fontSize:11, padding:"4px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
-              <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
+              <Btn onClick={handleZipDownload} disabled={zipping} style={{ fontSize:11, padding:"4px 12px" }}>{zipping ? "⏳ 생성 중…" : "⬇ 전체 ZIP 다운로드"}</Btn>
+              <Btn variant="outline" onClick={onGenerate} disabled={generating || zipping} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
             </div>
           </div>
+          {(zipping || zipProgress) && (
+            <GenProgressBar
+              progress={zipProgress || { percent: 2, label: "ZIP 생성 준비 중…" }}
+              subText="산출물별 템플릿 조회·문서 생성 후 ZIP으로 압축합니다. 건수가 많으면 시간이 걸릴 수 있습니다." />
+          )}
+          {zipError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9, marginBottom:12 }}>{zipError}</div>}
           {deliverablesData.summary?.source !== "wbs" && (
             <div style={{ fontSize:11, color:T.amber, padding:"8px 12px", background:T.amber+"11", border:`1px solid ${T.amber}44`, borderRadius:8, marginBottom:12, display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
               <span>⚠ 이전 버전에서 생성된 결과입니다. WBS의 모든 산출물을 반영하려면 재생성하세요.</span>
               <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:11, padding:"4px 12px" }}>지금 재생성</Btn>
             </div>
           )}
-          <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+          <div style={{ display:"flex", gap:8, marginBottom:8 }}>
             {[{label:"전체",value:total,color:T.accent},{label:"필수(M)",value:mand,color:T.red},{label:"선택(O)",value:total-mand,color:T.amber}].map(s=>(
               <div key={s.label} style={{ flex:1, padding:"8px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, textAlign:"center" }}>
                 <div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>{s.label}</div>
@@ -2988,6 +3272,15 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate, 
               </div>
             ))}
           </div>
+          {deliverablesData.summary?.recon && (() => { const r = deliverablesData.summary.recon; return (
+            <div style={{ fontSize:10.5, color:T.muted, padding:"7px 10px", background:T.bg, border:`1px dashed ${T.border}`, borderRadius:8, marginBottom:12, lineHeight:1.7 }}>
+              ℹ <b style={{ color:T.text }}>WBS 개수 대사</b> — 최하위 Task {r.leafTotal}건 중 산출물 지정 <b style={{ color:T.text }}>{r.leafWithDeliv}건</b> 전부 1:1 반영
+              {r.leafTotal - r.leafWithDeliv > 0 && <> (미지정 {r.leafTotal - r.leafWithDeliv}건 제외)</>}
+              {r.pdpInjected && <> + 테일러링결과서 <b style={{ color:T.text }}>1건</b>(필수 자동추가)</>}
+              {" "}= 전체 <b style={{ color:T.accent }}>{total}건</b>
+              {r.dupIncluded > 0 && <span style={{ color:T.muted }}> · 동일 산출물명 {r.dupIncluded}건 포함(WBS 번호로 구분)</span>}
+            </div>
+          ); })()}
           <div style={{ display:"flex", flexDirection:"column", gap:6, maxHeight:420, overflowY:"auto" }}>
             {deliverablesData.categories?.map(cat=>(
               <div key={cat.id} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", flexShrink:0 }}>
@@ -2998,8 +3291,9 @@ function StepDeliverables({ deliverablesData, generating, genError, onGenerate, 
                 </div>
                 {expanded[cat.id] && cat.documents?.map(doc=>(
                   <div key={doc.id} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 12px", borderTop:`1px solid ${T.border}` }}>
+                    {doc.wbsNo && <span style={{ fontFamily:"monospace", fontSize:9, color:T.muted, border:`1px solid ${T.border}`, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.wbsNo}</span>}
                     <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
-                    <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
+                    <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.taskName ? `${doc.taskName} — ` : ""}{doc.purpose}</div></div>
                     <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
                     <button onClick={()=>downloadSingleDeliverable(doc, cat.name, form||{}, wbs, pdpCtx)} title="이 산출물만 다운로드"
                       style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
@@ -3205,10 +3499,13 @@ function WbsScheduleView({ wbs }) {
     return { start:ss[0]||"", finish:ff.slice(-1)[0]||"", eff };
   };
   const total = wbs.tasks.reduce((n,t)=>n+1+(t.subtasks?.length||0),0);
+  const leafCount = wbs.tasks.reduce((n,t)=>n+(t.subtasks?.length||0),0);
+  const delivCount = wbs.tasks.reduce((n,t)=>n+(t.subtasks||[]).filter(s=>String(s.deliverable||"").trim()).length,0);
   return (
     <div>
       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, flexWrap:"wrap" }}>
         <Badge color={T.green}>WBS {total}개 항목</Badge>
+        <Badge color={T.accent}>단계 {wbs.tasks.length} · 최하위 Task {leafCount}건 · 산출물 {delivCount}건</Badge>
         {holidays.length > 0 && <Badge color={T.red}>공휴일 {holidays.length}일</Badge>}
         {holidays.length > 0 && <span style={{ fontSize:10, color:T.muted }}>{holidays.join(", ")}</span>}
       </div>
@@ -3266,6 +3563,21 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
   // 테일러링결과서 실문서 생성용 컨텍스트 (SDLC는 tailoring JSON에 함께 저장됨)
   const pdpCtx = { ossp:project.ossp||null, sdlc:project.tailoring?.sdlc||null, tailoring:project.tailoring||null, pdp:project.pdp||null };
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [zipProgress, setZipProgress] = useState(null);   // 전체 ZIP 다운로드 진행 상황
+  const [zipping, setZipping] = useState(false);
+  const [zipError, setZipError] = useState(null);
+  async function handleZipDownload() {
+    if (zipping) return;
+    setZipping(true); setZipError(null);
+    try {
+      await downloadDeliverablesZip(project.deliverables, project, project.wbs, pdpCtx, setZipProgress);
+      setTimeout(() => setZipProgress(p => (p && p.percent >= 100 ? null : p)), 1500);
+    } catch (e) {
+      setZipProgress(null);
+      setZipError("ZIP 다운로드 실패: " + e.message);
+    }
+    setZipping(false);
+  }
   if (!project) return <div style={{ padding:40, color:T.muted }}>프로젝트를 선택하세요.</div>;
   return (
     <div style={{ padding:"16px", maxWidth:1000, margin:"0 auto" }}>
@@ -3298,20 +3610,36 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
       {tab==="deliverables" && project.deliverables && (
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
           <div style={{ display:"flex", justifyContent:"flex-end" }}>
-            <Btn onClick={()=>downloadDeliverablesZip(project.deliverables, project, project.wbs, pdpCtx)} style={{ fontSize:11, padding:"5px 12px" }}>⬇ 전체 ZIP 다운로드</Btn>
+            <Btn onClick={handleZipDownload} disabled={zipping} style={{ fontSize:11, padding:"5px 12px" }}>{zipping ? "⏳ 생성 중…" : "⬇ 전체 ZIP 다운로드"}</Btn>
           </div>
+          {(zipping || zipProgress) && (
+            <GenProgressBar
+              progress={zipProgress || { percent: 2, label: "ZIP 생성 준비 중…" }}
+              subText="산출물별 템플릿 조회·문서 생성 후 ZIP으로 압축합니다. 건수가 많으면 시간이 걸릴 수 있습니다." />
+          )}
+          {zipError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9 }}>{zipError}</div>}
           <div style={{ display:"flex", gap:10 }}>
             {[{label:"전체",value:project.deliverables.summary?.totalDocs||0,color:T.accent},{label:"필수(M)",value:project.deliverables.summary?.mandatoryCount||0,color:T.red},{label:"선택(O)",value:(project.deliverables.summary?.totalDocs||0)-(project.deliverables.summary?.mandatoryCount||0),color:T.amber}].map(s=>(
               <Card key={s.label} style={{ flex:1, padding:"12px 14px", textAlign:"center" }}><div style={{ fontSize:10, color:T.muted, marginBottom:3 }}>{s.label}</div><div style={{ fontSize:20, fontWeight:700, color:s.color }}>{s.value}</div></Card>
             ))}
           </div>
+          {project.deliverables.summary?.recon && (() => { const r = project.deliverables.summary.recon; const tt = project.deliverables.summary?.totalDocs||0; return (
+            <div style={{ fontSize:10.5, color:T.muted, padding:"7px 10px", background:T.surface, border:`1px dashed ${T.border}`, borderRadius:8, lineHeight:1.7 }}>
+              ℹ <b style={{ color:T.text }}>WBS 개수 대사</b> — 최하위 Task {r.leafTotal}건 중 산출물 지정 <b style={{ color:T.text }}>{r.leafWithDeliv}건</b> 전부 1:1 반영
+              {r.leafTotal - r.leafWithDeliv > 0 && <> (미지정 {r.leafTotal - r.leafWithDeliv}건 제외)</>}
+              {r.pdpInjected && <> + 테일러링결과서 <b style={{ color:T.text }}>1건</b>(필수 자동추가)</>}
+              {" "}= 전체 <b style={{ color:T.accent }}>{tt}건</b>
+              {r.dupIncluded > 0 && <span style={{ color:T.muted }}> · 동일 산출물명 {r.dupIncluded}건 포함(WBS 번호로 구분)</span>}
+            </div>
+          ); })()}
           {project.deliverables.categories?.map(cat=>(
             <Card key={cat.id} style={{ padding:16 }}>
               <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}><span style={{ fontSize:18 }}>{cat.icon}</span><span style={{ fontWeight:700, fontSize:14 }}>{cat.name}</span><span style={{ fontSize:11, color:T.muted, marginLeft:"auto" }}>{cat.documents?.length}건</span></div>
               {cat.documents?.map(doc=>(
                 <div key={doc.id} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 0", borderTop:`1px solid ${T.border}` }}>
+                  {doc.wbsNo && <span style={{ fontFamily:"monospace", fontSize:9, color:T.muted, border:`1px solid ${T.border}`, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.wbsNo}</span>}
                   <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
-                  <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
+                  <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.taskName ? `${doc.taskName} — ` : ""}{doc.purpose}</div></div>
                   <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
                   <button onClick={()=>downloadSingleDeliverable(doc, cat.name, project, project.wbs, pdpCtx)} title="이 산출물만 다운로드"
                     style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
