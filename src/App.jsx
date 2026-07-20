@@ -2064,6 +2064,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>④ 일정 계획</div>
               <Badge color={T.green}>✓ {wbsData.tasks.reduce((n, t) => n + 1 + (t.subtasks?.length || 0), 0)}개 항목</Badge>
+              <Badge color={T.accent}>단계 {wbsData.tasks.length} · 최하위 Task {wbsData.tasks.reduce((n, t) => n + (t.subtasks?.length || 0), 0)}건</Badge>
               {holidays.length > 0 && <Badge color={T.red}>공휴일 {holidays.length}일</Badge>}
             </div>
             <Btn variant="outline" onClick={() => setShowCal(v => !v)} style={{ fontSize: 11, padding: "4px 10px" }}>
@@ -3297,10 +3298,12 @@ function WbsScheduleView({ wbs }) {
     return { start:ss[0]||"", finish:ff.slice(-1)[0]||"", eff };
   };
   const total = wbs.tasks.reduce((n,t)=>n+1+(t.subtasks?.length||0),0);
+  const leafCount = wbs.tasks.reduce((n,t)=>n+(t.subtasks?.length||0),0);
   return (
     <div>
       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, flexWrap:"wrap" }}>
         <Badge color={T.green}>WBS {total}개 항목</Badge>
+        <Badge color={T.accent}>단계 {wbs.tasks.length} · 최하위 Task {leafCount}건</Badge>
         {holidays.length > 0 && <Badge color={T.red}>공휴일 {holidays.length}일</Badge>}
         {holidays.length > 0 && <span style={{ fontSize:10, color:T.muted }}>{holidays.join(", ")}</span>}
       </div>
