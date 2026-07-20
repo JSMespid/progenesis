@@ -445,6 +445,13 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         if (n && !nameRef.has(n)) nameRef.set(n, { code:null, required: r.mark === "●", mgmt:true });
       });
 
+      // ── 개수 대사(對査)용 집계 — WBS 최하위 Task 수 ↔ 산출물 수의 차이를 화면에서 검증 가능하게 ──
+      let leafTotal = 0, leafWithDeliv = 0, dupSkipped = 0, pdpInjected = false;
+      wbsData.tasks.forEach(t => (t.subtasks || []).forEach(s => {
+        leafTotal += 1;
+        if (String(s.deliverable || "").trim()) leafWithDeliv += 1;
+      }));
+
       const PHASE_ICONS = ["🛡","📌","📋","🔧","🧪","🚀","🛠","📈","🧭","📦"];
       let pmSeq = 0, dSeq = 0;
       const categories = wbsData.tasks.map((t, ti) => {
@@ -452,7 +459,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         const documents = [];
         (t.subtasks || []).forEach(s => {
           const name = String(s.deliverable || "").trim();
-          if (!name || seen.has(name)) return;
+          if (!name) return;
+          if (seen.has(name)) { dupSkipped += 1; return; }
           seen.add(name);
           const ref = nameRef.get(name);
           const code = ref?.code || (ref?.mgmt ? `PM${String(++pmSeq).padStart(2,"0")}` : `D${String(++dSeq).padStart(2,"0")}`);
@@ -474,6 +482,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
           categories.unshift(planCat);
         }
         if (!planCat.documents.some(d => d.name === PDP_DOC_NAME)) {
+          pdpInjected = true;
           planCat.documents.unshift({
             id: `${planCat.id}-pdp`, code: "PDP", name: PDP_DOC_NAME,
             purpose: "OSSP를 테일러링가이드 기준으로 테일러링한 결과서",
@@ -488,6 +497,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         totalDocs: allDocs.length,
         mandatoryCount: allDocs.filter(d => String(d.priority||"").startsWith("필수")).length,
         source: "wbs",   // WBS 기반 생성 마커 — 구버전 생성분과 구분
+        // 개수 대사 내역: 최하위 Task 수 → 산출물 지정 → 중복 제외 → PDP 추가 = totalDocs
+        recon: { leafTotal, leafWithDeliv, dupSkipped, pdpInjected },
       };
 
       // ── AI는 각 문서의 목적 설명(1문장)만 작성 — 실패해도 목록은 유지 ──
@@ -3052,7 +3063,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
               <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:11, padding:"4px 12px" }}>지금 재생성</Btn>
             </div>
           )}
-          <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+          <div style={{ display:"flex", gap:8, marginBottom:8 }}>
             {[{label:"전체",value:total,color:T.accent},{label:"필수(M)",value:mand,color:T.red},{label:"선택(O)",value:total-mand,color:T.amber}].map(s=>(
               <div key={s.label} style={{ flex:1, padding:"8px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, textAlign:"center" }}>
                 <div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>{s.label}</div>
@@ -3060,6 +3071,15 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
               </div>
             ))}
           </div>
+          {deliverablesData.summary?.recon && (() => { const r = deliverablesData.summary.recon; return (
+            <div style={{ fontSize:10.5, color:T.muted, padding:"7px 10px", background:T.bg, border:`1px dashed ${T.border}`, borderRadius:8, marginBottom:12, lineHeight:1.7 }}>
+              ℹ <b style={{ color:T.text }}>WBS 개수 대사</b> — 최하위 Task {r.leafTotal}건 중 산출물 지정 <b style={{ color:T.text }}>{r.leafWithDeliv}건</b>
+              {r.leafTotal - r.leafWithDeliv > 0 && <> (미지정 {r.leafTotal - r.leafWithDeliv}건 제외)</>}
+              {r.dupSkipped > 0 && <> − 단계 내 동일 산출물 중복 <b style={{ color:T.text }}>{r.dupSkipped}건</b></>}
+              {r.pdpInjected && <> + 테일러링결과서 <b style={{ color:T.text }}>1건</b>(필수 자동추가)</>}
+              {" "}= 전체 <b style={{ color:T.accent }}>{total}건</b>
+            </div>
+          ); })()}
           <div style={{ display:"flex", flexDirection:"column", gap:6, maxHeight:420, overflowY:"auto" }}>
             {deliverablesData.categories?.map(cat=>(
               <div key={cat.id} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, overflow:"hidden", flexShrink:0 }}>
@@ -3398,6 +3418,15 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
               <Card key={s.label} style={{ flex:1, padding:"12px 14px", textAlign:"center" }}><div style={{ fontSize:10, color:T.muted, marginBottom:3 }}>{s.label}</div><div style={{ fontSize:20, fontWeight:700, color:s.color }}>{s.value}</div></Card>
             ))}
           </div>
+          {project.deliverables.summary?.recon && (() => { const r = project.deliverables.summary.recon; const tt = project.deliverables.summary?.totalDocs||0; return (
+            <div style={{ fontSize:10.5, color:T.muted, padding:"7px 10px", background:T.surface, border:`1px dashed ${T.border}`, borderRadius:8, lineHeight:1.7 }}>
+              ℹ <b style={{ color:T.text }}>WBS 개수 대사</b> — 최하위 Task {r.leafTotal}건 중 산출물 지정 <b style={{ color:T.text }}>{r.leafWithDeliv}건</b>
+              {r.leafTotal - r.leafWithDeliv > 0 && <> (미지정 {r.leafTotal - r.leafWithDeliv}건 제외)</>}
+              {r.dupSkipped > 0 && <> − 단계 내 동일 산출물 중복 <b style={{ color:T.text }}>{r.dupSkipped}건</b></>}
+              {r.pdpInjected && <> + 테일러링결과서 <b style={{ color:T.text }}>1건</b>(필수 자동추가)</>}
+              {" "}= 전체 <b style={{ color:T.accent }}>{tt}건</b>
+            </div>
+          ); })()}
           {project.deliverables.categories?.map(cat=>(
             <Card key={cat.id} style={{ padding:16 }}>
               <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}><span style={{ fontSize:18 }}>{cat.icon}</span><span style={{ fontWeight:700, fontSize:14 }}>{cat.name}</span><span style={{ fontSize:11, color:T.muted, marginLeft:"auto" }}>{cat.documents?.length}건</span></div>
