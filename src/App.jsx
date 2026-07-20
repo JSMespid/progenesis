@@ -445,27 +445,34 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         if (n && !nameRef.has(n)) nameRef.set(n, { code:null, required: r.mark === "●", mgmt:true });
       });
 
-      // ── 개수 대사(對査)용 집계 — WBS 최하위 Task 수 ↔ 산출물 수의 차이를 화면에서 검증 가능하게 ──
-      let leafTotal = 0, leafWithDeliv = 0, dupSkipped = 0, pdpInjected = false;
+      // ── 개수 대사(對査)용 집계 — 최하위 Task 1건 = 산출물 1건(1:1)이 원칙 ──
+      let leafTotal = 0, leafWithDeliv = 0, dupIncluded = 0, pdpInjected = false;
       wbsData.tasks.forEach(t => (t.subtasks || []).forEach(s => {
         leafTotal += 1;
         if (String(s.deliverable || "").trim()) leafWithDeliv += 1;
       }));
 
       const PHASE_ICONS = ["🛡","📌","📋","🔧","🧪","🚀","🛠","📈","🧭","📦"];
+      // 같은 산출물명은 같은 코드를 공유 (동일 문서 유형이 여러 Task에서 산출되는 경우)
       let pmSeq = 0, dSeq = 0;
+      const codeByName = new Map();
       const categories = wbsData.tasks.map((t, ti) => {
         const seen = new Set();
         const documents = [];
         (t.subtasks || []).forEach(s => {
           const name = String(s.deliverable || "").trim();
-          if (!name) return;
-          if (seen.has(name)) { dupSkipped += 1; return; }
-          seen.add(name);
+          if (!name) return;   // 산출물 미지정 Task만 제외 — 지정된 Task는 중복이라도 전부 1:1 반영
+          if (seen.has(name)) dupIncluded += 1; else seen.add(name);
+          let code = codeByName.get(name);
+          if (!code) {
+            const ref = nameRef.get(name);
+            code = ref?.code || (ref?.mgmt ? `PM${String(++pmSeq).padStart(2,"0")}` : `D${String(++dSeq).padStart(2,"0")}`);
+            codeByName.set(name, code);
+          }
           const ref = nameRef.get(name);
-          const code = ref?.code || (ref?.mgmt ? `PM${String(++pmSeq).padStart(2,"0")}` : `D${String(++dSeq).padStart(2,"0")}`);
           documents.push({
             id: `${t.id}-${documents.length}`, code, name,
+            wbsNo: s.wbsCode || "", taskName: s.task || "",
             purpose: `${t.phase} 단계 산출물`,
             priority: ref ? (ref.required ? "필수(M)" : "선택(O)") : "선택(O)",
           });
@@ -497,8 +504,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         totalDocs: allDocs.length,
         mandatoryCount: allDocs.filter(d => String(d.priority||"").startsWith("필수")).length,
         source: "wbs",   // WBS 기반 생성 마커 — 구버전 생성분과 구분
-        // 개수 대사 내역: 최하위 Task 수 → 산출물 지정 → 중복 제외 → PDP 추가 = totalDocs
-        recon: { leafTotal, leafWithDeliv, dupSkipped, pdpInjected },
+        // 개수 대사 내역: 최하위 Task 수 → 산출물 지정(1:1 전부 반영) → PDP 추가 = totalDocs
+        recon: { leafTotal, leafWithDeliv, dupIncluded, pdpInjected },
       };
 
       // ── AI는 각 문서의 목적 설명(1문장)만 작성 — 실패해도 목록은 유지 ──
@@ -510,7 +517,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       try {
         const result = await callClaude(`당신은 PMBOK 8판에 정통한 품질보증(QA) 전문가입니다. 아래 SI 프로젝트 산출물 각각의 목적을 한국어 1문장(30자 이내)으로 작성하라.
 프로젝트: ${projectForm.name}, 고객사: ${projectForm.client}, OSSP: ${selectedOSSP?.label}, SDLC: ${selectedSDLC?.label||"미지정"}
-산출물 목록: ${allDocs.map(d => `${d.code} ${d.name}`).join(", ")}
+산출물 목록: ${[...new Map(allDocs.map(d => [d.code, d])).values()].map(d => `${d.code} ${d.name}`).join(", ")}
 JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 8000);
         if (result?.purposes) {
           allDocs.forEach(d => { if (result.purposes[d.code]) d.purpose = String(result.purposes[d.code]); });
@@ -2064,7 +2071,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>④ 일정 계획</div>
               <Badge color={T.green}>✓ {wbsData.tasks.reduce((n, t) => n + 1 + (t.subtasks?.length || 0), 0)}개 항목</Badge>
-              <Badge color={T.accent}>단계 {wbsData.tasks.length} · 최하위 Task {wbsData.tasks.reduce((n, t) => n + (t.subtasks?.length || 0), 0)}건</Badge>
+              <Badge color={T.accent}>단계 {wbsData.tasks.length} · 최하위 Task {wbsData.tasks.reduce((n, t) => n + (t.subtasks?.length || 0), 0)}건 · 산출물 {wbsData.tasks.reduce((n, t) => n + (t.subtasks || []).filter(s => String(s.deliverable || "").trim()).length, 0)}건</Badge>
               {holidays.length > 0 && <Badge color={T.red}>공휴일 {holidays.length}일</Badge>}
             </div>
             <Btn variant="outline" onClick={() => setShowCal(v => !v)} style={{ fontSize: 11, padding: "4px 10px" }}>
@@ -2960,10 +2967,11 @@ async function downloadSingleDeliverable(doc, catName, meta, wbs, ctx) {
   const of = await resolveDeliverableFile(doc, catName, meta, wbs, ctx);
   const mime = OFFICE_MIME[of.ext] || "application/octet-stream";
   const codePart = sanitize(doc.code || "");
+  const wbsPart = sanitize(doc.wbsNo || "");
   const blob = new Blob([of.bytes], { type: mime });
   const url = URL.createObjectURL(blob);
   const aEl = document.createElement("a");
-  aEl.href = url; aEl.download = `[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`;
+  aEl.href = url; aEl.download = `[${pi.label}] ${wbsPart ? wbsPart + "_" : ""}${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`;
   document.body.appendChild(aEl); aEl.click(); aEl.remove();
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
@@ -2989,8 +2997,9 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
       const of = await resolveDeliverableFile(doc, cat.name, meta, wbs, ctx);
       done += 1;
       const codePart = sanitize(doc.code || "");
-      files.push({ path: `${folder}/[${pi.label}] ${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`, content: of.bytes });
-      manifest.push([folder, doc.code || "-", doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
+      const wbsPart = sanitize(doc.wbsNo || "");   // 동일 산출물명이 여러 Task에 있어도 WBS 번호로 파일명 구분
+      files.push({ path: `${folder}/[${pi.label}] ${wbsPart ? wbsPart + "_" : ""}${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`, content: of.bytes });
+      manifest.push([folder, doc.wbsNo || "-", doc.code || "-", doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
       total += 1; if (pi.label === "필수(M)") mand += 1;
     }
   }
@@ -2999,7 +3008,7 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
     ["프로젝트", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
     ["생성일", new Date().toLocaleString("ko-KR")],
     ["전체", `${total}건 (필수(M) ${mand} · 선택(O) ${total - mand})`], [],
-    ["폴더", "코드", "산출물", "형식", "구분", "목적"],
+    ["폴더", "WBS", "코드", "산출물", "형식", "구분", "목적"],
     ...manifest,
   ] }) });
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
@@ -3074,11 +3083,11 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
           </div>
           {deliverablesData.summary?.recon && (() => { const r = deliverablesData.summary.recon; return (
             <div style={{ fontSize:10.5, color:T.muted, padding:"7px 10px", background:T.bg, border:`1px dashed ${T.border}`, borderRadius:8, marginBottom:12, lineHeight:1.7 }}>
-              ℹ <b style={{ color:T.text }}>WBS 개수 대사</b> — 최하위 Task {r.leafTotal}건 중 산출물 지정 <b style={{ color:T.text }}>{r.leafWithDeliv}건</b>
+              ℹ <b style={{ color:T.text }}>WBS 개수 대사</b> — 최하위 Task {r.leafTotal}건 중 산출물 지정 <b style={{ color:T.text }}>{r.leafWithDeliv}건</b> 전부 1:1 반영
               {r.leafTotal - r.leafWithDeliv > 0 && <> (미지정 {r.leafTotal - r.leafWithDeliv}건 제외)</>}
-              {r.dupSkipped > 0 && <> − 단계 내 동일 산출물 중복 <b style={{ color:T.text }}>{r.dupSkipped}건</b></>}
               {r.pdpInjected && <> + 테일러링결과서 <b style={{ color:T.text }}>1건</b>(필수 자동추가)</>}
               {" "}= 전체 <b style={{ color:T.accent }}>{total}건</b>
+              {r.dupIncluded > 0 && <span style={{ color:T.muted }}> · 동일 산출물명 {r.dupIncluded}건 포함(WBS 번호로 구분)</span>}
             </div>
           ); })()}
           <div style={{ display:"flex", flexDirection:"column", gap:6, maxHeight:420, overflowY:"auto" }}>
@@ -3091,8 +3100,9 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                 </div>
                 {expanded[cat.id] && cat.documents?.map(doc=>(
                   <div key={doc.id} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 12px", borderTop:`1px solid ${T.border}` }}>
+                    {doc.wbsNo && <span style={{ fontFamily:"monospace", fontSize:9, color:T.muted, border:`1px solid ${T.border}`, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.wbsNo}</span>}
                     <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
-                    <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
+                    <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.taskName ? `${doc.taskName} — ` : ""}{doc.purpose}</div></div>
                     <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
                     <button onClick={()=>downloadSingleDeliverable(doc, cat.name, form||{}, wbs, pdpCtx)} title="이 산출물만 다운로드"
                       style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
@@ -3299,11 +3309,12 @@ function WbsScheduleView({ wbs }) {
   };
   const total = wbs.tasks.reduce((n,t)=>n+1+(t.subtasks?.length||0),0);
   const leafCount = wbs.tasks.reduce((n,t)=>n+(t.subtasks?.length||0),0);
+  const delivCount = wbs.tasks.reduce((n,t)=>n+(t.subtasks||[]).filter(s=>String(s.deliverable||"").trim()).length,0);
   return (
     <div>
       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, flexWrap:"wrap" }}>
         <Badge color={T.green}>WBS {total}개 항목</Badge>
-        <Badge color={T.accent}>단계 {wbs.tasks.length} · 최하위 Task {leafCount}건</Badge>
+        <Badge color={T.accent}>단계 {wbs.tasks.length} · 최하위 Task {leafCount}건 · 산출물 {delivCount}건</Badge>
         {holidays.length > 0 && <Badge color={T.red}>공휴일 {holidays.length}일</Badge>}
         {holidays.length > 0 && <span style={{ fontSize:10, color:T.muted }}>{holidays.join(", ")}</span>}
       </div>
@@ -3423,11 +3434,11 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
           </div>
           {project.deliverables.summary?.recon && (() => { const r = project.deliverables.summary.recon; const tt = project.deliverables.summary?.totalDocs||0; return (
             <div style={{ fontSize:10.5, color:T.muted, padding:"7px 10px", background:T.surface, border:`1px dashed ${T.border}`, borderRadius:8, lineHeight:1.7 }}>
-              ℹ <b style={{ color:T.text }}>WBS 개수 대사</b> — 최하위 Task {r.leafTotal}건 중 산출물 지정 <b style={{ color:T.text }}>{r.leafWithDeliv}건</b>
+              ℹ <b style={{ color:T.text }}>WBS 개수 대사</b> — 최하위 Task {r.leafTotal}건 중 산출물 지정 <b style={{ color:T.text }}>{r.leafWithDeliv}건</b> 전부 1:1 반영
               {r.leafTotal - r.leafWithDeliv > 0 && <> (미지정 {r.leafTotal - r.leafWithDeliv}건 제외)</>}
-              {r.dupSkipped > 0 && <> − 단계 내 동일 산출물 중복 <b style={{ color:T.text }}>{r.dupSkipped}건</b></>}
               {r.pdpInjected && <> + 테일러링결과서 <b style={{ color:T.text }}>1건</b>(필수 자동추가)</>}
               {" "}= 전체 <b style={{ color:T.accent }}>{tt}건</b>
+              {r.dupIncluded > 0 && <span style={{ color:T.muted }}> · 동일 산출물명 {r.dupIncluded}건 포함(WBS 번호로 구분)</span>}
             </div>
           ); })()}
           {project.deliverables.categories?.map(cat=>(
@@ -3435,8 +3446,9 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
               <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}><span style={{ fontSize:18 }}>{cat.icon}</span><span style={{ fontWeight:700, fontSize:14 }}>{cat.name}</span><span style={{ fontSize:11, color:T.muted, marginLeft:"auto" }}>{cat.documents?.length}건</span></div>
               {cat.documents?.map(doc=>(
                 <div key={doc.id} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 0", borderTop:`1px solid ${T.border}` }}>
+                  {doc.wbsNo && <span style={{ fontFamily:"monospace", fontSize:9, color:T.muted, border:`1px solid ${T.border}`, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.wbsNo}</span>}
                   <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
-                  <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.purpose}</div></div>
+                  <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.taskName ? `${doc.taskName} — ` : ""}{doc.purpose}</div></div>
                   <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
                   <button onClick={()=>downloadSingleDeliverable(doc, cat.name, project, project.wbs, pdpCtx)} title="이 산출물만 다운로드"
                     style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
