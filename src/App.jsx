@@ -2316,86 +2316,92 @@ function getDocLogos(meta) {
   const l = meta?.tailoring?.logos || {};
   return { client: meta?.clientLogo || l.client || null, company: meta?.companyLogo || l.company || null };
 }
+// ── 표준 문서 프레임(회사 표준양식): 표지 → 문서정보표·사용권한·제.개정 이력 + 꼬리말 ──
+// 생성되는 모든 워드파일이 공통 사용 — 로고는 표지·문서정보표·꼬리말에 임베드 (머리말에는 로고 미적용)
+function docxStdParts({ title, docCode, phase, meta }) {
+  const logos = getDocLogos(meta);
+  // 로고 미디어는 문서 전체(본문·꼬리말)에서 공유 — 파트별로 관계(relId)만 따로 부여
+  const media = [];
+  const regLogo = (logo, base) => {
+    const parsed = logo?.dataUrl ? dataUrlToBytes(logo.dataUrl) : null;
+    if (!parsed) return null;
+    const fileName = `${base}.${parsed.ext}`;
+    media.push({ fileName, bytes: parsed.bytes });
+    const ratio = (Number(logo.w) > 0 && Number(logo.h) > 0) ? Number(logo.w) / Number(logo.h) : 3;
+    return { fileName, ratio: Math.min(ratio, 8) };   // 최대 8:1 비율 제한
+  };
+  const cl = regLogo(logos.client, "logo_client");
+  const co = regLogo(logos.company, "logo_company");
+  // hEmu: 표시 높이(EMU, 1cm=360000) — 표지 0.9cm, 꼬리말 0.6cm
+  const mkRun = (info, relId, idNum, hEmu) => info ? docxImageRun(relId, Math.max(1, Math.round(hEmu * info.ratio)), hEmu, idNum) : "";
+  const clientRun = mkRun(cl, "rIdImg1", 1, 324000);
+  const companyRun = mkRun(co, "rIdImg2", 2, 324000);
+  const today = new Date().toISOString().slice(0, 10);
+  const pageBreak = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+  const rightImgP = run => `<w:p><w:pPr><w:jc w:val="right"/><w:spacing w:after="140"/></w:pPr>${run}</w:p>`;
+
+  // 1페이지: 표지 (우측 정렬)
+  const cover =
+    docxP("", { spacingAfter: 2600 }) +
+    docxP(title, { bold: true, size: 44, align: "right", spacingAfter: 500 }) +
+    docxP(meta.name || "{프로젝트 명}", { bold: true, italic: true, size: 32, align: "right", spacingAfter: 420 }) +
+    docxP(`문서번호 : ${docCode || "-"}`, { size: 24, align: "right", spacingAfter: 420 }) +
+    docxP("Version 0.1", { bold: true, italic: true, size: 28, align: "right", spacingAfter: 260 }) +
+    docxP(today, { size: 20, align: "right", spacingAfter: 600 }) +
+    (clientRun ? rightImgP(clientRun) : docxP("고객사로고", { bold: true, size: 24, align: "right", spacingAfter: 140 })) +
+    (companyRun ? rightImgP(companyRun) : docxP("우리회사로고", { bold: true, size: 24, align: "right", spacingAfter: 140 })) +
+    pageBreak;
+
+  // 2페이지: 문서 정보 표 + 사용권한 + 제.개정 이력
+  const infoTable = docxInfoHeaderTable({
+    logoXml: mkRun(cl, "rIdImg1", 3, 324000) || `<w:r><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t>고객사로고</w:t></w:r>`,
+    title,
+    rows: [
+      ["프로젝트", meta.name || "", "단계", phase || ""],
+      ["시스템", meta.name || "", "문서번호", docCode || "-"],
+      ["작성자", meta.pm || "", "작성일자", today],
+    ],
+  });
+  const usage =
+    docxP("사 용 권 한", { bold: true, size: 32, align: "center", spacingAfter: 320 }) +
+    docxP("본 문서에 대한 서명은 당사 내부에서 본 문서에 대하여 수행 및 유지관리의 책임이 있음을 인정하는 것임.", { size: 22, spacingAfter: 260 }) +
+    docxP("본 문서는 작성, 검토, 승인하여 승인된 원본을 보관한다.", { italic: true, size: 20, align: "center", spacingAfter: 260 }) +
+    docxSignLine("작성자") +
+    docxSignLine("검토자") +
+    docxP("본인은 서명으로써 본 문서가 당사의 업무활동 범위 내에서 사용될 것을 인가함.", { size: 22, spacingAfter: 260 }) +
+    docxSignLine("승인자");
+  const history =
+    docxP("제.개정 이력", { bold: true, size: 32, align: "center", spacingAfter: 260 }) +
+    docxTable([["버전", "변경일자", "제.개정 내용", "작성자"], ...Array.from({ length: 10 }, () => [" ", " ", " ", " "])], -1);
+
+  // ── 꼬리말(좌: 고객사로고 · 중앙: 쪽번호 · 우: 우리회사로고) — 머리말에는 로고를 넣지 않음 ──
+  // 표지(1페이지)는 titlePg로 꼬리말 미표시 — 첨부 양식과 동일
+  const tabDefs = '<w:tabs><w:tab w:val="center" w:pos="4513"/><w:tab w:val="right" w:pos="9026"/></w:tabs>';
+  const smallTxt = t => `<w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="808080"/></w:rPr><w:t xml:space="preserve">${xesc(t)}</w:t></w:r>`;
+  const pageFld = '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>';
+  const ftrXml = `<w:p><w:pPr>${tabDefs}<w:pBdr><w:top w:val="single" w:sz="4" w:space="1" w:color="999999"/></w:pBdr><w:spacing w:before="0" w:after="0"/></w:pPr>${mkRun(cl, "rIdF1", 1, 216000) || smallTxt("고객사로고")}<w:r><w:tab/></w:r>${pageFld}<w:r><w:tab/></w:r>${mkRun(co, "rIdF2", 2, 216000) || smallTxt("우리회사로고")}</w:p>`;
+
+  return {
+    front: cover + infoTable + usage + history + pageBreak,
+    pkgOpts: {
+      media,
+      bodyImages: [cl && { relId: "rIdImg1", fileName: cl.fileName }, co && { relId: "rIdImg2", fileName: co.fileName }].filter(Boolean),
+      footer: { xml: ftrXml, images: [cl && { relId: "rIdF1", fileName: cl.fileName }, co && { relId: "rIdF2", fileName: co.fileName }].filter(Boolean) },
+      titlePg: true,
+    },
+  };
+}
 function makeDocx({ title, metaRows, purpose, doc, catName, meta }) {
   // ── 신규 양식 (doc·meta 전달 시): 표지 → 문서정보표·사용권한·제.개정 이력 → 본문 ──
   if (doc && meta) {
-    const logos = getDocLogos(meta);
-    // 로고 미디어는 문서 전체(본문·머리말·꼬리말)에서 공유 — 파트별로 관계(relId)만 따로 부여
-    const media = [];
-    const regLogo = (logo, base) => {
-      const parsed = logo?.dataUrl ? dataUrlToBytes(logo.dataUrl) : null;
-      if (!parsed) return null;
-      const fileName = `${base}.${parsed.ext}`;
-      media.push({ fileName, bytes: parsed.bytes });
-      const ratio = (Number(logo.w) > 0 && Number(logo.h) > 0) ? Number(logo.w) / Number(logo.h) : 3;
-      return { fileName, ratio: Math.min(ratio, 8) };   // 최대 8:1 비율 제한
-    };
-    const cl = regLogo(logos.client, "logo_client");
-    const co = regLogo(logos.company, "logo_company");
-    // hEmu: 표시 높이(EMU, 1cm=360000) — 표지 0.9cm, 머리말·꼬리말 0.6cm
-    const mkRun = (info, relId, idNum, hEmu) => info ? docxImageRun(relId, Math.max(1, Math.round(hEmu * info.ratio)), hEmu, idNum) : "";
-    const clientRun = mkRun(cl, "rIdImg1", 1, 324000);
-    const companyRun = mkRun(co, "rIdImg2", 2, 324000);
-    const today = new Date().toISOString().slice(0, 10);
-    const pageBreak = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
-    const rightImgP = run => `<w:p><w:pPr><w:jc w:val="right"/><w:spacing w:after="140"/></w:pPr>${run}</w:p>`;
-
-    // 1페이지: 표지 (우측 정렬)
-    const cover =
-      docxP("", { spacingAfter: 2600 }) +
-      docxP(title, { bold: true, size: 44, align: "right", spacingAfter: 500 }) +
-      docxP(meta.name || "{프로젝트 명}", { bold: true, italic: true, size: 32, align: "right", spacingAfter: 420 }) +
-      docxP(`문서번호 : ${doc.code || "-"}`, { size: 24, align: "right", spacingAfter: 420 }) +
-      docxP("Version 0.1", { bold: true, italic: true, size: 28, align: "right", spacingAfter: 260 }) +
-      docxP(today, { size: 20, align: "right", spacingAfter: 600 }) +
-      (clientRun ? rightImgP(clientRun) : docxP("고객사로고", { bold: true, size: 24, align: "right", spacingAfter: 140 })) +
-      (companyRun ? rightImgP(companyRun) : docxP("우리회사로고", { bold: true, size: 24, align: "right", spacingAfter: 140 })) +
-      pageBreak;
-
-    // 2페이지: 문서 정보 표 + 사용권한 + 제.개정 이력
-    const infoTable = docxInfoHeaderTable({
-      logoXml: mkRun(cl, "rIdImg1", 3, 324000) || `<w:r><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t>고객사로고</w:t></w:r>`,
-      title,
-      rows: [
-        ["프로젝트", meta.name || "", "단계", catName || ""],
-        ["시스템", meta.name || "", "문서번호", doc.code || "-"],
-        ["작성자", meta.pm || "", "작성일자", today],
-      ],
-    });
-    const usage =
-      docxP("사 용 권 한", { bold: true, size: 32, align: "center", spacingAfter: 320 }) +
-      docxP("본 문서에 대한 서명은 당사 내부에서 본 문서에 대하여 수행 및 유지관리의 책임이 있음을 인정하는 것임.", { size: 22, spacingAfter: 260 }) +
-      docxP("본 문서는 작성, 검토, 승인하여 승인된 원본을 보관한다.", { italic: true, size: 20, align: "center", spacingAfter: 260 }) +
-      docxSignLine("작성자") +
-      docxSignLine("검토자") +
-      docxP("본인은 서명으로써 본 문서가 당사의 업무활동 범위 내에서 사용될 것을 인가함.", { size: 22, spacingAfter: 260 }) +
-      docxSignLine("승인자");
-    const history =
-      docxP("제.개정 이력", { bold: true, size: 32, align: "center", spacingAfter: 260 }) +
-      docxTable([["버전", "변경일자", "제.개정 내용", "작성자"], ...Array.from({ length: 10 }, () => [" ", " ", " ", " "])], -1);
-
+    const { front, pkgOpts } = docxStdParts({ title, docCode: doc.code, phase: catName, meta });
     // 3페이지: 본문 스켈레톤
     const bodyPage =
       docxP("1. 목적", { bold: true, size: 26, spacingAfter: 160 }) +
       docxP(purpose || "(작성)") +
       docxP("2. 본문", { bold: true, size: 26, spacingAfter: 160 }) +
       docxP("(작성)");
-
-    // ── 머리말(좌: 고객사로고 · 우: 우리회사로고) / 꼬리말(좌: 고객사로고 · 중앙: 쪽번호 · 우: 우리회사로고) ──
-    // 표지(1페이지)는 titlePg로 머리말·꼬리말 미표시 — 첨부 양식과 동일
-    const tabDefs = '<w:tabs><w:tab w:val="center" w:pos="4513"/><w:tab w:val="right" w:pos="9026"/></w:tabs>';
-    const smallTxt = t => `<w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="808080"/></w:rPr><w:t xml:space="preserve">${xesc(t)}</w:t></w:r>`;
-    const pageFld = '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>';
-    const hdrXml = `<w:p><w:pPr>${tabDefs}<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="999999"/></w:pBdr><w:spacing w:after="0"/></w:pPr>${mkRun(cl, "rIdH1", 1, 216000) || smallTxt("고객사로고")}<w:r><w:tab/></w:r><w:r><w:tab/></w:r>${mkRun(co, "rIdH2", 2, 216000) || smallTxt("우리회사로고")}</w:p>`;
-    const ftrXml = `<w:p><w:pPr>${tabDefs}<w:pBdr><w:top w:val="single" w:sz="4" w:space="1" w:color="999999"/></w:pBdr><w:spacing w:before="0" w:after="0"/></w:pPr>${mkRun(cl, "rIdF1", 1, 216000) || smallTxt("고객사로고")}<w:r><w:tab/></w:r>${pageFld}<w:r><w:tab/></w:r>${mkRun(co, "rIdF2", 2, 216000) || smallTxt("우리회사로고")}</w:p>`;
-
-    return docxPackage(cover + infoTable + usage + history + pageBreak + bodyPage, {
-      media,
-      bodyImages: [cl && { relId: "rIdImg1", fileName: cl.fileName }, co && { relId: "rIdImg2", fileName: co.fileName }].filter(Boolean),
-      header: { xml: hdrXml, images: [cl && { relId: "rIdH1", fileName: cl.fileName }, co && { relId: "rIdH2", fileName: co.fileName }].filter(Boolean) },
-      footer: { xml: ftrXml, images: [cl && { relId: "rIdF1", fileName: cl.fileName }, co && { relId: "rIdF2", fileName: co.fileName }].filter(Boolean) },
-      titlePg: true,
-    });
+    return docxPackage(front + bodyPage, pkgOpts);
   }
 
   // ── 구 양식 (호환): doc·meta 미전달 호출부 ──
@@ -2458,7 +2464,7 @@ function docxPackage(body, opts = {}) {
 }
 
 // ── 테일러링결과서(PDP) 실문서 — PDP 화면(StepPDP)과 동일한 구성의 docx ──
-function makePdpDocx(meta, ctx) {
+function makePdpDocx(meta, ctx, phase) {
   const ossp = ctx?.ossp || null;
   const sdlc = ctx?.sdlc || null;
   const tailoring = ctx?.tailoring || {};
@@ -2520,6 +2526,8 @@ function makePdpDocx(meta, ctx) {
   });
 
   const objectives = pdp.overview?.objectives || [];
+  // 회사 표준양식 프레임(표지·문서정보표·사용권한·제.개정 이력·꼬리말) — 로고 임베드 포함
+  const { front, pkgOpts } = docxStdParts({ title: "테일러링결과서", docCode: docNo, phase: phase || "프로젝트 계획수립", meta });
   const body =
     docxP("프로젝트 정의 프로세스 (PDP)", { bold: true, size: 36, spacingAfter: 60 }) +
     docxP("테일러링결과서 · Tailoring Result", { size: 22, spacingAfter: 60 }) +
@@ -2546,7 +2554,7 @@ function makePdpDocx(meta, ctx) {
     docxP(`4. 프로세스 테일러링 내역서 (적용 등급 ${procLevel} · 적용대상 ${procApplicable.length}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
     docxP("※ 필수(●) 프로세스는 항상 적용되며 수정할 수 없습니다.", { size: 18, spacingAfter: 100 }) +
     docxTable(procRows, -1);
-  return docxPackage(body);
+  return docxPackage(front + body, pkgOpts);
 }
 
 // ── XLSX ─────────────────────────────────────────────────────
@@ -3115,7 +3123,7 @@ function officeFileForDoc(doc, catName, meta, wbs, ctx) {
   }
   // 산출물명이 '테일러링결과서'면 스켈레톤 대신 PDP 화면과 동일한 구성의 실제 문서를 생성
   if (String(doc.name||"").replace(/\s/g,"") === "테일러링결과서" && ctx?.tailoring) {
-    return { ext: "docx", bytes: makePdpDocx(meta, ctx) };
+    return { ext: "docx", bytes: makePdpDocx(meta, ctx, catName) };
   }
   const fmt = pickOfficeFormat(doc.name);
   const today = new Date().toLocaleDateString("ko-KR");
