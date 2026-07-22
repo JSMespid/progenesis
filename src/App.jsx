@@ -2320,6 +2320,9 @@ function getDocLogos(meta) {
 // 다운로드한 템플릿 ZIP을 브라우저 내장 inflate(DecompressionStream)로 해체하고,
 // (1) 본문·머리말·꼬리말의 '고객사로고'/'우리회사로고' 플레이스홀더 텍스트 → 로고 이미지 치환
 // (2) 본문·머리말의 첫 번째 표에서 세로 병합(vMerge restart)된 짧은 텍스트 셀(예: 조직 약칭) → 고객사 로고 치환
+// (3) 표지(첫 페이지 나누기·구역 나누기 직전)에 우측 정렬 로고 문단 삽입
+// (4) 기본(default·even) 꼬리말을 표준 로고 꼬리말(고객사로고·쪽번호·우리회사로고)로 교체 — 표지용(first) 꼬리말은 유지,
+//     꼬리말이 아예 없는 템플릿에는 새로 만들어 연결
 // 후 무압축 ZIP으로 재조립한다. 어떤 단계든 실패하면 null을 반환해 원본을 그대로 쓴다.
 async function unzipBytes(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -2418,6 +2421,19 @@ async function injectLogosIntoTemplateDocx(bytes, meta) {
     });
   };
 
+  // 원본 document.xml 기준 꼬리말 참조(type별) 수집 — 교체 대상 판별용
+  const docXml0 = td.decode(byPath["word/document.xml"].content);
+  const relsXml0 = byPath["word/_rels/document.xml.rels"] ? td.decode(byPath["word/_rels/document.xml.rels"].content) : "";
+  const relTargetOf = {};   // rId → word/ 기준 상대경로
+  (relsXml0.match(/<Relationship\s[^>]*\/>/g) || []).forEach(r => {
+    const id = /\bId="([^"]+)"/.exec(r); const tg = /\bTarget="([^"]+)"/.exec(r);
+    if (id && tg) relTargetOf[id[1]] = "word/" + tg[1].replace(/^\/?(word\/)?/, "");
+  });
+  const ftrRefs = (docXml0.match(/<w:footerReference[^>]*\/>/g) || []).map(s => ({
+    type: (/w:type="([^"]+)"/.exec(s) || [])[1] || "default",
+    rid: (/r:id="([^"]+)"/.exec(s) || [])[1] || "",
+  }));
+
   const partRe = /^word\/(document|header\d*|footer\d*)\.xml$/;
   for (const f of files) {
     if (!partRe.test(f.path)) continue;
@@ -2427,6 +2443,77 @@ async function injectLogosIntoTemplateDocx(bytes, meta) {
     if (!isFtr) xml = injectFirstTableCell(xml, f.path);
     f.content = xml;   // 문자열이면 zipBytes가 UTF-8 인코딩
   }
+
+  // (3) 표지 로고: 첫 페이지 나누기(없으면 문단 내 구역 나누기) 직전에 우측 정렬 로고 문단 삽입
+  {
+    const df = byPath["word/document.xml"];
+    let xml = typeof df.content === "string" ? df.content : td.decode(df.content);
+    let anchor = -1;
+    const br = xml.indexOf('<w:br w:type="page"');
+    if (br >= 0) anchor = Math.max(xml.lastIndexOf("<w:p ", br), xml.lastIndexOf("<w:p>", br));
+    if (anchor < 0) {
+      const sp = xml.indexOf("<w:sectPr");
+      if (sp >= 0) {
+        const pStart = Math.max(xml.lastIndexOf("<w:p ", sp), xml.lastIndexOf("<w:p>", sp));
+        if (pStart >= 0 && xml.indexOf("</w:p>", pStart) > sp) anchor = pStart;   // 문단 내 구역 나누기만 (본문 말미 sectPr 제외)
+      }
+    }
+    // 표지 영역에 이미 로고를 넣었다면(플레이스홀더·셀 치환) 중복 삽입하지 않음
+    if (anchor >= 0 && !xml.slice(0, anchor).includes('name="PgLogo')) {
+      const runs = [];
+      if (info.C) { const r = mkRun("C", 324000); if (r) { runs.push(r); markUsed(df.path, "C"); } }
+      if (info.W) { const r = mkRun("W", 324000); if (r) { runs.push(r); markUsed(df.path, "W"); } }
+      if (runs.length) {
+        const ps = runs.map(r => `<w:p><w:pPr><w:jc w:val="right"/><w:spacing w:after="140"/></w:pPr>${r}</w:p>`).join("");
+        xml = xml.slice(0, anchor) + ps + xml.slice(anchor);
+      }
+    }
+    df.content = xml;
+  }
+
+  // (4) 꼬리말: 표준 로고 꼬리말(고객사로고 · 쪽번호 · 우리회사로고)로 교체 — first(표지) 꼬리말 제외
+  const stdFtrInner = part => {
+    const tabDefs = '<w:tabs><w:tab w:val="center" w:pos="4513"/><w:tab w:val="right" w:pos="9026"/></w:tabs>';
+    const pageFld = '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>';
+    const l = mkRun("C", 216000); const r = mkRun("W", 216000);
+    if (l) markUsed(part, "C");
+    if (r) markUsed(part, "W");
+    return `<w:p><w:pPr>${tabDefs}<w:pBdr><w:top w:val="single" w:sz="4" w:space="1" w:color="999999"/></w:pBdr><w:spacing w:before="0" w:after="0"/></w:pPr>${l || ""}<w:r><w:tab/></w:r>${pageFld}<w:r><w:tab/></w:r>${r || ""}</w:p>`;
+  };
+  let ftrTargets = ftrRefs.filter(f => f.type !== "first").map(f => relTargetOf[f.rid]).filter(p => p && byPath[p]);
+  if (!ftrRefs.length) ftrTargets = files.filter(f => /^word\/footer\d*\.xml$/.test(f.path)).map(f => f.path);   // 참조 파싱 실패 시 전체 폴백
+  ftrTargets = [...new Set(ftrTargets)];
+  if (ftrTargets.length) {
+    for (const p of ftrTargets) {
+      let fx = typeof byPath[p].content === "string" ? byPath[p].content : td.decode(byPath[p].content);
+      fx = fx.replace(/(<w:ftr[^>]*>)[\s\S]*(<\/w:ftr>)/, (_, a, b) => a + stdFtrInner(p) + b);
+      byPath[p].content = fx;
+    }
+  } else if (info.C || info.W) {
+    // 꼬리말이 전혀 없는 템플릿: 표준 꼬리말 파트를 생성해 default 참조가 없는 모든 구역에 연결
+    const fp = "word/footerPg.xml";
+    const nf = { path: fp, content: XMLH + `<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${stdFtrInner(fp)}</w:ftr>` };
+    files.push(nf); byPath[fp] = nf;
+    const df = byPath["word/document.xml"];
+    let xml = typeof df.content === "string" ? df.content : td.decode(df.content);
+    xml = xml.replace(/<w:sectPr(\s[^>]*)?>([\s\S]*?)<\/w:sectPr>/g, (m, attrs, inner) =>
+      /w:footerReference w:type="default"/.test(inner) ? m : `<w:sectPr${attrs || ""}><w:footerReference w:type="default" r:id="rIdPgFtr"/>${inner}</w:sectPr>`);
+    df.content = xml;
+    // document.xml.rels에 꼬리말 관계 추가 + Content Types override
+    const rp = "word/_rels/document.xml.rels";
+    if (byPath[rp]) {
+      let rx = typeof byPath[rp].content === "string" ? byPath[rp].content : td.decode(byPath[rp].content);
+      if (!rx.includes('Id="rIdPgFtr"')) rx = rx.replace("</Relationships>", '<Relationship Id="rIdPgFtr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footerPg.xml"/></Relationships>');
+      byPath[rp].content = rx;
+    }
+    const ct0 = byPath["[Content_Types].xml"];
+    if (ct0) {
+      let cx = typeof ct0.content === "string" ? ct0.content : td.decode(ct0.content);
+      if (!cx.includes("/word/footerPg.xml")) cx = cx.replace("</Types>", '<Override PartName="/word/footerPg.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>');
+      ct0.content = cx;
+    }
+  }
+
   const modified = Object.keys(usedByPart);
   if (!modified.length) return null;   // 치환 지점 없음 → 원본 유지
 
