@@ -2316,6 +2316,150 @@ function getDocLogos(meta) {
   const l = meta?.tailoring?.logos || {};
   return { client: meta?.clientLogo || l.client || null, company: meta?.companyLogo || l.company || null };
 }
+// ── OSSP 템플릿 실파일(docx)에 프로젝트 로고 주입 ─────────────────────────
+// 다운로드한 템플릿 ZIP을 브라우저 내장 inflate(DecompressionStream)로 해체하고,
+// (1) 본문·머리말·꼬리말의 '고객사로고'/'우리회사로고' 플레이스홀더 텍스트 → 로고 이미지 치환
+// (2) 본문·머리말의 첫 번째 표에서 세로 병합(vMerge restart)된 짧은 텍스트 셀(예: 조직 약칭) → 고객사 로고 치환
+// 후 무압축 ZIP으로 재조립한다. 어떤 단계든 실패하면 null을 반환해 원본을 그대로 쓴다.
+async function unzipBytes(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // EOCD(0x06054b50) 탐색 — 뒤에서부터 (ZIP 코멘트 최대 65535B 고려)
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65557); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("EOCD not found");
+  const count = dv.getUint16(eocd + 10, true);
+  let off = dv.getUint32(eocd + 16, true);
+  const td = new TextDecoder();
+  const out = [];
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(off, true) !== 0x02014b50) throw new Error("bad central directory");
+    const method = dv.getUint16(off + 10, true);
+    const compSize = dv.getUint32(off + 20, true);
+    const nameLen = dv.getUint16(off + 28, true);
+    const extraLen = dv.getUint16(off + 30, true);
+    const commentLen = dv.getUint16(off + 32, true);
+    const lho = dv.getUint32(off + 42, true);
+    const name = td.decode(bytes.subarray(off + 46, off + 46 + nameLen));
+    const lNameLen = dv.getUint16(lho + 26, true);
+    const lExtraLen = dv.getUint16(lho + 28, true);
+    const dataStart = lho + 30 + lNameLen + lExtraLen;
+    const comp = bytes.subarray(dataStart, dataStart + compSize);
+    if (!name.endsWith("/")) {
+      let data;
+      if (method === 0) data = comp.slice();
+      else if (method === 8) {
+        const ds = new DecompressionStream("deflate-raw");
+        data = new Uint8Array(await new Response(new Response(comp.slice()).body.pipeThrough(ds)).arrayBuffer());
+      } else throw new Error("unsupported compression method " + method);
+      out.push({ path: name, content: data });
+    }
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
+// 네임스페이스를 자체 선언한 인라인 이미지 run — 임의 템플릿 XML에도 안전하게 삽입 가능
+function docxImageRunNS(relId, cx, cy, id) {
+  const NSD = 'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+  return `<w:r><w:drawing ${NSD}><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="${id}" name="PgLogo${id}"/><wp:cNvGraphicFramePr/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${id}" name="PgLogo${id}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+}
+async function injectLogosIntoTemplateDocx(bytes, meta) {
+  const logos = getDocLogos(meta);
+  const cl = logos.client?.dataUrl ? dataUrlToBytes(logos.client.dataUrl) : null;
+  const co = logos.company?.dataUrl ? dataUrlToBytes(logos.company.dataUrl) : null;
+  if (!cl && !co) return null;   // 프로젝트에 등록된 로고 없음 → 원본 유지
+  const ratioOf = l => (Number(l?.w) > 0 && Number(l?.h) > 0) ? Math.min(Number(l.w) / Number(l.h), 8) : 3;
+  const info = {
+    C: cl && { relId: "rIdPgLogoC", fileName: `pg_logo_client.${cl.ext}`, bytes: cl.bytes, ratio: ratioOf(logos.client) },
+    W: co && { relId: "rIdPgLogoW", fileName: `pg_logo_company.${co.ext}`, bytes: co.bytes, ratio: ratioOf(logos.company) },
+  };
+  const files = await unzipBytes(bytes);
+  const td = new TextDecoder();
+  const byPath = {}; files.forEach(f => { byPath[f.path] = f; });
+  if (!byPath["word/document.xml"]) return null;   // docx 아님
+  let imgId = 9000;
+  const mkRun = (k, hEmu) => info[k] ? docxImageRunNS(info[k].relId, Math.max(1, Math.round(hEmu * info[k].ratio)), hEmu, ++imgId) : null;
+  const usedByPart = {};   // part path → Set("C"/"W")
+  const markUsed = (part, k) => { (usedByPart[part] = usedByPart[part] || new Set()).add(k); };
+
+  // (2) 첫 번째 표의 로고 셀 치환: 첫 <w:tc>가 vMerge restart + 짧은 텍스트(≤12자) + 이미지 없음일 때만
+  const injectFirstTableCell = (xml, part) => {
+    const run = mkRun("C", 324000) || mkRun("W", 324000);
+    const kind = info.C ? "C" : "W";
+    if (!run) return xml;
+    const ti = xml.indexOf("<w:tbl");
+    if (ti < 0) return xml;
+    const tcI2 = Math.min(...[xml.indexOf("<w:tc ", ti), xml.indexOf("<w:tc>", ti)].filter(i => i >= 0));
+    if (!isFinite(tcI2)) return xml;
+    const tcEnd = xml.indexOf("</w:tc>", tcI2);
+    if (tcEnd < 0) return xml;
+    const cell = xml.slice(tcI2, tcEnd);
+    if (!/<w:vMerge\s+w:val="restart"/.test(cell)) return xml;
+    if (cell.includes("<w:drawing")) return xml;
+    const text = (cell.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []).map(s => s.replace(/<[^>]+>/g, "")).join("").trim();
+    if (text.length > 12) return xml;
+    const pI = cell.search(/<w:p[\s>/]/);
+    if (pI < 0) return xml;
+    const newCell = cell.slice(0, pI) + `<w:p><w:pPr><w:jc w:val="center"/></w:pPr>${run}</w:p>`;
+    markUsed(part, kind);
+    return xml.slice(0, tcI2) + newCell + xml.slice(tcEnd);
+  };
+
+  // (1) 플레이스홀더 텍스트 run 치환: '고객사로고'/'우리회사로고' ({} 감싼 형태 포함)
+  const replacePlaceholders = (xml, part, hEmu) => {
+    const runRe = /<w:r(?:\s[^>]*)?>(?:(?!<\/w:r>).)*?<w:t[^>]*>\s*\{?(고객사로고|우리회사로고)\}?\s*<\/w:t>(?:(?!<\/w:r>).)*?<\/w:r>/gs;
+    return xml.replace(runRe, (m, name) => {
+      const k = name === "고객사로고" ? "C" : "W";
+      const run = mkRun(k, hEmu);
+      if (!run) return m;
+      markUsed(part, k);
+      return run;
+    });
+  };
+
+  const partRe = /^word\/(document|header\d*|footer\d*)\.xml$/;
+  for (const f of files) {
+    if (!partRe.test(f.path)) continue;
+    let xml = td.decode(f.content);
+    const isFtr = /footer/.test(f.path);
+    xml = replacePlaceholders(xml, f.path, isFtr ? 216000 : 324000);
+    if (!isFtr) xml = injectFirstTableCell(xml, f.path);
+    f.content = xml;   // 문자열이면 zipBytes가 UTF-8 인코딩
+  }
+  const modified = Object.keys(usedByPart);
+  if (!modified.length) return null;   // 치환 지점 없음 → 원본 유지
+
+  // 사용된 파트별 이미지 관계(rels) 추가·생성
+  const REL = k => `<Relationship Id="${info[k].relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${info[k].fileName}"/>`;
+  for (const part of modified) {
+    const relPath = part.replace(/^word\//, "word/_rels/") + ".rels";
+    const rels = [...usedByPart[part]].map(REL).join("");
+    if (byPath[relPath]) {
+      let rx = typeof byPath[relPath].content === "string" ? byPath[relPath].content : td.decode(byPath[relPath].content);
+      [...usedByPart[part]].forEach(k => { if (!rx.includes(`Id="${info[k].relId}"`)) rx = rx.replace("</Relationships>", REL(k) + "</Relationships>"); });
+      byPath[relPath].content = rx;
+    } else {
+      const nf = { path: relPath, content: XMLH + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>` };
+      files.push(nf); byPath[relPath] = nf;
+    }
+  }
+  // 로고 미디어 파일 추가 (파일명 충돌 시 그대로 덮어쓰지 않도록 신규 경로 사용: pg_ 접두)
+  const usedKinds = new Set(); modified.forEach(p => usedByPart[p].forEach(k => usedKinds.add(k)));
+  usedKinds.forEach(k => { if (!byPath[`word/media/${info[k].fileName}`]) files.push({ path: `word/media/${info[k].fileName}`, content: info[k].bytes }); });
+  // [Content_Types].xml에 이미지 확장자 Default 보강
+  const ct = byPath["[Content_Types].xml"];
+  if (ct) {
+    let cx = typeof ct.content === "string" ? ct.content : td.decode(ct.content);
+    usedKinds.forEach(k => {
+      const ext = info[k].fileName.split(".").pop();
+      if (!new RegExp(`Extension="${ext}"`).test(cx)) cx = cx.replace("</Types>", `<Default Extension="${ext}" ContentType="image/${ext === "png" ? "png" : "jpeg"}"/></Types>`);
+    });
+    ct.content = cx;
+  }
+  return zipBytes(files);
+}
+
 // ── 표준 문서 프레임(회사 표준양식): 표지 → 문서정보표·사용권한·제.개정 이력 + 꼬리말 ──
 // 생성되는 모든 워드파일이 공통 사용 — 로고는 표지·문서정보표·꼬리말에 임베드 (머리말에는 로고 미적용)
 function docxStdParts({ title, docCode, phase, meta }) {
@@ -3107,6 +3251,13 @@ async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
         const bytes = await fetchTemplateBytes(tpl);
         if (bytes) {
           const ext = (String(tpl.file_name).split(".").pop() || "bin").toLowerCase();
+          // 템플릿이 docx면 프로젝트 로고(고객사·우리회사) 주입 시도 — 실패 시 원본 그대로
+          if (ext === "docx") {
+            try {
+              const injected = await injectLogosIntoTemplateDocx(bytes, meta);
+              if (injected) return { ext, bytes: injected };
+            } catch (_) { /* 주입 실패 시 원본 유지 */ }
+          }
           return { ext, bytes };
         }
       }
