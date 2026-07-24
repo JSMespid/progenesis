@@ -2547,6 +2547,87 @@ async function injectLogosIntoTemplateDocx(bytes, meta) {
   return zipBytes(files);
 }
 
+// ── OSSP 템플릿 실파일(xlsx)에 프로젝트 로고 주입 ─────────────────────────
+// 엑셀 템플릿의 드로잉(xl/drawings/drawing*.xml)에서 텍스트가 '고객사 로고'/'우리회사 로고'인
+// 텍스트박스 도형을 같은 위치·높이의 로고 그림으로 교체 (너비는 로고 원본 비율로 조정)
+async function injectLogosIntoTemplateXlsx(bytes, meta) {
+  const logos = getDocLogos(meta);
+  const cl = logos.client?.dataUrl ? dataUrlToBytes(logos.client.dataUrl) : null;
+  const co = logos.company?.dataUrl ? dataUrlToBytes(logos.company.dataUrl) : null;
+  if (!cl && !co) return null;   // 프로젝트에 등록된 로고 없음 → 원본 유지
+  const ratioOf = l => (Number(l?.w) > 0 && Number(l?.h) > 0) ? Math.min(Number(l.w) / Number(l.h), 8) : 3;
+  const info = {
+    C: cl && { relId: "rIdPgLogoC", fileName: `pg_logo_client.${cl.ext}`, bytes: cl.bytes, ratio: ratioOf(logos.client) },
+    W: co && { relId: "rIdPgLogoW", fileName: `pg_logo_company.${co.ext}`, bytes: co.bytes, ratio: ratioOf(logos.company) },
+  };
+  const files = await unzipBytes(bytes);
+  const td = new TextDecoder();
+  const byPath = {}; files.forEach(f => { byPath[f.path] = f; });
+  if (!byPath["xl/workbook.xml"]) return null;   // xlsx 아님
+  let imgId = 9000;
+  const usedByPart = {};   // drawing 경로 → Set("C"/"W")
+  const markUsed = (part, k) => { (usedByPart[part] = usedByPart[part] || new Set()).add(k); };
+
+  // 드로잉별로 플레이스홀더 텍스트박스(xdr:sp) → 그림(xdr:pic) 교체
+  const drawingPaths = files.map(f => f.path).filter(p => /^xl\/drawings\/drawing\d+\.xml$/.test(p));
+  for (const part of drawingPaths) {
+    const f = byPath[part];
+    let xml = typeof f.content === "string" ? f.content : td.decode(f.content);
+    let changed = false;
+    xml = xml.replace(/<xdr:(oneCellAnchor|twoCellAnchor)(\s[^>]*)?>(?:(?!<\/xdr:\1>).)*?<\/xdr:\1>/gs, anchor => {
+      const spM = /<xdr:sp[\s>](?:(?!<\/xdr:sp>).)*?<\/xdr:sp>/s.exec(anchor);
+      if (!spM) return anchor;
+      const text = [...spM[0].matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map(m => m[1]).join("").replace(/[\s\u00a0{}]/g, "");
+      const k = text === "고객사로고" ? "C" : text === "우리회사로고" ? "W" : null;
+      if (!k || !info[k]) return anchor;
+      // 크기: 원래 텍스트박스 높이(cy)를 유지하고 너비(cx)는 로고 비율에 맞춤
+      const extM = /<xdr:ext\s+cx="(\d+)"\s+cy="(\d+)"\s*\/>/.exec(anchor);
+      const cy = extM ? Number(extM[2]) : 336246;
+      const cx = Math.max(1, Math.round(cy * info[k].ratio));
+      const offM = /<a:off\s+x="(-?\d+)"\s+y="(-?\d+)"\s*\/>/.exec(spM[0]);
+      const off = offM ? `<a:off x="${offM[1]}" y="${offM[2]}"/>` : '<a:off x="0" y="0"/>';
+      const id = ++imgId;
+      const pic = `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${id}" name="PgLogo${id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${info[k].relId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm>${off}<a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>`;
+      let out = anchor.replace(spM[0], pic);
+      if (extM) out = out.replace(extM[0], `<xdr:ext cx="${cx}" cy="${cy}"/>`);
+      markUsed(part, k); changed = true;
+      return out;
+    });
+    if (changed) f.content = xml;
+  }
+
+  const modified = Object.keys(usedByPart);
+  if (!modified.length) return null;   // 플레이스홀더 없음 → 원본 유지
+
+  // 수정된 드로잉별 이미지 관계(rels) 추가·생성
+  const REL = k => `<Relationship Id="${info[k].relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${info[k].fileName}"/>`;
+  for (const part of modified) {
+    const relPath = part.replace("xl/drawings/", "xl/drawings/_rels/") + ".rels";
+    if (byPath[relPath]) {
+      let rx = typeof byPath[relPath].content === "string" ? byPath[relPath].content : td.decode(byPath[relPath].content);
+      [...usedByPart[part]].forEach(k => { if (!rx.includes(`Id="${info[k].relId}"`)) rx = rx.replace("</Relationships>", REL(k) + "</Relationships>"); });
+      byPath[relPath].content = rx;
+    } else {
+      const nf = { path: relPath, content: XMLH + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${[...usedByPart[part]].map(REL).join("")}</Relationships>` };
+      files.push(nf); byPath[relPath] = nf;
+    }
+  }
+  // 로고 미디어 파일 추가 (파일명 충돌 방지: pg_ 접두 신규 경로)
+  const usedKinds = new Set(); modified.forEach(p => usedByPart[p].forEach(k => usedKinds.add(k)));
+  usedKinds.forEach(k => { if (!byPath[`xl/media/${info[k].fileName}`]) files.push({ path: `xl/media/${info[k].fileName}`, content: info[k].bytes }); });
+  // [Content_Types].xml에 이미지 확장자 Default 보강
+  const ct = byPath["[Content_Types].xml"];
+  if (ct) {
+    let cxml = typeof ct.content === "string" ? ct.content : td.decode(ct.content);
+    usedKinds.forEach(k => {
+      const ext = info[k].fileName.split(".").pop();
+      if (!new RegExp(`Extension="${ext}"`).test(cxml)) cxml = cxml.replace("</Types>", `<Default Extension="${ext}" ContentType="image/${ext === "png" ? "png" : "jpeg"}"/></Types>`);
+    });
+    ct.content = cxml;
+  }
+  return zipBytes(files);
+}
+
 // ── 표준 문서 프레임(회사 표준양식): 표지 → 문서정보표·사용권한·제.개정 이력 + 꼬리말 ──
 // 생성되는 모든 워드파일이 공통 사용 — 로고는 표지·문서정보표·꼬리말에 임베드 (머리말에는 로고 미적용)
 function docxStdParts({ title, docCode, phase, meta }) {
@@ -3342,6 +3423,13 @@ async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
           if (ext === "docx") {
             try {
               const injected = await injectLogosIntoTemplateDocx(bytes, meta);
+              if (injected) return { ext, bytes: injected };
+            } catch (_) { /* 주입 실패 시 원본 유지 */ }
+          }
+          // 템플릿이 xlsx면 드로잉의 '고객사 로고'/'우리회사 로고' 텍스트박스 → 로고 그림 치환
+          if (ext === "xlsx") {
+            try {
+              const injected = await injectLogosIntoTemplateXlsx(bytes, meta);
               if (injected) return { ext, bytes: injected };
             } catch (_) { /* 주입 실패 시 원본 유지 */ }
           }
