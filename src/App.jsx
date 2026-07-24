@@ -2904,6 +2904,19 @@ function assignReqIds(items) {
     return { ...it, id: p + String(maxN[p]).padStart(4, "0") };
   });
 }
+// WBS에서 요구사항 명세서(spec/both)를 산출물로 가진 '진짜 최하위' Task 목록 — 요구사항 배정 후보(기능 모듈)
+function reqSpecLeaves(wbs) {
+  const rows = [];
+  (wbs?.tasks || []).forEach(t => (t.subtasks || []).forEach(s => rows.push(s)));
+  const codes = rows.map(s => String(s.wbsCode || ""));
+  return rows.filter(s => {
+    const k = reqDocKind(s.deliverable || "");
+    if (k !== "spec" && k !== "both") return false;
+    const c = String(s.wbsCode || "");
+    if (!c) return false;
+    return !codes.some(o => o !== c && o.startsWith(c + "."));   // 하위 행이 없으면 최하위
+  }).map(s => ({ wbsNo: String(s.wbsCode), name: String(s.task || "").trim() }));
+}
 // docx 바이트 → 평문 텍스트 (요구사항 원문 파일 업로드용)
 async function docxBytesToText(bytes) {
   const files = await unzipBytes(bytes);
@@ -2940,9 +2953,18 @@ async function xlsxBytesToText(bytes) {
   return out.join("\n").trim();
 }
 // 확정된 요구사항 → 정의서/명세서/통합 docx (회사 표준 프레임 + 로고)
-function makeReqDocx(meta, ctx, phase, kind) {
+function makeReqDocx(meta, ctx, phase, kind, doc) {
   const req = ctx?.requirements || {};
   const items = req.items || [];
+  // 모듈 분권: 문서의 WBS 번호가 배정 체계(specLeaves) 트리에 속하면 해당 모듈 배정분 + 공통만 담는다
+  const docWbs = String(doc?.wbsNo || "");
+  const under = (child, parent) => child === parent || child.startsWith(parent + ".");
+  const leaves = req.specLeaves || [];
+  const leafName = {}; leaves.forEach(l => { leafName[l.wbsNo] = l.name; });
+  const isCommon = it => !it.wbsNo || it.wbsNo === "공통";
+  const inTree = kind !== "def" && docWbs && leaves.some(l => under(l.wbsNo, docWbs) || under(docWbs, l.wbsNo));
+  const moduleItems = inTree ? items.filter(it => !isCommon(it) && under(String(it.wbsNo), docWbs)) : [];
+  const commonItems = inTree ? items.filter(isCommon) : [];
   const docCode = kind === "spec" ? "RD1301" : kind === "def" ? "RD1202" : "RD1202·RD1301";
   const docNo = `${docCode}-${(meta.client || "").replace(/\s/g, "").slice(0, 4).toUpperCase() || "PRJ"}-${new Date().getFullYear()}`;
   const today = new Date().toLocaleDateString("ko-KR");
@@ -2955,37 +2977,57 @@ function makeReqDocx(meta, ctx, phase, kind) {
     docxTable([
       ["문서번호", docNo], ["버전", "V1.0"],
       ["고객사", meta.client || "-"], ["작성일", today],
-      ["요구사항 합계", `${items.length}건 (기능 ${cnt("기능")} · 비기능 ${cnt("비기능")} · 인터페이스 ${cnt("인터페이스")})`],
+      ["요구사항 합계", inTree
+        ? `모듈 ${moduleItems.length}건 + 공통 ${commonItems.length}건 (전체 ${items.length}건 중)`
+        : `${items.length}건 (기능 ${cnt("기능")} · 비기능 ${cnt("비기능")} · 인터페이스 ${cnt("인터페이스")})`],
       ["요구사항 출처", req.sourceName || "이해관계자 요구사항 입력"],
+      ...(inTree ? [["대상 기능", `${doc?.taskName || leafName[docWbs] || ""} (${docWbs})`.trim()]] : []),
     ], 1);
   let sec = 0;
   if (kind !== "spec") {
-    const rows = [["No", "ID", "유형", "요구사항명", "출처", "우선순위", "개요"]];
-    items.forEach((it, i) => rows.push([String(i + 1), it.id || "", it.type || "", it.name || "", it.source || "-", it.priority || "중", it.summary || ""]));
+    const rows = [["No", "ID", "유형", "요구사항명", "기능 모듈", "출처", "우선순위", "개요"]];
+    items.forEach((it, i) => rows.push([String(i + 1), it.id || "", it.type || "", it.name || "",
+      isCommon(it) ? "공통" : `${it.wbsNo}${leafName[it.wbsNo] ? " " + leafName[it.wbsNo] : ""}`,
+      it.source || "-", it.priority || "중", it.summary || ""]));
     body += docxP(`${++sec}. 요구사항 정의 (RD1200)`, { bold: true, size: 26, spacingAfter: 160 }) +
       docxP("※ 정보공학 방법론 요구정의 단계 기준 — 기능·비기능·인터페이스 요구사항을 도출하고 추적 가능한 요구사항 ID를 부여하여 정리한다.", { size: 18, spacingAfter: 100 }) +
       docxTable(rows, -1);
   }
   if (kind !== "def") {
-    body += docxP(`${++sec}. 요구사항 명세 (RD1300)`, { bold: true, size: 26, spacingAfter: 160 }) +
-      docxP("※ 요구사항별로 구현 가능성·테스트 가능성·우선순위를 고려해 구체화하며, 비기능 요구사항은 ISO 9126 품질특성(기능성·신뢰성·사용성·효율성·유지보수성·이식성)을 기준으로 기술한다.", { size: 18, spacingAfter: 100 });
-    items.forEach(it => {
-      body += docxP(`${it.id || ""} · ${it.name || ""}`, { bold: true, size: 22, spacingAfter: 80 }) +
-        docxTable([
-          ["유형", (it.type || "") + (it.type === "비기능" && it.quality ? ` (${it.quality})` : "")],
-          ["우선순위", it.priority || "중"], ["출처", it.source || "-"],
-          ["상세 설명", it.detail || it.summary || ""],
-          ["인수 기준", it.acceptance || ""],
-          ["가정·제약", it.assumptions || "-"],
-        ], 1);
-    });
+    const specNote = "※ 요구사항별로 구현 가능성·테스트 가능성·우선순위를 고려해 구체화하며, 비기능 요구사항은 ISO 9126 품질특성(기능성·신뢰성·사용성·효율성·유지보수성·이식성)을 기준으로 기술한다.";
+    const specBlock = it => docxP(`${it.id || ""} · ${it.name || ""}`, { bold: true, size: 22, spacingAfter: 80 }) +
+      docxTable([
+        ["유형", (it.type || "") + (it.type === "비기능" && it.quality ? ` (${it.quality})` : "")],
+        ["우선순위", it.priority || "중"], ["출처", it.source || "-"],
+        ["상세 설명", it.detail || it.summary || ""],
+        ["인수 기준", it.acceptance || ""],
+        ["가정·제약", it.assumptions || "-"],
+      ], 1);
+    if (inTree) {
+      // 모듈별 명세서: (1) 해당 모듈 배정분, (2) 공통 요구사항(모든 모듈 명세서에 포함)
+      body += docxP(`${++sec}. 모듈 요구사항 명세 (RD1300) — ${doc?.taskName || leafName[docWbs] || docWbs}`, { bold: true, size: 26, spacingAfter: 160 }) +
+        docxP(specNote, { size: 18, spacingAfter: 100 });
+      if (moduleItems.length) moduleItems.forEach(it => { body += specBlock(it); });
+      else body += docxP("(이 모듈에 배정된 개별 요구사항이 없습니다 — 아래 공통 요구사항을 적용합니다.)", { size: 20, spacingAfter: 120 });
+      body += docxP(`${++sec}. 공통 요구사항`, { bold: true, size: 26, spacingAfter: 160 }) +
+        docxP("※ 특정 기능 모듈에 귀속되지 않는 전사 공통·비기능 요구사항으로, 본 모듈의 설계·구현·검증 시 항상 적용된다.", { size: 18, spacingAfter: 100 });
+      if (commonItems.length) commonItems.forEach(it => { body += specBlock(it); });
+      else body += docxP("(공통 요구사항 없음)", { size: 20, spacingAfter: 120 });
+    } else {
+      body += docxP(`${++sec}. 요구사항 명세 (RD1300)`, { bold: true, size: 26, spacingAfter: 160 }) +
+        docxP(specNote, { size: 18, spacingAfter: 100 });
+      items.forEach(it => { body += specBlock(it); });
+    }
   }
   return docxPackage(front + body, pkgOpts);
 }
 // 요구사항 추적 매트릭스(xlsx 템플릿)의 '추적매트릭스(양식)' 시트에 확정 요구사항을 채움
 // 1행(헤더)은 유지, 기존 예시 행은 제거하고 요구사항ID·명·출처·상태·우선순위(A~E열)를 기록
-async function injectRequirementsIntoRtmXlsx(bytes, items) {
+async function injectRequirementsIntoRtmXlsx(bytes, req) {
+  const items = req?.items;
   if (!items?.length) return null;
+  const leafName = {}; (req?.specLeaves || []).forEach(l => { leafName[l.wbsNo] = l.name; });
+  const moduleOf = it => (!it.wbsNo || it.wbsNo === "공통") ? "공통" : `${it.wbsNo}${leafName[it.wbsNo] ? " " + leafName[it.wbsNo] : ""}`;
   const files = await unzipBytes(bytes);
   const td = new TextDecoder();
   const byPath = {}; files.forEach(f => { byPath[f.path] = f; });
@@ -3023,10 +3065,10 @@ async function injectRequirementsIntoRtmXlsx(bytes, items) {
     if (rAttr && sAttr) styleByCol[rAttr[1]] = sAttr[1];
   });
   const esc = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const cols = ["A", "B", "C", "D", "E"];
+  const cols = ["A", "B", "C", "D", "E", "N"];   // N열(비고) = 배정 기능 모듈
   const newRows = items.map((it, i) => {
     const r = base + i;
-    const vals = [it.id || "", it.name || "", it.source || "", "신규", it.priority || ""];
+    const vals = [it.id || "", it.name || "", it.source || "", "신규", it.priority || "", moduleOf(it)];
     const cells = vals.map((v, ci) => {
       const s = styleByCol[cols[ci]] ? ` s="${styleByCol[cols[ci]]}"` : "";
       return `<c r="${cols[ci]}${r}"${s} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
@@ -3602,7 +3644,7 @@ async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
             try {
               const nn = normDocName(doc.name);
               if (nn.includes("추적매트릭스") || (nn.includes("요구사항") && nn.includes("추적"))) {
-                const withReq = await injectRequirementsIntoRtmXlsx(cur, ctx?.requirements?.items);
+                const withReq = await injectRequirementsIntoRtmXlsx(cur, ctx?.requirements);
                 if (withReq) cur = withReq;
               }
             } catch (_) { /* 요구사항 주입 실패 시 원본 유지 */ }
@@ -3632,7 +3674,7 @@ function officeFileForDoc(doc, catName, meta, wbs, ctx) {
   // 산출물명이 요구사항 정의서/명세서(통합 포함)이고 확정된 요구사항이 있으면 실문서를 생성
   const reqKind = reqDocKind(doc.name);
   if (reqKind && ctx?.requirements?.items?.length) {
-    return { ext: "docx", bytes: makeReqDocx(meta, ctx, catName, reqKind) };
+    return { ext: "docx", bytes: makeReqDocx(meta, ctx, catName, reqKind, doc) };
   }
   const fmt = pickOfficeFormat(doc.name);
   const today = new Date().toLocaleDateString("ko-KR");
@@ -3730,7 +3772,9 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
 
 // ── 요구사항 AI 작성 모달: 원문 입력(텍스트·txt·docx 업로드) → AI 도출·명세 → 검토·수정 → 확정 ──
 // 확정된 요구사항은 요구사항 정의서·명세서 docx 생성과 요구사항 추적 매트릭스(xlsx) 자동 채움에 사용됨
-function ReqGenModal({ onClose, form, requirements, setRequirements }) {
+function ReqGenModal({ onClose, form, wbs, requirements, setRequirements }) {
+  const leaves = reqSpecLeaves(wbs);   // WBS 최하위 기능 모듈 (요구사항 배정 후보)
+  const leafName = {}; leaves.forEach(l => { leafName[l.wbsNo] = l.name; });
   const [srcText, setSrcText] = useState("");
   const [srcName, setSrcName] = useState(requirements?.sourceName || "");
   const [items, setItems] = useState(requirements?.items ? requirements.items.map(x => ({ ...x })) : []);
@@ -3769,7 +3813,7 @@ function ReqGenModal({ onClose, form, requirements, setRequirements }) {
       for (let i = 0; i < srcAll.length; i += 6000) chunks.push(srcAll.slice(i, i + 6000));
       let raw = [];
       for (let i = 0; i < chunks.length; i++) {
-        setProg({ percent: 5 + (i / chunks.length) * 40, label: `요구사항 도출 중… (${i + 1}/${chunks.length})` });
+        setProg({ percent: 5 + (i / chunks.length) * 35, label: `요구사항 도출 중… (${i + 1}/${chunks.length})` });
         const r = await callClaudeJson(`당신은 정보공학 방법론 요구정의 단계(RD1200 요구사항 정의)에 정통한 SI 품질보증 전문가입니다. 아래 이해관계자 요구사항 원문에서 기능·비기능·인터페이스 요구사항을 도출하세요.
 프로젝트: ${form?.name || ""} (${form?.type || ""}) / 고객사: ${form?.client || ""}
 규칙: 요구사항 단위로 중복 없이 분할. 비기능은 ISO 9126 품질특성(기능성/신뢰성/사용성/효율성/유지보수성/이식성) 관점으로 식별. 최대 30건.
@@ -3783,13 +3827,13 @@ ${chunks[i]}`, 6000);
         type: ["기능", "비기능", "인터페이스"].includes(it.type) ? it.type : "기능",
         name: String(it.name || "").slice(0, 60), source: String(it.source || ""),
         priority: ["상", "중", "하"].includes(it.priority) ? it.priority : "중",
-        summary: String(it.summary || ""), detail: "", acceptance: "", quality: "", assumptions: "",
+        summary: String(it.summary || ""), detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통",
       })));
       // 2차(RD1300): 5건씩 상세 명세 — 상세설명·인수기준·품질특성·가정/제약
       const B = 5;
       for (let i = 0; i < list.length; i += B) {
         const grp = list.slice(i, i + B);
-        setProg({ percent: 45 + (i / list.length) * 50, label: `요구사항 명세 작성 중… (${Math.min(i + B, list.length)}/${list.length})` });
+        setProg({ percent: 40 + (i / list.length) * 40, label: `요구사항 명세 작성 중… (${Math.min(i + B, list.length)}/${list.length})` });
         const r = await callClaudeJson(`당신은 정보공학 방법론 요구정의 단계(RD1300 요구사항 명세)에 정통한 SI 품질보증 전문가입니다. 아래 요구사항 각각을 구현 가능성·테스트 가능성을 고려해 상세 명세하세요. 비기능은 측정기준을 포함하세요.
 JSON만 출력: {"items":[{"id":"...","detail":"상세 설명 2~3문장","acceptance":"측정 가능한 인수 기준 1~2문장","quality":"비기능이면 ISO 9126 품질특성명, 아니면 빈 문자열","assumptions":"가정·제약(없으면 빈 문자열)"}]}
 --- 요구사항 ---
@@ -3798,19 +3842,39 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
         (Array.isArray(r?.items) ? r.items : []).forEach(d => { if (d?.id) map[d.id] = d; });
         list = list.map(it => map[it.id] ? { ...it, detail: String(map[it.id].detail || ""), acceptance: String(map[it.id].acceptance || ""), quality: String(map[it.id].quality || ""), assumptions: String(map[it.id].assumptions || "") } : it);
       }
+      // 3차(배정): 요구사항 → WBS 최하위 기능 모듈. 공통·비기능처럼 특정 모듈에 귀속되지 않으면 "공통"
+      if (leaves.length) {
+        const A = 10;
+        for (let i = 0; i < list.length; i += A) {
+          const grp = list.slice(i, i + A);
+          setProg({ percent: 80 + (i / list.length) * 18, label: `기능 모듈 배정 중… (${Math.min(i + A, list.length)}/${list.length})` });
+          const r = await callClaudeJson(`당신은 SI 요구사항 관리 전문가입니다. 각 요구사항을 아래 WBS 최하위 기능 모듈 중 가장 적합한 곳에 배정하세요. 특정 모듈에 귀속되지 않는 전사 공통·보안·성능 등 비기능 요구사항은 "공통"으로 배정하세요.
+모듈 목록: ${JSON.stringify(leaves)}
+JSON만 출력: {"items":[{"id":"...","wbsNo":"모듈의 wbsNo 또는 공통"}]}
+--- 요구사항 ---
+${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: g.summary })))}`, 4000);
+          const amap = {};
+          (Array.isArray(r?.items) ? r.items : []).forEach(d => { if (d?.id) amap[d.id] = String(d.wbsNo || "공통"); });
+          list = list.map(it => {
+            const w = amap[it.id];
+            return w ? { ...it, wbsNo: leafName[w] !== undefined ? w : "공통" } : it;
+          });
+        }
+      }
       setItems(list);
-      setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세 완료 — 아래에서 검토·수정 후 확정하세요.` });
+      setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세${leaves.length ? "·모듈 배정" : ""} 완료 — 아래에서 검토·수정 후 확정하세요.` });
     } catch (e) { setError("AI 생성 실패: " + e.message); setProg(null); }
     setBusy(false);
   }
 
   const upd = (i, k, v) => setItems(list => list.map((it, j) => j === i ? { ...it, [k]: v } : it));
   const del = i => setItems(list => list.filter((_, j) => j !== i));
-  const add = () => setItems(list => assignReqIds([...list, { id: "", type: "기능", name: "", source: "", priority: "중", summary: "", detail: "", acceptance: "", quality: "", assumptions: "" }]));
+  const add = () => setItems(list => assignReqIds([...list, { id: "", type: "기능", name: "", source: "", priority: "중", summary: "", detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통" }]));
   function confirmSave() {
     const valid = items.filter(it => String(it.name || "").trim());
     if (!valid.length) { setError("확정할 요구사항이 없습니다. 요구사항명을 입력해 주세요."); return; }
-    setRequirements({ items: assignReqIds(valid), sourceName: srcName || "직접 입력", updatedAt: new Date().toISOString() });
+    const normed = assignReqIds(valid).map(it => ({ ...it, wbsNo: it.wbsNo && (it.wbsNo === "공통" || leafName[it.wbsNo] !== undefined) ? it.wbsNo : "공통" }));
+    setRequirements({ items: normed, sourceName: srcName || "직접 입력", specLeaves: leaves, updatedAt: new Date().toISOString() });
     onClose();
   }
 
@@ -3846,12 +3910,12 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                 <button onClick={add} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>＋ 행 추가</button>
               </div>
               <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-                <div style={{ display:"grid", gridTemplateColumns:"64px 86px 1fr 110px 62px 1.2fr 50px 26px", gap:6, fontSize:10, color:T.muted, padding:"0 4px" }}>
-                  <span>ID</span><span>유형</span><span>요구사항명</span><span>출처</span><span>우선순위</span><span>개요</span><span></span><span></span>
+                <div style={{ display:"grid", gridTemplateColumns:"60px 78px 1fr 92px 52px 150px 1fr 44px 24px", gap:6, fontSize:10, color:T.muted, padding:"0 4px" }}>
+                  <span>ID</span><span>유형</span><span>요구사항명</span><span>출처</span><span>우선순위</span><span>기능 모듈</span><span>개요</span><span></span><span></span>
                 </div>
                 {items.map((it, i) => (
                   <div key={i} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"6px 8px" }}>
-                    <div style={{ display:"grid", gridTemplateColumns:"64px 86px 1fr 110px 62px 1.2fr 50px 26px", gap:6, alignItems:"center" }}>
+                    <div style={{ display:"grid", gridTemplateColumns:"60px 78px 1fr 92px 52px 150px 1fr 44px 24px", gap:6, alignItems:"center" }}>
                       <span style={{ fontFamily:"monospace", fontSize:10, color:T.accent }}>{it.id}</span>
                       <select value={it.type} onChange={e=>upd(i,"type",e.target.value)} style={inp}>
                         {["기능","비기능","인터페이스"].map(t=><option key={t} value={t}>{t}</option>)}
@@ -3860,6 +3924,10 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                       <input value={it.source} onChange={e=>upd(i,"source",e.target.value)} placeholder="출처" style={inp} />
                       <select value={it.priority} onChange={e=>upd(i,"priority",e.target.value)} style={inp}>
                         {["상","중","하"].map(p=><option key={p} value={p}>{p}</option>)}
+                      </select>
+                      <select value={it.wbsNo || "공통"} onChange={e=>upd(i,"wbsNo",e.target.value)} title="이 요구사항이 배정될 WBS 최하위 기능 모듈 — 공통은 모든 모듈 명세서에 포함" style={inp}>
+                        <option value="공통">공통 (전 모듈)</option>
+                        {leaves.map(l=><option key={l.wbsNo} value={l.wbsNo}>{l.wbsNo} {l.name}</option>)}
                       </select>
                       <input value={it.summary} onChange={e=>upd(i,"summary",e.target.value)} placeholder="개요 1문장" style={inp} />
                       <button onClick={()=>setOpen(o=>({ ...o, [i]:!o[i] }))} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted, cursor:"pointer", fontSize:10, padding:"4px 0", fontFamily:"inherit" }}>{open[i]?"접기":"상세"}</button>
@@ -3991,7 +4059,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
           </div>
         </div>
       )}
-      {reqModal && <ReqGenModal onClose={()=>setReqModal(false)} form={form} requirements={requirements} setRequirements={setRequirements} />}
+      {reqModal && <ReqGenModal onClose={()=>setReqModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} />}
     </div>
   );
 }
