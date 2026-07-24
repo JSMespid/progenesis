@@ -190,6 +190,67 @@ function LoginGate({ onSuccess }) {
   );
 }
 
+// AI JSON 호출 (모듈 공용): /api/chat 프록시 → JSON 파싱·잘림 복구 — 컴포넌트 밖에서도 사용
+async function callClaudeJson(prompt, maxTokens=8000, model="claude-haiku-4-5-20251001") {
+  const res = await fetch("/api/chat", {
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({ model, max_tokens:maxTokens,
+      system:"You are a project management expert. Always respond with valid JSON only, no markdown, no preamble. Keep string values concise to ensure the JSON is complete and not truncated.",
+      messages:[{ role:"user", content:prompt }] }),
+  });
+
+  const data = await res.json();
+
+  // 에러 응답 방어: Anthropic/서버가 에러를 주면 content가 없음
+  if (!res.ok || data.error || !data.content) {
+    const msg = data?.detail?.error?.message || data?.error?.message || data?.error || `요청 실패 (status ${res.status})`;
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+
+  const text = data.content?.map(b=>b.text||"").join("")||"";
+  if (!text.trim()) throw new Error("AI 응답이 비어 있습니다.");
+
+  // JSON 파싱 방어: 모델이 마크다운/설명을 섞거나 응답이 잘려도 최대한 복구
+  const cleaned = text.replace(/```json|```/g,"").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (_) {}
+
+  // 1) 첫 '{'부터 마지막 '}'까지 추출 재시도
+  const start = cleaned.indexOf("{");
+  let end = cleaned.lastIndexOf("}");
+  if (start > -1 && end > start) {
+    try { return JSON.parse(cleaned.slice(start, end + 1)); } catch (_) {}
+  }
+  // 2) 응답이 중간에 잘린 경우: 문자열·배열·객체 상태를 추적해 순서대로 닫아 복구 시도
+  //    (예: {"reason":"요구사항이 ← 문자열이 열린 채 잘려도 복구 가능)
+  if (start > -1) {
+    const frag = cleaned.slice(start);
+    let inStr = false, esc = false;
+    const stack = [];
+    for (const ch of frag) {
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+      } else {
+        if (ch === '"') inStr = true;
+        else if (ch === "{") stack.push("}");
+        else if (ch === "[") stack.push("]");
+        else if (ch === "}" || ch === "]") stack.pop();
+      }
+    }
+    let repaired = frag;
+    if (inStr) repaired += '"';                    // 열린 문자열 닫기
+    repaired = repaired.replace(/,\s*$/, "");      // 끝에 남은 쉼표 제거
+    repaired = repaired.replace(/:\s*$/, ':""');   // 값 없이 끝난 키 보정
+    while (stack.length) repaired += stack.pop();  // 열린 배열/객체를 역순으로 닫기
+    try { return JSON.parse(repaired); } catch (_) {}
+  }
+  // 3) 그래도 실패하면 원문 앞부분을 포함해 원인 파악을 돕는다
+  throw new Error("AI 응답을 JSON으로 해석할 수 없습니다. 응답 일부: " + cleaned.slice(0, 120));
+  }
+
 export default function ProGenesis() {
   const AUTH_KEY = "progenesis_auth";
   const [authed, setAuthed] = useState(() => {
@@ -216,6 +277,7 @@ export default function ProGenesis() {
   const [wbsData, setWbsData] = useState(null);
   const [wbsSetup, setWbsSetup] = useState({ pbsText: "", selected: {} });   // PBS×FBS 매트릭스 설정
   const [deliverablesData, setDeliverablesData] = useState(null);
+  const [requirements, setRequirements] = useState(null);   // AI 작성 요구사항: { items:[...], sourceName, updatedAt }
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
   const [genProgress, setGenProgress] = useState(null);   // 산출물 생성 진행 상황: { percent, label }
@@ -282,63 +344,7 @@ export default function ProGenesis() {
   }
 
   async function callClaude(prompt, maxTokens=8000, model="claude-haiku-4-5-20251001") {
-  const res = await fetch("/api/chat", {
-    method:"POST", headers:{ "Content-Type":"application/json" },
-    body:JSON.stringify({ model, max_tokens:maxTokens,
-      system:"You are a project management expert. Always respond with valid JSON only, no markdown, no preamble. Keep string values concise to ensure the JSON is complete and not truncated.",
-      messages:[{ role:"user", content:prompt }] }),
-  });
-
-  const data = await res.json();
-
-  // 에러 응답 방어: Anthropic/서버가 에러를 주면 content가 없음
-  if (!res.ok || data.error || !data.content) {
-    const msg = data?.detail?.error?.message || data?.error?.message || data?.error || `요청 실패 (status ${res.status})`;
-    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
-  }
-
-  const text = data.content?.map(b=>b.text||"").join("")||"";
-  if (!text.trim()) throw new Error("AI 응답이 비어 있습니다.");
-
-  // JSON 파싱 방어: 모델이 마크다운/설명을 섞거나 응답이 잘려도 최대한 복구
-  const cleaned = text.replace(/```json|```/g,"").trim();
-  try {
-    return JSON.parse(cleaned);
-  } catch (_) {}
-
-  // 1) 첫 '{'부터 마지막 '}'까지 추출 재시도
-  const start = cleaned.indexOf("{");
-  let end = cleaned.lastIndexOf("}");
-  if (start > -1 && end > start) {
-    try { return JSON.parse(cleaned.slice(start, end + 1)); } catch (_) {}
-  }
-  // 2) 응답이 중간에 잘린 경우: 문자열·배열·객체 상태를 추적해 순서대로 닫아 복구 시도
-  //    (예: {"reason":"요구사항이 ← 문자열이 열린 채 잘려도 복구 가능)
-  if (start > -1) {
-    const frag = cleaned.slice(start);
-    let inStr = false, esc = false;
-    const stack = [];
-    for (const ch of frag) {
-      if (inStr) {
-        if (esc) esc = false;
-        else if (ch === "\\") esc = true;
-        else if (ch === '"') inStr = false;
-      } else {
-        if (ch === '"') inStr = true;
-        else if (ch === "{") stack.push("}");
-        else if (ch === "[") stack.push("]");
-        else if (ch === "}" || ch === "]") stack.pop();
-      }
-    }
-    let repaired = frag;
-    if (inStr) repaired += '"';                    // 열린 문자열 닫기
-    repaired = repaired.replace(/,\s*$/, "");      // 끝에 남은 쉼표 제거
-    repaired = repaired.replace(/:\s*$/, ':""');   // 값 없이 끝난 키 보정
-    while (stack.length) repaired += stack.pop();  // 열린 배열/객체를 역순으로 닫기
-    try { return JSON.parse(repaired); } catch (_) {}
-  }
-  // 3) 그래도 실패하면 원문 앞부분을 포함해 원인 파악을 돕는다
-  throw new Error("AI 응답을 JSON으로 해석할 수 없습니다. 응답 일부: " + cleaned.slice(0, 120));
+    return callClaudeJson(prompt, maxTokens, model);
   }
   
   async function recommendSDLC() {
@@ -544,7 +550,7 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
       const draft = {
         wizardStep, projectForm, selectedOSSP,
         sdlcFactors, selectedSDLC, sdlcRecommendation,
-        tailoring, pdpData, wbsData, wbsSetup, deliverablesData,
+        tailoring, pdpData, wbsData, wbsSetup, deliverablesData, requirements,
         savedAt: new Date().toISOString(),
       };
       localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
@@ -578,6 +584,7 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
     setWbsData(d.wbsData || null);
     setWbsSetup(d.wbsSetup || { pbsText: "", selected: {} });
     setDeliverablesData(d.deliverablesData || null);
+    setRequirements(d.requirements || null);
   }
 
   // 완료(저장)된 프로젝트를 위저드로 다시 열어 수정 — 저장된 데이터를 위저드 상태로 복원
@@ -597,6 +604,7 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
     // 구조를 다시 생성하려면 매트릭스를 재선택 후 "WBS 생성"을 누르면 됨.
     setWbsSetup({ pbsText:p.wbs?.pbsText||"", selected:{}, holidays:p.wbs?.holidays||[] });
     setDeliverablesData(p.deliverables||null);
+    setRequirements(p.tailoring?.requirements || null);
     setGenError(null);
     setWizardStep(7);   // 완료(최종 확인) 단계에서 시작 — 상단 스텝을 눌러 어느 단계로든 이동 가능
     nav("new_project");
@@ -608,7 +616,7 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
       start_date:projectForm.startDate, end_date:projectForm.endDate, pm:projectForm.pm,
       status:"진행중", ossp:selectedOSSP,
       // sdlc 전용 컬럼 없이 tailoring(JSON)에 함께 보존 → DB 스키마 변경 불필요
-      tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors,
+      tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors, requirements: requirements||null,
         logos:{ client:projectForm.clientLogo||null, company:projectForm.companyLogo||null } },
       pdp:pdpData, wbs:wbsData, deliverables:deliverablesData,
     };
@@ -625,7 +633,7 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
     setSelectedOSSP(null); setTailoring({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준",review_cycle:"격주",test_level:"통합",risk:"강화" });
     setSelectedSDLC(null); setSdlcRecommendation(null);
     setSdlcFactors({ req_clarity:"보통", req_volatility:"보통", delivery:"단계적", risk:"보통", regulation:"보통", team:"집중" });
-    setPdpData(null); setWbsData(null); setWbsSetup({ pbsText: "", selected: {} }); setDeliverablesData(null);
+    setPdpData(null); setWbsData(null); setWbsSetup({ pbsText: "", selected: {} }); setDeliverablesData(null); setRequirements(null);
     clearDraft();   // 완료된 프로젝트의 임시저장본 제거
     nav("dashboard");
   }
@@ -644,6 +652,7 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
       pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError} genProgress={genProgress}
       onGeneratePDP={generatePDP} onRecommendPBS={recommendPBS} setWbsData={setWbsData}
       wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} onGenerateDeliverables={generateDeliverables}
+      requirements={requirements} setRequirements={setRequirements}
       onFinish={finishProject} nav={nav} customOSSP={customOSSP}
       sdlcFactors={sdlcFactors} setSdlcFactors={setSdlcFactors}
       selectedSDLC={selectedSDLC} setSelectedSDLC={setSelectedSDLC}
@@ -828,7 +837,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, requirements, setRequirements, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
   const steps = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   const canNext = [
     form.name&&form.client&&form.startDate&&form.endDate&&form.pm,  // 0 기본정보
@@ -904,7 +913,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} onRecommendPBS={onRecommendPBS} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} />}
-        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genProgress={genProgress} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} pdpCtx={{ ossp:selectedOSSP, sdlc:selectedSDLC, tailoring, pdp:pdpData }} />}
+        {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genProgress={genProgress} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} requirements={requirements} setRequirements={setRequirements} pdpCtx={{ ossp:selectedOSSP, sdlc:selectedSDLC, tailoring, pdp:pdpData, requirements }} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} tailoring={tailoring} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
       <div style={{ display:"flex", justifyContent:"space-between" }}>
@@ -2869,6 +2878,139 @@ function makePdpDocx(meta, ctx, phase) {
   return docxPackage(front + body, pkgOpts);
 }
 
+// ── 요구사항 정의서·명세서 (AI 자동 작성 — 정보공학 방법론 RD1200·RD1300) ──────
+// 산출물명 → 요구사항 문서 종류: "def"(정의서) | "spec"(명세서) | "both"(정의서·명세서 통합) | null
+function reqDocKind(name) {
+  const n = normDocName(name);
+  if (!n.includes("요구사항")) return null;
+  const hasDef = n.includes("정의서");
+  const hasSpec = n.includes("명세서");
+  if (hasDef && hasSpec) return "both";
+  if (hasDef) return "def";
+  if (hasSpec) return "spec";
+  return null;
+}
+const REQ_TYPE_PREFIX = { "기능": "RF", "비기능": "RN", "인터페이스": "RI" };
+// 유형별 접두(RF/RN/RI) + 4자리 순번 ID 부여 — 기존 ID는 유지하고 빈 항목만 이어서 채번
+function assignReqIds(items) {
+  const maxN = {};
+  items.forEach(it => { const m = /^([A-Z]{2})(\d{4})$/.exec(String(it.id || "")); if (m) maxN[m[1]] = Math.max(maxN[m[1]] || 0, Number(m[2])); });
+  return items.map(it => {
+    if (it.id) return it;
+    const p = REQ_TYPE_PREFIX[it.type] || "RQ";
+    maxN[p] = (maxN[p] || 0) + 1;
+    return { ...it, id: p + String(maxN[p]).padStart(4, "0") };
+  });
+}
+// docx 바이트 → 평문 텍스트 (요구사항 원문 파일 업로드용)
+async function docxBytesToText(bytes) {
+  const files = await unzipBytes(bytes);
+  const f = files.find(x => x.path === "word/document.xml");
+  if (!f) return "";
+  const td = new TextDecoder();
+  let x = typeof f.content === "string" ? f.content : td.decode(f.content);
+  x = x.replace(/<w:tab[^>]*\/>/g, "\t").replace(/<\/w:p>/g, "\n").replace(/<[^>]+>/g, "");
+  return x.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCharCode(d)).trim();
+}
+// 확정된 요구사항 → 정의서/명세서/통합 docx (회사 표준 프레임 + 로고)
+function makeReqDocx(meta, ctx, phase, kind) {
+  const req = ctx?.requirements || {};
+  const items = req.items || [];
+  const docCode = kind === "spec" ? "RD1301" : kind === "def" ? "RD1202" : "RD1202·RD1301";
+  const docNo = `${docCode}-${(meta.client || "").replace(/\s/g, "").slice(0, 4).toUpperCase() || "PRJ"}-${new Date().getFullYear()}`;
+  const today = new Date().toLocaleDateString("ko-KR");
+  const title = kind === "def" ? "요구사항 정의서" : kind === "spec" ? "요구사항 명세서" : "요구사항 정의서·명세서";
+  const cnt = t => items.filter(i => i.type === t).length;
+  const { front, pkgOpts } = docxStdParts({ title, docCode: docNo, phase: phase || "요구정의", meta });
+  let body =
+    docxP(title, { bold: true, size: 36, spacingAfter: 60 }) +
+    docxP(meta.name || "", { bold: true, size: 26, spacingAfter: 240 }) +
+    docxTable([
+      ["문서번호", docNo], ["버전", "V1.0"],
+      ["고객사", meta.client || "-"], ["작성일", today],
+      ["요구사항 합계", `${items.length}건 (기능 ${cnt("기능")} · 비기능 ${cnt("비기능")} · 인터페이스 ${cnt("인터페이스")})`],
+      ["요구사항 출처", req.sourceName || "이해관계자 요구사항 입력"],
+    ], 1);
+  let sec = 0;
+  if (kind !== "spec") {
+    const rows = [["No", "ID", "유형", "요구사항명", "출처", "우선순위", "개요"]];
+    items.forEach((it, i) => rows.push([String(i + 1), it.id || "", it.type || "", it.name || "", it.source || "-", it.priority || "중", it.summary || ""]));
+    body += docxP(`${++sec}. 요구사항 정의 (RD1200)`, { bold: true, size: 26, spacingAfter: 160 }) +
+      docxP("※ 정보공학 방법론 요구정의 단계 기준 — 기능·비기능·인터페이스 요구사항을 도출하고 추적 가능한 요구사항 ID를 부여하여 정리한다.", { size: 18, spacingAfter: 100 }) +
+      docxTable(rows, -1);
+  }
+  if (kind !== "def") {
+    body += docxP(`${++sec}. 요구사항 명세 (RD1300)`, { bold: true, size: 26, spacingAfter: 160 }) +
+      docxP("※ 요구사항별로 구현 가능성·테스트 가능성·우선순위를 고려해 구체화하며, 비기능 요구사항은 ISO 9126 품질특성(기능성·신뢰성·사용성·효율성·유지보수성·이식성)을 기준으로 기술한다.", { size: 18, spacingAfter: 100 });
+    items.forEach(it => {
+      body += docxP(`${it.id || ""} · ${it.name || ""}`, { bold: true, size: 22, spacingAfter: 80 }) +
+        docxTable([
+          ["유형", (it.type || "") + (it.type === "비기능" && it.quality ? ` (${it.quality})` : "")],
+          ["우선순위", it.priority || "중"], ["출처", it.source || "-"],
+          ["상세 설명", it.detail || it.summary || ""],
+          ["인수 기준", it.acceptance || ""],
+          ["가정·제약", it.assumptions || "-"],
+        ], 1);
+    });
+  }
+  return docxPackage(front + body, pkgOpts);
+}
+// 요구사항 추적 매트릭스(xlsx 템플릿)의 '추적매트릭스(양식)' 시트에 확정 요구사항을 채움
+// 1행(헤더)은 유지, 기존 예시 행은 제거하고 요구사항ID·명·출처·상태·우선순위(A~E열)를 기록
+async function injectRequirementsIntoRtmXlsx(bytes, items) {
+  if (!items?.length) return null;
+  const files = await unzipBytes(bytes);
+  const td = new TextDecoder();
+  const byPath = {}; files.forEach(f => { byPath[f.path] = f; });
+  const wbF = byPath["xl/workbook.xml"];
+  if (!wbF) return null;
+  const wbXml = typeof wbF.content === "string" ? wbF.content : td.decode(wbF.content);
+  const relF = byPath["xl/_rels/workbook.xml.rels"];
+  const relXml = relF ? (typeof relF.content === "string" ? relF.content : td.decode(relF.content)) : "";
+  const relMap = {};
+  [...relXml.matchAll(/<Relationship\b[^>]*>/g)].forEach(m => {
+    const id = /Id="([^"]+)"/.exec(m[0]); const tg = /Target="([^"]+)"/.exec(m[0]);
+    if (id && tg) relMap[id[1]] = tg[1];
+  });
+  const sheets = [...wbXml.matchAll(/<sheet\b[^>]*>/g)].map(m => ({
+    name: /name="([^"]+)"/.exec(m[0])?.[1] || "",
+    rid: /r:id="([^"]+)"/.exec(m[0])?.[1] || "",
+  }));
+  const cand = sheets.filter(s => /추적/.test(s.name) && /매트릭스|matrix/i.test(s.name));
+  const target = cand.find(s => /양식/.test(s.name)) || cand[0];
+  if (!target || !relMap[target.rid]) return null;
+  const path = "xl/" + relMap[target.rid].replace(/^\//, "").replace(/^xl\//, "");
+  const shF = byPath[path];
+  if (!shF) return null;
+  let xml = typeof shF.content === "string" ? shF.content : td.decode(shF.content);
+  const sd = /<sheetData>([\s\S]*?)<\/sheetData>/.exec(xml);
+  if (!sd) return null;
+  const rowsXml = [...sd[1].matchAll(/<row\b[^>]*(?:\/>|>[\s\S]*?<\/row>)/g)].map(m => m[0]);
+  if (!rowsXml.length) return null;
+  const header = rowsXml[0];   // 1행 = 컬럼 헤더 유지
+  const base = Number(/r="(\d+)"/.exec(header)?.[1] || 1) + 1;
+  // 기존 첫 데이터 행의 셀 스타일을 컬럼별로 재사용해 표 서식(테두리 등) 유지
+  const styleByCol = {};
+  if (rowsXml[1]) [...rowsXml[1].matchAll(/<c\b[^>]*>/g)].forEach(m => {
+    const rAttr = /r="([A-Z]+)\d+"/.exec(m[0]); const sAttr = /s="(\d+)"/.exec(m[0]);
+    if (rAttr && sAttr) styleByCol[rAttr[1]] = sAttr[1];
+  });
+  const esc = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const cols = ["A", "B", "C", "D", "E"];
+  const newRows = items.map((it, i) => {
+    const r = base + i;
+    const vals = [it.id || "", it.name || "", it.source || "", "신규", it.priority || ""];
+    const cells = vals.map((v, ci) => {
+      const s = styleByCol[cols[ci]] ? ` s="${styleByCol[cols[ci]]}"` : "";
+      return `<c r="${cols[ci]}${r}"${s} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
+    }).join("");
+    return `<row r="${r}">${cells}</row>`;
+  }).join("");
+  xml = xml.replace(sd[0], `<sheetData>${header}${newRows}</sheetData>`);
+  shF.content = xml;
+  return zipBytes(files);
+}
+
 // ── XLSX ─────────────────────────────────────────────────────
 function colLetter(n) { let s = ""; n += 1; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
 function makeXlsx({ sheetName = "Sheet1", rows }) {
@@ -3403,6 +3545,7 @@ function isDynamicDoc(doc, wbs, ctx) {
   const n = String(doc.name || "").replace(/\s/g, "");
   if (n.toUpperCase() === "WBS" && wbs?.tasks?.length) return true;
   if (n === "테일러링결과서" && ctx?.tailoring) return true;
+  if (reqDocKind(doc.name) && ctx?.requirements?.items?.length) return true;   // 확정된 요구사항이 있으면 정의서·명세서를 실문서로 생성
   return false;
 }
 // 산출물 1건 → 파일 결정: 특수 산출물 → OSSP 템플릿 실파일 → 스켈레톤 순
@@ -3426,12 +3569,20 @@ async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
               if (injected) return { ext, bytes: injected };
             } catch (_) { /* 주입 실패 시 원본 유지 */ }
           }
-          // 템플릿이 xlsx면 드로잉의 '고객사 로고'/'우리회사 로고' 텍스트박스 → 로고 그림 치환
+          // 템플릿이 xlsx면: (1) 요구사항 추적 매트릭스에 확정 요구사항 채움 → (2) 로고 텍스트박스 치환
           if (ext === "xlsx") {
+            let cur = bytes;
             try {
-              const injected = await injectLogosIntoTemplateXlsx(bytes, meta);
-              if (injected) return { ext, bytes: injected };
-            } catch (_) { /* 주입 실패 시 원본 유지 */ }
+              const nn = normDocName(doc.name);
+              if (nn.includes("추적매트릭스") || (nn.includes("요구사항") && nn.includes("추적"))) {
+                const withReq = await injectRequirementsIntoRtmXlsx(cur, ctx?.requirements?.items);
+                if (withReq) cur = withReq;
+              }
+            } catch (_) { /* 요구사항 주입 실패 시 원본 유지 */ }
+            try {
+              const injected = await injectLogosIntoTemplateXlsx(cur, meta);
+              return { ext, bytes: injected || cur };
+            } catch (_) { return { ext, bytes: cur }; }
           }
           return { ext, bytes };
         }
@@ -3450,6 +3601,11 @@ function officeFileForDoc(doc, catName, meta, wbs, ctx) {
   // 산출물명이 '테일러링결과서'면 스켈레톤 대신 PDP 화면과 동일한 구성의 실제 문서를 생성
   if (String(doc.name||"").replace(/\s/g,"") === "테일러링결과서" && ctx?.tailoring) {
     return { ext: "docx", bytes: makePdpDocx(meta, ctx, catName) };
+  }
+  // 산출물명이 요구사항 정의서/명세서(통합 포함)이고 확정된 요구사항이 있으면 실문서를 생성
+  const reqKind = reqDocKind(doc.name);
+  if (reqKind && ctx?.requirements?.items?.length) {
+    return { ext: "docx", bytes: makeReqDocx(meta, ctx, catName, reqKind) };
   }
   const fmt = pickOfficeFormat(doc.name);
   const today = new Date().toLocaleDateString("ko-KR");
@@ -3545,12 +3701,175 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
-function StepDeliverables({ deliverablesData, generating, genProgress, genError, onGenerate, form, wbs, pdpCtx }) {
+// ── 요구사항 AI 작성 모달: 원문 입력(텍스트·txt·docx 업로드) → AI 도출·명세 → 검토·수정 → 확정 ──
+// 확정된 요구사항은 요구사항 정의서·명세서 docx 생성과 요구사항 추적 매트릭스(xlsx) 자동 채움에 사용됨
+function ReqGenModal({ onClose, form, requirements, setRequirements }) {
+  const [srcText, setSrcText] = useState("");
+  const [srcName, setSrcName] = useState(requirements?.sourceName || "");
+  const [items, setItems] = useState(requirements?.items ? requirements.items.map(x => ({ ...x })) : []);
+  const [busy, setBusy] = useState(false);
+  const [prog, setProg] = useState(null);
+  const [error, setError] = useState(null);
+  const [open, setOpen] = useState({});   // 행별 상세(명세) 펼침
+  const inp = { width:"100%", padding:"5px 7px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:11, fontFamily:"inherit", boxSizing:"border-box" };
+  const ta = { ...inp, minHeight:44, resize:"vertical", lineHeight:1.5 };
+
+  async function onFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setError(null);
+    try {
+      const name = file.name.toLowerCase();
+      let text = "";
+      if (name.endsWith(".txt")) text = await file.text();
+      else if (name.endsWith(".docx")) text = await docxBytesToText(new Uint8Array(await file.arrayBuffer()));
+      else { setError("txt 또는 docx 파일만 업로드할 수 있습니다."); return; }
+      if (!text.trim()) { setError("파일에서 텍스트를 추출하지 못했습니다."); return; }
+      setSrcText(t => (t ? t + "\n\n" : "") + text.trim());
+      setSrcName(file.name);
+    } catch (err) { setError("파일 읽기 실패: " + err.message); }
+  }
+
+  async function generate() {
+    const srcAll = srcText.trim();
+    if (srcAll.length < 20) { setError("이해관계자 요구사항 원문을 20자 이상 입력하거나 파일을 업로드해 주세요."); return; }
+    setBusy(true); setError(null);
+    try {
+      // 1차(RD1200): 원문 → 기능·비기능·인터페이스 요구사항 도출 — 원문이 길면 분할 호출 (Vercel 타임아웃 대응)
+      const chunks = [];
+      for (let i = 0; i < srcAll.length; i += 6000) chunks.push(srcAll.slice(i, i + 6000));
+      let raw = [];
+      for (let i = 0; i < chunks.length; i++) {
+        setProg({ percent: 5 + (i / chunks.length) * 40, label: `요구사항 도출 중… (${i + 1}/${chunks.length})` });
+        const r = await callClaudeJson(`당신은 정보공학 방법론 요구정의 단계(RD1200 요구사항 정의)에 정통한 SI 품질보증 전문가입니다. 아래 이해관계자 요구사항 원문에서 기능·비기능·인터페이스 요구사항을 도출하세요.
+프로젝트: ${form?.name || ""} (${form?.type || ""}) / 고객사: ${form?.client || ""}
+규칙: 요구사항 단위로 중복 없이 분할. 비기능은 ISO 9126 품질특성(기능성/신뢰성/사용성/효율성/유지보수성/이식성) 관점으로 식별. 최대 30건.
+JSON만 출력: {"items":[{"type":"기능|비기능|인터페이스","name":"요구사항명(25자 이내)","source":"원문 내 근거(15자 이내)","priority":"상|중|하","summary":"개요 1문장(50자 이내)"}]}
+--- 원문 ---
+${chunks[i]}`, 6000);
+        raw = raw.concat(Array.isArray(r?.items) ? r.items : []);
+      }
+      if (!raw.length) throw new Error("도출된 요구사항이 없습니다. 원문을 확인해 주세요.");
+      let list = assignReqIds(raw.map(it => ({
+        type: ["기능", "비기능", "인터페이스"].includes(it.type) ? it.type : "기능",
+        name: String(it.name || "").slice(0, 60), source: String(it.source || ""),
+        priority: ["상", "중", "하"].includes(it.priority) ? it.priority : "중",
+        summary: String(it.summary || ""), detail: "", acceptance: "", quality: "", assumptions: "",
+      })));
+      // 2차(RD1300): 5건씩 상세 명세 — 상세설명·인수기준·품질특성·가정/제약
+      const B = 5;
+      for (let i = 0; i < list.length; i += B) {
+        const grp = list.slice(i, i + B);
+        setProg({ percent: 45 + (i / list.length) * 50, label: `요구사항 명세 작성 중… (${Math.min(i + B, list.length)}/${list.length})` });
+        const r = await callClaudeJson(`당신은 정보공학 방법론 요구정의 단계(RD1300 요구사항 명세)에 정통한 SI 품질보증 전문가입니다. 아래 요구사항 각각을 구현 가능성·테스트 가능성을 고려해 상세 명세하세요. 비기능은 측정기준을 포함하세요.
+JSON만 출력: {"items":[{"id":"...","detail":"상세 설명 2~3문장","acceptance":"측정 가능한 인수 기준 1~2문장","quality":"비기능이면 ISO 9126 품질특성명, 아니면 빈 문자열","assumptions":"가정·제약(없으면 빈 문자열)"}]}
+--- 요구사항 ---
+${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: g.summary })))}`, 6000);
+        const map = {};
+        (Array.isArray(r?.items) ? r.items : []).forEach(d => { if (d?.id) map[d.id] = d; });
+        list = list.map(it => map[it.id] ? { ...it, detail: String(map[it.id].detail || ""), acceptance: String(map[it.id].acceptance || ""), quality: String(map[it.id].quality || ""), assumptions: String(map[it.id].assumptions || "") } : it);
+      }
+      setItems(list);
+      setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세 완료 — 아래에서 검토·수정 후 확정하세요.` });
+    } catch (e) { setError("AI 생성 실패: " + e.message); setProg(null); }
+    setBusy(false);
+  }
+
+  const upd = (i, k, v) => setItems(list => list.map((it, j) => j === i ? { ...it, [k]: v } : it));
+  const del = i => setItems(list => list.filter((_, j) => j !== i));
+  const add = () => setItems(list => assignReqIds([...list, { id: "", type: "기능", name: "", source: "", priority: "중", summary: "", detail: "", acceptance: "", quality: "", assumptions: "" }]));
+  function confirmSave() {
+    const valid = items.filter(it => String(it.name || "").trim());
+    if (!valid.length) { setError("확정할 요구사항이 없습니다. 요구사항명을 입력해 주세요."); return; }
+    setRequirements({ items: assignReqIds(valid), sourceName: srcName || "직접 입력", updatedAt: new Date().toISOString() });
+    onClose();
+  }
+
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.72)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div onClick={e=>e.stopPropagation()} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:14, width:"100%", maxWidth:980, maxHeight:"90vh", display:"flex", flexDirection:"column" }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 18px", borderBottom:`1px solid ${T.border}`, flexShrink:0 }}>
+          <div>
+            <div style={{ fontSize:14, fontWeight:700 }}>🤖 요구사항 정의서·명세서 AI 작성</div>
+            <div style={{ fontSize:10.5, color:T.muted, marginTop:2 }}>이해관계자 요구사항 원문 → 도출(RD1200)·명세(RD1300) → 검토·확정 시 정의서·명세서 docx와 요구사항 추적 매트릭스에 자동 반영</div>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:T.muted, fontSize:18, cursor:"pointer" }}>✕</button>
+        </div>
+        <div style={{ padding:"14px 18px", overflowY:"auto" }}>
+          <div style={{ fontSize:11, fontWeight:600, marginBottom:6 }}>이해관계자 요구사항 원문 <span style={{ color:T.muted, fontWeight:400 }}>(RFP 발췌·인터뷰 기록·회의록 등 붙여넣기 또는 파일 업로드)</span></div>
+          <textarea value={srcText} onChange={e=>setSrcText(e.target.value)} placeholder="예) 사용자는 네트워크 장비 목록을 조건별로 검색할 수 있어야 한다. 시스템 응답시간은 3초 이내여야 한다. …" disabled={busy}
+            style={{ ...ta, minHeight:110, marginBottom:8 }} />
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+            <label style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"6px 12px", border:`1px dashed ${T.border}`, borderRadius:8, cursor: busy?"default":"pointer", fontSize:11, color:T.muted }}>
+              📎 파일 업로드 (txt·docx)
+              <input type="file" accept=".txt,.docx" onChange={onFile} disabled={busy} style={{ display:"none" }} />
+            </label>
+            {srcName && <span style={{ fontSize:10.5, color:T.accent }}>📄 {srcName}</span>}
+            <div style={{ flex:1 }} />
+            <Btn onClick={generate} disabled={busy} style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ AI 재생성" : "⚡ AI 도출·명세"}</Btn>
+          </div>
+          {(busy || prog) && <GenProgressBar progress={prog || { percent:3, label:"요구사항 분석 준비 중…" }} subText="원문 분량·요구사항 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
+          {error && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9, marginBottom:10 }}>{error}</div>}
+          {items.length > 0 && (
+            <div style={{ marginTop:8 }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+                <div style={{ fontSize:12, fontWeight:600 }}>도출된 요구사항 <span style={{ color:T.accent }}>{items.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 수정·추가·삭제 후 확정하세요. '상세'에서 명세 내용을 편집합니다.</span></div>
+                <button onClick={add} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>＋ 행 추가</button>
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"64px 86px 1fr 110px 62px 1.2fr 50px 26px", gap:6, fontSize:10, color:T.muted, padding:"0 4px" }}>
+                  <span>ID</span><span>유형</span><span>요구사항명</span><span>출처</span><span>우선순위</span><span>개요</span><span></span><span></span>
+                </div>
+                {items.map((it, i) => (
+                  <div key={i} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"6px 8px" }}>
+                    <div style={{ display:"grid", gridTemplateColumns:"64px 86px 1fr 110px 62px 1.2fr 50px 26px", gap:6, alignItems:"center" }}>
+                      <span style={{ fontFamily:"monospace", fontSize:10, color:T.accent }}>{it.id}</span>
+                      <select value={it.type} onChange={e=>upd(i,"type",e.target.value)} style={inp}>
+                        {["기능","비기능","인터페이스"].map(t=><option key={t} value={t}>{t}</option>)}
+                      </select>
+                      <input value={it.name} onChange={e=>upd(i,"name",e.target.value)} placeholder="요구사항명" style={inp} />
+                      <input value={it.source} onChange={e=>upd(i,"source",e.target.value)} placeholder="출처" style={inp} />
+                      <select value={it.priority} onChange={e=>upd(i,"priority",e.target.value)} style={inp}>
+                        {["상","중","하"].map(p=><option key={p} value={p}>{p}</option>)}
+                      </select>
+                      <input value={it.summary} onChange={e=>upd(i,"summary",e.target.value)} placeholder="개요 1문장" style={inp} />
+                      <button onClick={()=>setOpen(o=>({ ...o, [i]:!o[i] }))} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted, cursor:"pointer", fontSize:10, padding:"4px 0", fontFamily:"inherit" }}>{open[i]?"접기":"상세"}</button>
+                      <button onClick={()=>del(i)} title="삭제" style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:12 }}>✕</button>
+                    </div>
+                    {open[i] && (
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginTop:6 }}>
+                        <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>상세 설명 (명세서)</div><textarea value={it.detail} onChange={e=>upd(i,"detail",e.target.value)} style={ta} /></div>
+                        <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>인수 기준</div><textarea value={it.acceptance} onChange={e=>upd(i,"acceptance",e.target.value)} style={ta} /></div>
+                        <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>품질특성 (비기능 · ISO 9126)</div><input value={it.quality} onChange={e=>upd(i,"quality",e.target.value)} placeholder="예: 효율성" style={inp} /></div>
+                        <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>가정·제약</div><input value={it.assumptions} onChange={e=>upd(i,"assumptions",e.target.value)} style={inp} /></div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 18px", borderTop:`1px solid ${T.border}`, flexShrink:0 }}>
+          <span style={{ fontSize:10.5, color:T.muted }}>{requirements?.items?.length ? `현재 확정본: ${requirements.items.length}건 (${(requirements.updatedAt||"").slice(0,10)})` : "확정된 요구사항 없음"}</span>
+          <div style={{ display:"flex", gap:8 }}>
+            <Btn variant="outline" onClick={onClose} style={{ fontSize:12, padding:"7px 14px" }}>취소</Btn>
+            <Btn onClick={confirmSave} disabled={busy || !items.length} style={{ fontSize:12, padding:"7px 14px" }}>✓ 확정 저장 ({items.length}건)</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StepDeliverables({ deliverablesData, generating, genProgress, genError, onGenerate, form, wbs, pdpCtx, requirements, setRequirements }) {
   const [expanded, setExpanded] = useState({});   // { 카테고리id: true } — 여러 카테고리 동시 펼침 유지
   const toggleCat = (id) => setExpanded(m => ({ ...m, [id]: !m[id] }));
   const [zipProgress, setZipProgress] = useState(null);   // 전체 ZIP 다운로드 진행 상황
   const [zipping, setZipping] = useState(false);
   const [zipError, setZipError] = useState(null);
+  const [reqModal, setReqModal] = useState(false);   // 요구사항 AI 작성 모달
   async function handleZipDownload() {
     if (zipping) return;
     setZipping(true); setZipError(null);
@@ -3629,6 +3948,12 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                     <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
                     <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.taskName ? `${doc.taskName} — ` : ""}{doc.purpose}</div></div>
                     <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
+                    {reqDocKind(doc.name) && (
+                      <button onClick={()=>setReqModal(true)} title="이해관계자 요구사항 원문으로 AI 자동 작성"
+                        style={{ background: requirements?.items?.length ? T.accentDim : "none", border:`1px solid ${T.accent}66`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>
+                        {requirements?.items?.length ? `🤖 ${requirements.items.length}건 ✓` : "🤖 AI 작성"}
+                      </button>
+                    )}
                     <button onClick={()=>downloadSingleDeliverable(doc, cat.name, form||{}, wbs, pdpCtx)} title="이 산출물만 다운로드"
                       style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
                   </div>
@@ -3638,6 +3963,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
           </div>
         </div>
       )}
+      {reqModal && <ReqGenModal onClose={()=>setReqModal(false)} form={form} requirements={requirements} setRequirements={setRequirements} />}
     </div>
   );
 }
@@ -3895,7 +4221,7 @@ function WbsScheduleView({ wbs }) {
 function ProjectDetail({ project, nav, onDelete, onEdit }) {
   const [tab, setTab] = useState("overview");
   // 테일러링결과서 실문서 생성용 컨텍스트 (SDLC는 tailoring JSON에 함께 저장됨)
-  const pdpCtx = { ossp:project.ossp||null, sdlc:project.tailoring?.sdlc||null, tailoring:project.tailoring||null, pdp:project.pdp||null };
+  const pdpCtx = { ossp:project.ossp||null, sdlc:project.tailoring?.sdlc||null, tailoring:project.tailoring||null, pdp:project.pdp||null, requirements:project.tailoring?.requirements||null };
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [zipProgress, setZipProgress] = useState(null);   // 전체 ZIP 다운로드 진행 상황
   const [zipping, setZipping] = useState(false);
