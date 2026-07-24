@@ -2914,6 +2914,31 @@ async function docxBytesToText(bytes) {
   x = x.replace(/<w:tab[^>]*\/>/g, "\t").replace(/<\/w:p>/g, "\n").replace(/<[^>]+>/g, "");
   return x.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCharCode(d)).trim();
 }
+// xlsx 바이트 → 평문 텍스트 (요구사항 원문 파일 업로드용) — 시트별 셀 값을 탭/줄바꿈으로 이어붙임
+async function xlsxBytesToText(bytes) {
+  const files = await unzipBytes(bytes);
+  const td = new TextDecoder();
+  const read = p => { const f = files.find(x => x.path === p); return f ? (typeof f.content === "string" ? f.content : td.decode(f.content)) : ""; };
+  const unesc = s => String(s).replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCharCode(d));
+  // 공유 문자열 테이블 (t="s" 셀이 참조)
+  const sst = [...read("xl/sharedStrings.xml").matchAll(/<si>([\s\S]*?)<\/si>/g)]
+    .map(m => unesc([...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("")));
+  const out = [];
+  files.filter(f => /^xl\/worksheets\/sheet\d+\.xml$/.test(f.path)).forEach(f => {
+    const xml = typeof f.content === "string" ? f.content : td.decode(f.content);
+    [...xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)].forEach(rm => {
+      const vals = [...rm[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)].map(cm => {
+        const attrs = cm[1], inner = cm[2];
+        if (/t="s"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); return v ? (sst[Number(v[1])] || "") : ""; }
+        if (/t="inlineStr"/.test(attrs)) return unesc([...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join(""));
+        const v = /<v>([\s\S]*?)<\/v>/.exec(inner);
+        return v ? unesc(v[1]) : "";
+      }).filter(v => String(v).trim() !== "");
+      if (vals.length) out.push(vals.join("\t"));
+    });
+  });
+  return out.join("\n").trim();
+}
 // 확정된 요구사항 → 정의서/명세서/통합 docx (회사 표준 프레임 + 로고)
 function makeReqDocx(meta, ctx, phase, kind) {
   const req = ctx?.requirements || {};
@@ -3726,7 +3751,8 @@ function ReqGenModal({ onClose, form, requirements, setRequirements }) {
       let text = "";
       if (name.endsWith(".txt")) text = await file.text();
       else if (name.endsWith(".docx")) text = await docxBytesToText(new Uint8Array(await file.arrayBuffer()));
-      else { setError("txt 또는 docx 파일만 업로드할 수 있습니다."); return; }
+      else if (name.endsWith(".xlsx")) text = await xlsxBytesToText(new Uint8Array(await file.arrayBuffer()));
+      else { setError("txt·docx·xlsx 파일만 업로드할 수 있습니다."); return; }
       if (!text.trim()) { setError("파일에서 텍스트를 추출하지 못했습니다."); return; }
       setSrcText(t => (t ? t + "\n\n" : "") + text.trim());
       setSrcName(file.name);
@@ -3804,8 +3830,8 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
             style={{ ...ta, minHeight:110, marginBottom:8 }} />
           <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12, flexWrap:"wrap" }}>
             <label style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"6px 12px", border:`1px dashed ${T.border}`, borderRadius:8, cursor: busy?"default":"pointer", fontSize:11, color:T.muted }}>
-              📎 파일 업로드 (txt·docx)
-              <input type="file" accept=".txt,.docx" onChange={onFile} disabled={busy} style={{ display:"none" }} />
+              📎 파일 업로드 (txt·docx·xlsx)
+              <input type="file" accept=".txt,.docx,.xlsx" onChange={onFile} disabled={busy} style={{ display:"none" }} />
             </label>
             {srcName && <span style={{ fontSize:10.5, color:T.accent }}>📄 {srcName}</span>}
             <div style={{ flex:1 }} />
