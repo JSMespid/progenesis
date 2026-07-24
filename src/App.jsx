@@ -2881,7 +2881,9 @@ function makePdpDocx(meta, ctx, phase) {
 // ── 요구사항 정의서·명세서 (AI 자동 작성 — 정보공학 방법론 RD1200·RD1300) ──────
 // 산출물명 → 요구사항 문서 종류: "def"(정의서) | "spec"(명세서) | "both"(정의서·명세서 통합) | null
 function reqDocKind(name) {
-  const n = normDocName(name);
+  // 산출물명의 '/'는 경로가 아니라 병기 구분자(예: "요구사항 정의서/명세서")이므로
+  // normDocName의 경로 분리에 걸리지 않게 치환 후 정규화
+  const n = normDocName(String(name || "").replace(/\//g, "·"));
   if (!n.includes("요구사항")) return null;
   const hasDef = n.includes("정의서");
   const hasSpec = n.includes("명세서");
