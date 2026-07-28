@@ -3099,6 +3099,251 @@ async function injectRequirementsIntoRtmXlsx(bytes, req) {
   return zipBytes(files);
 }
 
+// ── OSSP 템플릿 기반 요구사항 문서 생성 ──────────────────────────
+// 확정 요구사항을 OSSP 라이브러리의 실제 산출물템플릿에 채워 표준 양식 그대로 생성한다.
+// 정의서(RD1202)=xlsx 템플릿, 명세서(RD1301)=docx 템플릿. 작성가이드·작성예 시트/표는 그대로 유지.
+
+// XML 텍스트 노드(<t>·<w:t>) 내부만 대상으로 placeholder 치환 — 태그·속성은 건드리지 않음
+function xmlTextReplaceAll(xml, pairs) {
+  return xml.replace(/(<(?:w:t|t)\b[^>]*>)([^<]*)(<\/(?:w:t|t)>)/g, (m, a, txt, b) => {
+    let t = txt;
+    pairs.forEach(([from, to]) => { t = t.split(from).join(to); });
+    return a + t + b;
+  });
+}
+// docx 문단 단위 placeholder 치환 — placeholder가 여러 run(<w:r>)으로 쪼개져 있어도 문단 전체 텍스트를 합쳐 치환.
+// 치환이 발생한 문단만 첫 run의 서식(pPr·rPr)을 유지한 단일 run으로 재구성한다.
+function docxReplacePlaceholders(xml, pairs) {
+  return xml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, p => {
+    const txt = [...p.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map(m => m[1]).join("");
+    let replaced = txt, hit = false;
+    pairs.forEach(([f, t]) => { if (replaced.includes(f)) { replaced = replaced.split(f).join(t); hit = true; } });
+    if (!hit) return p;
+    const pPr = /<w:pPr>[\s\S]*?<\/w:pPr>/.exec(p)?.[0] || "";
+    const rPr = /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(p)?.[0] || "";
+    return `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${replaced}</w:t></w:r></w:p>`;
+  });
+}
+// 표지·사용권한 등 공통 placeholder 치환 쌍 — {프로젝트명}·{시스템 명}·{작성자 명}·날짜·버전
+function reqTplPlaceholderPairs(meta) {
+  const esc = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const today = new Date().toISOString().slice(0, 10);
+  return [
+    ["{프로젝트명}", esc(meta.name || "")], ["{프로젝트 명}", esc(meta.name || "")],
+    ["{시스템명}", esc(meta.name || "")], ["{시스템 명}", esc(meta.name || "")],
+    ["{작성자명}", esc(meta.pm || "")], ["{작성자 명}", esc(meta.pm || "")],
+    ["{YYYY-MM-DD}", today], ["YYYY-MM-DD", today],
+    ["Version X.X", "Version 1.0"], ["X.X", "1.0"],
+  ];
+}
+
+// 정의서(RD1202) xlsx 템플릿 채움: 표지·사용권한 placeholder 치환 + '템플릿' 시트에 요구사항 기입
+// 시트 구성(표지·사용권한·재개정이력·작성가이드·작성예)은 그대로 유지한다.
+async function injectRequirementsIntoDefXlsx(bytes, meta, req) {
+  const items = req?.items;
+  if (!items?.length) return null;
+  const files = await unzipBytes(bytes);
+  const td = new TextDecoder();
+  const byPath = {}; files.forEach(f => { byPath[f.path] = f; });
+  const getX = p => { const f = byPath[p]; return f ? (typeof f.content === "string" ? f.content : td.decode(f.content)) : null; };
+  // 1) placeholder 치환 (sharedStrings + 모든 시트의 텍스트 노드)
+  const pairs = reqTplPlaceholderPairs(meta);
+  files.forEach(f => {
+    if (f.path === "xl/sharedStrings.xml" || /^xl\/worksheets\/sheet\d+\.xml$/.test(f.path)) {
+      const xml = typeof f.content === "string" ? f.content : td.decode(f.content);
+      f.content = xmlTextReplaceAll(xml, pairs);
+    }
+  });
+  // 2) '템플릿' 시트 탐색 (workbook.xml → rels)
+  const wbXml = getX("xl/workbook.xml");
+  if (!wbXml) return null;
+  const relXml = getX("xl/_rels/workbook.xml.rels") || "";
+  const relMap = {};
+  [...relXml.matchAll(/<Relationship\b[^>]*>/g)].forEach(m => {
+    const id = /Id="([^"]+)"/.exec(m[0]); const tg = /Target="([^"]+)"/.exec(m[0]);
+    if (id && tg) relMap[id[1]] = tg[1];
+  });
+  const sheets = [...wbXml.matchAll(/<sheet\b[^>]*>/g)].map(m => ({
+    name: /name="([^"]+)"/.exec(m[0])?.[1] || "",
+    rid: /r:id="([^"]+)"/.exec(m[0])?.[1] || "",
+  }));
+  const target = sheets.find(s => s.name === "템플릿") || sheets.find(s => s.name.includes("템플릿"));
+  if (!target || !relMap[target.rid]) return null;
+  const path = "xl/" + relMap[target.rid].replace(/^\//, "").replace(/^xl\//, "");
+  const shF = byPath[path];
+  if (!shF) return null;
+  let xml = typeof shF.content === "string" ? shF.content : td.decode(shF.content);
+  const sd = /<sheetData>([\s\S]*?)<\/sheetData>/.exec(xml);
+  if (!sd) return null;
+  // 3) 헤더 행('요구사항 ID') 탐지 — 공유 문자열 참조 해석 포함
+  const sstXml = getX("xl/sharedStrings.xml") || "";
+  const sst = [...sstXml.matchAll(/<si>([\s\S]*?)<\/si>/g)]
+    .map(m => [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join(""));
+  const cellText = cXml => {
+    const attrs = /<c\b([^>]*)>/.exec(cXml)?.[1] || "";
+    const inner = cXml;
+    if (/t="s"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); return v ? (sst[Number(v[1])] || "") : ""; }
+    if (/t="inlineStr"/.test(attrs)) return [...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("");
+    const v = /<v>([\s\S]*?)<\/v>/.exec(inner); return v ? v[1] : "";
+  };
+  const rowsXml = [...sd[1].matchAll(/<row\b[^>]*(?:\/>|>[\s\S]*?<\/row>)/g)].map(m => m[0]);
+  let headerIdx = -1;
+  for (let i = 0; i < rowsXml.length; i++) {
+    const cells = [...rowsXml[i].matchAll(/<c\b[^>]*(?:\/>|>[\s\S]*?<\/c>)/g)].map(m => m[0]);
+    if (cells.some(c => cellText(c).replace(/\s/g, "") === "요구사항ID")) { headerIdx = i; break; }
+  }
+  if (headerIdx < 0) return null;
+  const headRow = rowsXml[headerIdx];
+  const base = Number(/r="(\d+)"/.exec(headRow)?.[1] || headerIdx + 1) + 1;
+  // 헤더 다음 행(빈 양식 행)의 컬럼별 셀 스타일 재사용 → 표 테두리·서식 유지
+  const styleByCol = {};
+  if (rowsXml[headerIdx + 1]) [...rowsXml[headerIdx + 1].matchAll(/<c\b[^>]*>/g)].forEach(m => {
+    const rAttr = /r="([A-Z]+)\d+"/.exec(m[0]); const sAttr = /s="(\d+)"/.exec(m[0]);
+    if (rAttr && sAttr) styleByCol[rAttr[1]] = sAttr[1];
+  });
+  const esc = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // 컬럼: A ID · B 명 · C 설명 · D 상태 · E 중요도 · F 난이도 · G 안정성 · H 관련부서 · I 발의자 · J 출처
+  const cols = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
+  const newRows = items.map((it, i) => {
+    const r = base + i;
+    const vals = [it.id || "", it.name || "", it.summary || "", "신규", it.priority || "중", "", "", "", "", it.source || ""];
+    const cells = vals.map((v, ci) => {
+      const s = styleByCol[cols[ci]] ? ` s="${styleByCol[cols[ci]]}"` : "";
+      return `<c r="${cols[ci]}${r}"${s} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
+    }).join("");
+    return `<row r="${r}">${cells}</row>`;
+  }).join("");
+  // 헤더까지 유지 + 이후 빈 양식 행은 요구사항 행으로 대체
+  xml = xml.replace(sd[0], `<sheetData>${rowsXml.slice(0, headerIdx + 1).join("")}${newRows}</sheetData>`);
+  shF.content = xml;
+  return zipBytes(files);
+}
+
+// 명세서(RD1301) docx 템플릿 채움: 표지 placeholder 치환 + 기능·비기능·인터페이스의 빈 명세 블록 표를
+// 요구사항 수만큼 복제해 기입 (작성가이드·작성예 표는 그대로 유지). 모듈 문서는 해당 모듈 배정분 + 공통만 담는다.
+async function injectRequirementsIntoSpecDocx(bytes, meta, req, doc) {
+  const items0 = req?.items;
+  if (!items0?.length) return null;
+  // 모듈 분권 규칙 (makeReqDocx와 동일)
+  const docWbs = String(doc?.wbsNo || "");
+  const under = (c, p) => c === p || c.startsWith(p + ".");
+  const leaves = req.specLeaves || [];
+  const leafName = {}; leaves.forEach(l => { leafName[l.wbsNo] = l.name; });
+  const isCommon = it => !it.wbsNo || it.wbsNo === "공통";
+  const inTree = docWbs && leaves.some(l => under(l.wbsNo, docWbs) || under(docWbs, l.wbsNo));
+  const scoped = inTree
+    ? [...items0.filter(it => !isCommon(it) && under(String(it.wbsNo), docWbs)), ...items0.filter(isCommon)]
+    : items0;
+  const files = await unzipBytes(bytes);
+  const td = new TextDecoder();
+  const f = files.find(x => x.path === "word/document.xml");
+  if (!f) return null;
+  let xml = typeof f.content === "string" ? f.content : td.decode(f.content);
+  // 1) 표지·본문 placeholder 치환 (run 분할 대응 문단 단위)
+  xml = docxReplacePlaceholders(xml, reqTplPlaceholderPairs(meta));
+  // 2) 빈 명세 블록 표 탐지: '요구사항 ID' 라벨 다음 셀이 비어 있고 '요구사항 명세' 라벨을 가진 표
+  //    문서 흐름상 [기능, 비기능, 인터페이스] 순으로 나타난다
+  const tcRe = /<w:tc(?:\s[^>]*)?>[\s\S]*?<\/w:tc>/g;
+  // <w:t> 태그만 정확히 매칭 (<w:tcPr> 등 유사 태그 오매칭 방지), 라벨 비교는 공백 무시
+  const tcText = tc => [...tc.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map(m => m[1]).join("").replace(/\s+/g, " ").trim();
+  const normLbl = s => String(s).replace(/\s+/g, "");
+  const escX = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // 셀 내용 교체: tcPr와 첫 문단의 pPr·rPr을 보존해 서식 유지, lines 각각을 문단으로 기입
+  const setTcParagraphs = (tc, lines) => {
+    const open = /^<w:tc(?:\s[^>]*)?>/.exec(tc)?.[0] || "<w:tc>";
+    const tcPr = /<w:tcPr>[\s\S]*?<\/w:tcPr>/.exec(tc)?.[0] || "";
+    const firstP = /<w:p\b[\s\S]*?<\/w:p>/.exec(tc);
+    const pPr = firstP ? (/<w:pPr>[\s\S]*?<\/w:pPr>/.exec(firstP[0])?.[0] || "") : "";
+    const rPr = firstP ? (/<w:rPr>[\s\S]*?<\/w:rPr>/.exec(firstP[0])?.[0] || "") : "";
+    const ps = (lines.length ? lines : [""]).map(l => String(l).trim() === ""
+      ? `<w:p>${pPr}</w:p>`
+      : `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${escX(l)}</w:t></w:r></w:p>`).join("");
+    return `${open}${tcPr}${ps}</w:tc>`;
+  };
+  // 빈 블록 1개를 요구사항 1건으로 채운 사본 생성
+  const fillSpecBlock = (tblXml, it) => {
+    const vals = {   // 키는 공백 제거형 라벨
+      "업무영역": isCommon(it) ? "공통" : (leafName[it.wbsNo] || it.wbsNo),
+      "업무기능": isCommon(it) ? "N/A" : `${it.wbsNo} ${leafName[it.wbsNo] || ""}`.trim(),
+      "요구사항ID": it.id || "", "요구사항명": it.name || "",
+      "요구사항설명": it.summary || "",
+      "유형": (it.type || "") + (it.type === "비기능" && it.quality ? ` (${it.quality})` : ""),
+      "중요도": it.priority || "중",
+      "난이도": "", "안정성": "", "관련부서": "", "발의자": "",
+      "출처": it.source || "",
+      "승인조건": it.acceptance || "",
+    };
+    const specLines = [
+      it.detail || it.summary || "",
+      "",
+      `▪ 인수 기준: ${it.acceptance || "-"}`,
+      ...(it.type === "비기능" && it.quality ? [`▪ 품질특성(ISO 9126): ${it.quality}`] : []),
+      `▪ 가정·제약: ${it.assumptions || "-"}`,
+    ];
+    const tcs = [...tblXml.matchAll(tcRe)].map(m => m[0]);
+    const texts = tcs.map(tc => normLbl(tcText(tc)));
+    const fillAt = {};   // tc 순번 → 채울 문단들
+    for (let i = 0; i < texts.length; i++) {
+      if (texts[i] === "요구사항명세" && i + 1 < texts.length) { fillAt[i + 1] = specLines; continue; }
+      if (vals[texts[i]] !== undefined && i + 1 < texts.length
+        && vals[texts[i + 1]] === undefined && texts[i + 1] !== "요구사항명세") {
+        fillAt[i + 1] = [vals[texts[i]]];
+        i++;   // 값 셀 스킵
+      }
+    }
+    let k = -1;
+    return tblXml.replace(tcRe, m => { k++; return fillAt[k] ? setTcParagraphs(m, fillAt[k]) : m; });
+  };
+  const tbls = [...xml.matchAll(/<w:tbl>[\s\S]*?<\/w:tbl>/g)].map(m => m[0]);
+  const blanks = tbls.filter(t => {
+    if ((t.match(/<w:tbl>/g) || []).length !== 1) return false;   // 중첩 표 잘림 조각 배제
+    const tcs = [...t.matchAll(tcRe)].map(m => m[0]);
+    const texts = tcs.map(tc => normLbl(tcText(tc)));
+    if (!texts.includes("요구사항명세")) return false;
+    const i = texts.indexOf("요구사항ID");
+    return i > -1 && texts[i + 1] !== undefined && texts[i + 1] === "";
+  });
+  if (!blanks.length) return null;
+  const typeOrder = ["기능", "비기능", "인터페이스"];
+  let filledAny = false;
+  blanks.slice(0, 3).forEach((tbl, bi) => {
+    const list = scoped.filter(it => (it.type || "기능") === typeOrder[bi]);
+    if (!list.length) return;   // 해당 유형 요구사항이 없으면 빈 양식 유지
+    const filled = list.map(it => fillSpecBlock(tbl, it)).join("<w:p/>");
+    xml = xml.replace(tbl, filled);
+    filledAny = true;
+  });
+  if (!filledAny) return null;
+  f.content = xml;
+  return zipBytes(files);
+}
+
+// 요구사항 산출물 → OSSP 템플릿 채움 시도 (성공 시 {ext, bytes}, 실패·미매칭 시 null → 자체 생성 폴백)
+async function resolveReqDocFromTemplate(doc, kind, meta, ctx) {
+  if (kind === "both") return null;   // 정의서·명세서 통합 산출물은 자체 생성 유지 (템플릿이 분리형이므로)
+  let tpl = null;
+  const dbId = await resolveOsspDbId(ctx?.ossp);
+  if (dbId) tpl = findTemplateFor(doc.name, await fetchOsspTemplates(dbId));
+  if (!tpl) tpl = findTemplateFor(doc.name, await fetchOsspTemplates(null));
+  if (!tpl) return null;
+  const ext = (String(tpl.file_name).split(".").pop() || "").toLowerCase();
+  const bytes = await fetchTemplateBytes(tpl);
+  if (!bytes) return null;
+  if (kind === "def" && ext === "xlsx") {
+    const filled = await injectRequirementsIntoDefXlsx(bytes, meta, ctx.requirements);
+    if (!filled) return null;
+    try { const logod = await injectLogosIntoTemplateXlsx(filled, meta); return { ext: "xlsx", bytes: logod || filled }; }
+    catch (_) { return { ext: "xlsx", bytes: filled }; }
+  }
+  if (kind === "spec" && ext === "docx") {
+    const filled = await injectRequirementsIntoSpecDocx(bytes, meta, ctx.requirements, doc);
+    if (!filled) return null;
+    try { const logod = await injectLogosIntoTemplateDocx(filled, meta); return { ext: "docx", bytes: logod || filled }; }
+    catch (_) { return { ext: "docx", bytes: filled }; }
+  }
+  return null;
+}
+
 // ── XLSX ─────────────────────────────────────────────────────
 function colLetter(n) { let s = ""; n += 1; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
 function makeXlsx({ sheetName = "Sheet1", rows }) {
@@ -3638,6 +3883,14 @@ function isDynamicDoc(doc, wbs, ctx) {
 }
 // 산출물 1건 → 파일 결정: 특수 산출물 → OSSP 템플릿 실파일 → 스켈레톤 순
 async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
+  // 요구사항 정의서·명세서: 확정 요구사항이 있으면 OSSP 산출물템플릿에 채워 표준 양식 그대로 생성 (실패 시 자체 생성 폴백)
+  const reqKind0 = reqDocKind(doc.name);
+  if (reqKind0 && ctx?.requirements?.items?.length) {
+    try {
+      const viaTpl = await resolveReqDocFromTemplate(doc, reqKind0, meta, ctx);
+      if (viaTpl) return viaTpl;
+    } catch (_) { /* 템플릿 조회·채움 실패 시 자체 생성 폴백 */ }
+  }
   if (!isDynamicDoc(doc, wbs, ctx)) {
     try {
       // 1) 선택된 OSSP의 산출물템플릿에서 우선 매칭 (내장 OSSP는 이름 → DB UUID 해석)
@@ -4109,7 +4362,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 18px", borderBottom:`1px solid ${T.border}`, flexShrink:0 }}>
           <div>
             <div style={{ fontSize:14, fontWeight:700 }}>🤖 요구사항 정의서·명세서 AI 작성</div>
-            <div style={{ fontSize:10.5, color:T.muted, marginTop:2 }}>이해관계자 요구사항 원문 → 도출(RD1200)·명세(RD1300) → 검토·확정 시 정의서·명세서 docx와 요구사항 추적 매트릭스에 자동 반영</div>
+            <div style={{ fontSize:10.5, color:T.muted, marginTop:2 }}>이해관계자 요구사항 원문 → 도출(RD1200)·명세(RD1300) → 검토·확정 시 OSSP 템플릿 기반 정의서(xlsx)·명세서(docx)와 요구사항 추적 매트릭스에 자동 반영</div>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"none", color:T.muted, fontSize:18, cursor:"pointer" }}>✕</button>
         </div>
