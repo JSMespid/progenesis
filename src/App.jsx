@@ -3878,9 +3878,9 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
   }
 
   return (
-    <div style={{ border:`1px solid ${T.border}`, borderRadius:9, marginBottom:12, background:T.bg }}>
+    <div style={{ border:`1px solid ${T.amber}44`, borderLeft:`3px solid ${T.amber}`, borderRadius:9, marginBottom:12, background:T.amber+"0A" }}>
       <div onClick={()=>setOpenPanel(o=>!o)} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 12px", cursor:"pointer" }}>
-        <span style={{ fontSize:11.5, fontWeight:600 }}>📐 작성 가이드</span>
+        <span style={{ fontSize:11.5, fontWeight:600, color:T.amber }}>📐 작성 가이드</span>
         <span style={{ fontSize:10.5, color: applied ? T.accent : T.muted }}>
           {guides.length ? `등록 ${guides.length}건 · 적용 ${applied}건` : "등록된 가이드 없음"}
         </span>
@@ -4067,17 +4067,19 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
         </div>
         <div style={{ padding:"14px 18px", overflowY:"auto" }}>
           <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} />
-          <div style={{ fontSize:11, fontWeight:600, marginBottom:6 }}>이해관계자 요구사항 원문 <span style={{ color:T.muted, fontWeight:400 }}>(RFP 발췌·인터뷰 기록·회의록 등 붙여넣기 또는 파일 업로드)</span></div>
-          <textarea value={srcText} onChange={e=>setSrcText(e.target.value)} placeholder="예) 사용자는 네트워크 장비 목록을 조건별로 검색할 수 있어야 한다. 시스템 응답시간은 3초 이내여야 한다. …" disabled={busy}
-            style={{ ...ta, minHeight:110, marginBottom:8 }} />
-          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12, flexWrap:"wrap" }}>
-            <label style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"6px 12px", border:`1px dashed ${T.border}`, borderRadius:8, cursor: busy?"default":"pointer", fontSize:11, color:T.muted }}>
-              📎 파일 업로드 (txt·docx·xlsx)
-              <input type="file" accept=".txt,.docx,.xlsx" onChange={onFile} disabled={busy} style={{ display:"none" }} />
-            </label>
-            {srcName && <span style={{ fontSize:10.5, color:T.accent }}>📄 {srcName}</span>}
-            <div style={{ flex:1 }} />
-            <Btn onClick={generate} disabled={busy} style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ AI 재생성" : "⚡ AI 도출·명세"}</Btn>
+          <div style={{ border:`1px solid ${T.accentDim}`, borderLeft:`3px solid ${T.accent}`, borderRadius:9, background:T.accent+"08", padding:"10px 12px", marginBottom:12 }}>
+            <div style={{ fontSize:11.5, fontWeight:600, marginBottom:6, color:T.accent }}>📝 이해관계자 요구사항 원문 <span style={{ color:T.muted, fontWeight:400, fontSize:10.5 }}>(RFP 발췌·인터뷰 기록·회의록 등 붙여넣기 또는 파일 업로드)</span></div>
+            <textarea value={srcText} onChange={e=>setSrcText(e.target.value)} placeholder="예) 사용자는 네트워크 장비 목록을 조건별로 검색할 수 있어야 한다. 시스템 응답시간은 3초 이내여야 한다. …" disabled={busy}
+              style={{ ...ta, minHeight:110, marginBottom:8 }} />
+            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+              <label style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"6px 12px", border:`1px dashed ${T.accentDim}`, borderRadius:8, cursor: busy?"default":"pointer", fontSize:11, color:T.muted, background:T.bg }}>
+                📎 파일 업로드 (txt·docx·xlsx)
+                <input type="file" accept=".txt,.docx,.xlsx" onChange={onFile} disabled={busy} style={{ display:"none" }} />
+              </label>
+              {srcName && <span style={{ fontSize:10.5, color:T.accent }}>📄 {srcName}</span>}
+              <div style={{ flex:1 }} />
+              <Btn onClick={generate} disabled={busy} style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ AI 재생성" : "⚡ AI 도출·명세"}</Btn>
+            </div>
           </div>
           {(busy || prog) && <GenProgressBar progress={prog || { percent:3, label:"요구사항 분석 준비 중…" }} subText="원문 분량·요구사항 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
           {error && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9, marginBottom:10 }}>{error}</div>}
