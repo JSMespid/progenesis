@@ -3813,6 +3813,31 @@ ${chunks[i]}`, 3000);
   return [...new Set(parts)].map(s => "· " + s).join("\n").slice(0, 2000);
 }
 
+// ── 다중 파일 업로드 공용 헬퍼: txt·docx·xlsx 여러 개를 한 번에 텍스트로 추출 ──
+// 반환: { files:[{name,text}], errors:[사유] } — 파일 선택·드래그앤드롭 양쪽에서 사용
+async function readUploadFiles(fileArr) {
+  const files = [], errors = [];
+  for (const f of Array.from(fileArr || [])) {
+    try {
+      const name = f.name.toLowerCase();
+      let text = "";
+      if (name.endsWith(".txt")) text = await f.text();
+      else if (name.endsWith(".docx")) text = await docxBytesToText(new Uint8Array(await f.arrayBuffer()));
+      else if (name.endsWith(".xlsx")) text = await xlsxBytesToText(new Uint8Array(await f.arrayBuffer()));
+      else { errors.push(`${f.name}: txt·docx·xlsx만 지원`); continue; }
+      if (!text.trim()) { errors.push(`${f.name}: 텍스트 추출 실패`); continue; }
+      files.push({ name: f.name, text: text.trim() });
+    } catch (e) { errors.push(`${f.name}: ${e.message}`); }
+  }
+  return { files, errors };
+}
+// 파일 배열 병합 — 같은 이름을 다시 올리면 교체
+function mergeUploadFiles(prev, added) {
+  const byName = Object.fromEntries(prev.map(f => [f.name, f]));
+  added.forEach(f => { byName[f.name] = f; });
+  return Object.values(byName);
+}
+
 // ── 작성 가이드 패널 (AI 작성 모달 공용 UI): 전역 가이드 목록·적용 선택·등록·삭제 ──
 function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
   const [openPanel, setOpenPanel] = useState(false);
@@ -3820,49 +3845,48 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
   const [gName, setGName] = useState("");
   const [gCat, setGCat] = useState(GUIDE_CATEGORIES[0]);
   const [gText, setGText] = useState("");
-  const [gFile, setGFile] = useState("");
+  const [gFiles, setGFiles] = useState([]);   // 업로드된 가이드 파일들 [{name, text}]
+  const [gDrag, setGDrag] = useState(false);  // 드래그앤드롭 하이라이트
   const [gBusy, setGBusy] = useState(false);
   const [gProg, setGProg] = useState("");
   const [gErr, setGErr] = useState(null);
   const inp = { width:"100%", padding:"5px 7px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:11, fontFamily:"inherit", boxSizing:"border-box" };
   const applied = guides.filter(g => sel[g.id]).length;
 
-  async function onGuideFile(e) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
+  async function addGuideFiles(fileArr) {
+    if (gBusy) return;
     setGErr(null);
-    try {
-      const name = file.name.toLowerCase();
-      let text = "";
-      if (name.endsWith(".txt")) text = await file.text();
-      else if (name.endsWith(".docx")) text = await docxBytesToText(new Uint8Array(await file.arrayBuffer()));
-      else if (name.endsWith(".xlsx")) text = await xlsxBytesToText(new Uint8Array(await file.arrayBuffer()));
-      else { setGErr("txt·docx·xlsx 파일만 업로드할 수 있습니다."); return; }
-      if (!text.trim()) { setGErr("파일에서 텍스트를 추출하지 못했습니다."); return; }
-      setGText(t => (t ? t + "\n\n" : "") + text.trim());
-      setGFile(file.name);
-      if (!gName.trim()) setGName(file.name.replace(/\.(txt|docx|xlsx)$/i, ""));
-    } catch (err) { setGErr("파일 읽기 실패: " + err.message); }
+    const { files, errors } = await readUploadFiles(fileArr);
+    if (files.length) {
+      setGFiles(prev => mergeUploadFiles(prev, files));
+      if (!gName.trim()) setGName(files[0].name.replace(/\.(txt|docx|xlsx)$/i, ""));
+    }
+    if (errors.length) setGErr(errors.join(" / "));
+  }
+  async function onGuideFile(e) {
+    const arr = Array.from(e.target.files || []);
+    e.target.value = "";
+    await addGuideFiles(arr);
   }
 
   async function register() {
     if (!gName.trim()) { setGErr("가이드 이름을 입력해 주세요."); return; }
-    if (gText.trim().length < 50) { setGErr("가이드 내용을 50자 이상 입력하거나 파일을 업로드해 주세요."); return; }
+    const combined = [gText.trim(), ...gFiles.map(f => `[파일: ${f.name}]\n${f.text}`)].filter(Boolean).join("\n\n");
+    if (combined.length < 50) { setGErr("가이드 내용을 50자 이상 입력하거나 파일을 업로드해 주세요."); return; }
     setGBusy(true); setGErr(null);
     try {
-      const summary = await summarizeGuideText(gName.trim(), gCat, gText, setGProg);
+      const summary = await summarizeGuideText(gName.trim(), gCat, combined, setGProg);
       if (!summary) throw new Error("가이드에서 작성 규칙을 추출하지 못했습니다. 내용을 확인해 주세요.");
       setGProg("가이드 저장 중…");
       const r = await fetch("/api/writing-guides", {
         method:"POST", headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ name: gName.trim(), category: gCat, summary, content: gText.slice(0, 50000) }),
+        body: JSON.stringify({ name: gName.trim(), category: gCat, summary, content: combined.slice(0, 50000) }),
       });
       const created = await r.json().catch(() => null);
       if (!r.ok || !created?.id) throw new Error(created?.error || `저장 실패 (status ${r.status})`);
       setGuides(gs => [...gs, created]);
       setSel(s => ({ ...s, [created.id]: true }));
-      setGName(""); setGText(""); setGFile(""); setGCat(GUIDE_CATEGORIES[0]); setAdding(false);
+      setGName(""); setGText(""); setGFiles([]); setGCat(GUIDE_CATEGORIES[0]); setAdding(false);
     } catch (e) { setGErr("가이드 등록 실패: " + e.message); }
     setGBusy(false); setGProg("");
   }
@@ -3907,7 +3931,9 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
           {!adding ? (
             <button onClick={()=>setAdding(true)} disabled={disabled} style={{ background:"none", border:`1px dashed ${T.border}`, borderRadius:7, color:T.accent, cursor:"pointer", fontSize:11, padding:"5px 12px", fontFamily:"inherit" }}>＋ 가이드 등록</button>
           ) : (
-            <div style={{ border:`1px dashed ${T.border}`, borderRadius:8, padding:10 }}>
+            <div onDragOver={e=>{ e.preventDefault(); if (!gBusy) setGDrag(true); }} onDragLeave={()=>setGDrag(false)}
+              onDrop={e=>{ e.preventDefault(); setGDrag(false); addGuideFiles(Array.from(e.dataTransfer.files || [])); }}
+              style={{ border:`1px dashed ${gDrag ? T.accent : T.border}`, borderRadius:8, padding:10, background: gDrag ? T.accent+"14" : "transparent" }}>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", gap:6, marginBottom:6 }}>
                 <input value={gName} onChange={e=>setGName(e.target.value)} placeholder="가이드 이름 (예: PMBOK 8판 품질관리 기준)" disabled={gBusy} style={inp} />
                 <select value={gCat} onChange={e=>setGCat(e.target.value)} disabled={gBusy} style={inp}>
@@ -3915,14 +3941,19 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
                 </select>
               </div>
               <textarea value={gText} onChange={e=>setGText(e.target.value)} disabled={gBusy}
-                placeholder="가이드 내용 붙여넣기 또는 아래에서 파일 업로드 — 등록 시 AI가 핵심 작성 규칙만 추출해 저장하며, 산출물 작성 시 해당 규칙이 적용됩니다."
+                placeholder="가이드 내용 붙여넣기, 파일 업로드 또는 이 영역에 파일 드래그앤드롭(여러 개 가능) — 등록 시 AI가 핵심 작성 규칙만 추출해 저장하며, 산출물 작성 시 해당 규칙이 적용됩니다."
                 style={{ ...inp, minHeight:70, resize:"vertical", lineHeight:1.5, marginBottom:6 }} />
               <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                 <label style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"5px 10px", border:`1px dashed ${T.border}`, borderRadius:7, cursor: gBusy?"default":"pointer", fontSize:10.5, color:T.muted }}>
-                  📎 파일 업로드 (txt·docx·xlsx)
-                  <input type="file" accept=".txt,.docx,.xlsx" onChange={onGuideFile} disabled={gBusy} style={{ display:"none" }} />
+                  📎 파일 업로드 (txt·docx·xlsx · 여러 개)
+                  <input type="file" multiple accept=".txt,.docx,.xlsx" onChange={onGuideFile} disabled={gBusy} style={{ display:"none" }} />
                 </label>
-                {gFile && <span style={{ fontSize:10, color:T.accent }}>📄 {gFile}</span>}
+                {gFiles.map(f => (
+                  <span key={f.name} style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10, color:T.accent, border:`1px solid ${T.accentDim}`, borderRadius:6, padding:"2px 7px", background:T.bg }}>
+                    📄 {f.name}
+                    <button onClick={()=>setGFiles(fs=>fs.filter(x=>x.name!==f.name))} disabled={gBusy} title="파일 제거" style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:10, padding:0, lineHeight:1 }}>✕</button>
+                  </span>
+                ))}
                 {gBusy && gProg && <span style={{ fontSize:10.5, color:T.amber }}>⏳ {gProg}</span>}
                 <div style={{ flex:1 }} />
                 <button onClick={()=>{ setAdding(false); setGErr(null); }} disabled={gBusy} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted, cursor:"pointer", fontSize:10.5, padding:"4px 10px", fontFamily:"inherit" }}>취소</button>
@@ -3943,7 +3974,8 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements }) {
   const leaves = reqSpecLeaves(wbs);   // WBS 최하위 기능 모듈 (요구사항 배정 후보)
   const leafName = {}; leaves.forEach(l => { leafName[l.wbsNo] = l.name; });
   const [srcText, setSrcText] = useState("");
-  const [srcName, setSrcName] = useState(requirements?.sourceName || "");
+  const [srcFiles, setSrcFiles] = useState([]);   // 업로드된 원문 파일들 [{name, text}]
+  const [srcDrag, setSrcDrag] = useState(false);  // 드래그앤드롭 하이라이트
   const [items, setItems] = useState(requirements?.items ? requirements.items.map(x => ({ ...x })) : []);
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState(null);
@@ -3961,26 +3993,21 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements }) {
   const inp = { width:"100%", padding:"5px 7px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:11, fontFamily:"inherit", boxSizing:"border-box" };
   const ta = { ...inp, minHeight:44, resize:"vertical", lineHeight:1.5 };
 
-  async function onFile(e) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
+  async function addSrcFiles(fileArr) {
+    if (busy) return;
     setError(null);
-    try {
-      const name = file.name.toLowerCase();
-      let text = "";
-      if (name.endsWith(".txt")) text = await file.text();
-      else if (name.endsWith(".docx")) text = await docxBytesToText(new Uint8Array(await file.arrayBuffer()));
-      else if (name.endsWith(".xlsx")) text = await xlsxBytesToText(new Uint8Array(await file.arrayBuffer()));
-      else { setError("txt·docx·xlsx 파일만 업로드할 수 있습니다."); return; }
-      if (!text.trim()) { setError("파일에서 텍스트를 추출하지 못했습니다."); return; }
-      setSrcText(t => (t ? t + "\n\n" : "") + text.trim());
-      setSrcName(file.name);
-    } catch (err) { setError("파일 읽기 실패: " + err.message); }
+    const { files, errors } = await readUploadFiles(fileArr);
+    if (files.length) setSrcFiles(prev => mergeUploadFiles(prev, files));
+    if (errors.length) setError(errors.join(" / "));
+  }
+  async function onFile(e) {
+    const arr = Array.from(e.target.files || []);
+    e.target.value = "";
+    await addSrcFiles(arr);
   }
 
   async function generate() {
-    const srcAll = srcText.trim();
+    const srcAll = [srcText.trim(), ...srcFiles.map(f => `[파일: ${f.name}]\n${f.text}`)].filter(Boolean).join("\n\n");
     if (srcAll.length < 20) { setError("이해관계자 요구사항 원문을 20자 이상 입력하거나 파일을 업로드해 주세요."); return; }
     setBusy(true); setError(null);
     const guideBlock = buildGuideBlock(guides.filter(g => guideSel[g.id]));   // 적용 선택된 작성 가이드 → 프롬프트 주입
@@ -4051,7 +4078,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
     const valid = items.filter(it => String(it.name || "").trim());
     if (!valid.length) { setError("확정할 요구사항이 없습니다. 요구사항명을 입력해 주세요."); return; }
     const normed = assignReqIds(valid).map(it => ({ ...it, wbsNo: it.wbsNo && (it.wbsNo === "공통" || leafName[it.wbsNo] !== undefined) ? it.wbsNo : "공통" }));
-    setRequirements({ items: normed, sourceName: srcName || "직접 입력", specLeaves: leaves, updatedAt: new Date().toISOString() });
+    setRequirements({ items: normed, sourceName: srcFiles.length ? srcFiles.map(f => f.name).join(", ") : "직접 입력", specLeaves: leaves, updatedAt: new Date().toISOString() });
     onClose();
   }
 
@@ -4067,16 +4094,23 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
         </div>
         <div style={{ padding:"14px 18px", overflowY:"auto" }}>
           <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} />
-          <div style={{ border:`1px solid ${T.accentDim}`, borderLeft:`3px solid ${T.accent}`, borderRadius:9, background:T.accent+"08", padding:"10px 12px", marginBottom:12 }}>
+          <div onDragOver={e=>{ e.preventDefault(); if (!busy) setSrcDrag(true); }} onDragLeave={()=>setSrcDrag(false)}
+            onDrop={e=>{ e.preventDefault(); setSrcDrag(false); addSrcFiles(Array.from(e.dataTransfer.files || [])); }}
+            style={{ border:`1px solid ${srcDrag ? T.accent : T.accentDim}`, borderLeft:`3px solid ${T.accent}`, borderRadius:9, background: srcDrag ? T.accent+"22" : T.accent+"08", padding:"10px 12px", marginBottom:12 }}>
             <div style={{ fontSize:11.5, fontWeight:600, marginBottom:6, color:T.accent }}>📝 이해관계자 요구사항 원문 <span style={{ color:T.muted, fontWeight:400, fontSize:10.5 }}>(RFP 발췌·인터뷰 기록·회의록 등 붙여넣기 또는 파일 업로드)</span></div>
             <textarea value={srcText} onChange={e=>setSrcText(e.target.value)} placeholder="예) 사용자는 네트워크 장비 목록을 조건별로 검색할 수 있어야 한다. 시스템 응답시간은 3초 이내여야 한다. …" disabled={busy}
               style={{ ...ta, minHeight:110, marginBottom:8 }} />
             <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
               <label style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"6px 12px", border:`1px dashed ${T.accentDim}`, borderRadius:8, cursor: busy?"default":"pointer", fontSize:11, color:T.muted, background:T.bg }}>
-                📎 파일 업로드 (txt·docx·xlsx)
-                <input type="file" accept=".txt,.docx,.xlsx" onChange={onFile} disabled={busy} style={{ display:"none" }} />
+                📎 파일 업로드 (txt·docx·xlsx · 여러 개 가능 · 드래그앤드롭 지원)
+                <input type="file" multiple accept=".txt,.docx,.xlsx" onChange={onFile} disabled={busy} style={{ display:"none" }} />
               </label>
-              {srcName && <span style={{ fontSize:10.5, color:T.accent }}>📄 {srcName}</span>}
+              {srcFiles.map(f => (
+                <span key={f.name} style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10.5, color:T.accent, border:`1px solid ${T.accentDim}`, borderRadius:6, padding:"2px 8px", background:T.bg }}>
+                  📄 {f.name}
+                  <button onClick={()=>setSrcFiles(fs=>fs.filter(x=>x.name!==f.name))} disabled={busy} title="파일 제거" style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:10.5, padding:0, lineHeight:1 }}>✕</button>
+                </span>
+              ))}
               <div style={{ flex:1 }} />
               <Btn onClick={generate} disabled={busy} style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ AI 재생성" : "⚡ AI 도출·명세"}</Btn>
             </div>
