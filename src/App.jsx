@@ -3770,6 +3770,173 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
+// ── 작성 가이드(전역 라이브러리): 방법론 작성가이드·글로벌 표준(PMBOK·CMMI 등)·글로벌 규제 ──
+// AI가 산출물을 작성할 때 프롬프트에 주입되어 준수 기준으로 사용됨 — 모든 AI 작성 기능 공용 헬퍼
+const GUIDE_CATEGORIES = ["방법론 작성가이드", "글로벌 표준", "글로벌 규제", "기타"];
+
+async function fetchWritingGuides() {
+  const r = await fetch("/api/writing-guides");
+  const d = await r.json().catch(() => []);
+  return Array.isArray(d) ? d : [];
+}
+
+// 선택된 가이드들의 요약을 프롬프트 주입용 블록으로 결합 — 토큰·타임아웃 보호를 위해 총량 제한
+function buildGuideBlock(guides, cap = 4000) {
+  const rows = (guides || []).filter(g => g && String(g.summary || "").trim());
+  if (!rows.length) return "";
+  let block = "";
+  for (const g of rows) {
+    const piece = `\n[${g.name} · ${g.category}]\n${String(g.summary).trim()}\n`;
+    if (block.length + piece.length > cap) break;
+    block += piece;
+  }
+  if (!block) return "";
+  return `\n--- 작성 가이드 (아래 기준을 반드시 준수하여 작성) ---${block}--- 작성 가이드 끝 ---\n`;
+}
+
+// 가이드 원문 → AI 요약(핵심 작성 규칙만 추출) — 등록 시 1회 수행 후 저장, 작성 시에는 요약본만 주입
+// 원문이 길면 6,000자 단위 분할 호출 (Vercel 타임아웃 대응, 최대 3청크=18,000자)
+async function summarizeGuideText(name, category, text, onProg) {
+  const src = String(text || "").slice(0, 18000);
+  const chunks = [];
+  for (let i = 0; i < src.length; i += 6000) chunks.push(src.slice(i, i + 6000));
+  const parts = [];
+  for (let i = 0; i < chunks.length; i++) {
+    onProg?.(`가이드 핵심 규칙 추출 중… (${i + 1}/${chunks.length})`);
+    const r = await callClaudeJson(`당신은 SI 품질보증 전문가입니다. 아래 작성 가이드 문서(${category}: ${name})에서, AI가 요구사항 정의서·명세서 등 프로젝트 산출물을 작성할 때 반드시 준수해야 할 핵심 작성 규칙만 추출하세요.
+규칙: 산출물 작성에 직접 영향을 주는 것만(용어·표기 규칙, 필수 항목·문서 구조, 품질기준·측정기준, ID 부여·추적성, 준수해야 할 표준·규제 조항). 배경 설명·일반론 제외. 최대 12개, 각 60자 이내.
+JSON만 출력: {"rules":["규칙1","규칙2"]}
+--- 가이드 원문 ---
+${chunks[i]}`, 3000);
+    (Array.isArray(r?.rules) ? r.rules : []).forEach(x => { const s = String(x || "").trim(); if (s) parts.push(s); });
+  }
+  return [...new Set(parts)].map(s => "· " + s).join("\n").slice(0, 2000);
+}
+
+// ── 작성 가이드 패널 (AI 작성 모달 공용 UI): 전역 가이드 목록·적용 선택·등록·삭제 ──
+function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
+  const [openPanel, setOpenPanel] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [gName, setGName] = useState("");
+  const [gCat, setGCat] = useState(GUIDE_CATEGORIES[0]);
+  const [gText, setGText] = useState("");
+  const [gFile, setGFile] = useState("");
+  const [gBusy, setGBusy] = useState(false);
+  const [gProg, setGProg] = useState("");
+  const [gErr, setGErr] = useState(null);
+  const inp = { width:"100%", padding:"5px 7px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:11, fontFamily:"inherit", boxSizing:"border-box" };
+  const applied = guides.filter(g => sel[g.id]).length;
+
+  async function onGuideFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setGErr(null);
+    try {
+      const name = file.name.toLowerCase();
+      let text = "";
+      if (name.endsWith(".txt")) text = await file.text();
+      else if (name.endsWith(".docx")) text = await docxBytesToText(new Uint8Array(await file.arrayBuffer()));
+      else if (name.endsWith(".xlsx")) text = await xlsxBytesToText(new Uint8Array(await file.arrayBuffer()));
+      else { setGErr("txt·docx·xlsx 파일만 업로드할 수 있습니다."); return; }
+      if (!text.trim()) { setGErr("파일에서 텍스트를 추출하지 못했습니다."); return; }
+      setGText(t => (t ? t + "\n\n" : "") + text.trim());
+      setGFile(file.name);
+      if (!gName.trim()) setGName(file.name.replace(/\.(txt|docx|xlsx)$/i, ""));
+    } catch (err) { setGErr("파일 읽기 실패: " + err.message); }
+  }
+
+  async function register() {
+    if (!gName.trim()) { setGErr("가이드 이름을 입력해 주세요."); return; }
+    if (gText.trim().length < 50) { setGErr("가이드 내용을 50자 이상 입력하거나 파일을 업로드해 주세요."); return; }
+    setGBusy(true); setGErr(null);
+    try {
+      const summary = await summarizeGuideText(gName.trim(), gCat, gText, setGProg);
+      if (!summary) throw new Error("가이드에서 작성 규칙을 추출하지 못했습니다. 내용을 확인해 주세요.");
+      setGProg("가이드 저장 중…");
+      const r = await fetch("/api/writing-guides", {
+        method:"POST", headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ name: gName.trim(), category: gCat, summary, content: gText.slice(0, 50000) }),
+      });
+      const created = await r.json().catch(() => null);
+      if (!r.ok || !created?.id) throw new Error(created?.error || `저장 실패 (status ${r.status})`);
+      setGuides(gs => [...gs, created]);
+      setSel(s => ({ ...s, [created.id]: true }));
+      setGName(""); setGText(""); setGFile(""); setGCat(GUIDE_CATEGORIES[0]); setAdding(false);
+    } catch (e) { setGErr("가이드 등록 실패: " + e.message); }
+    setGBusy(false); setGProg("");
+  }
+
+  async function remove(g) {
+    if (!window.confirm(`작성 가이드 "${g.name}"를 삭제할까요?\n(전역 라이브러리이므로 모든 프로젝트에서 제거됩니다)`)) return;
+    try {
+      const r = await fetch(`/api/writing-guides?id=${g.id}`, { method:"DELETE" });
+      if (!r.ok) throw new Error(`삭제 실패 (status ${r.status})`);
+      setGuides(gs => gs.filter(x => x.id !== g.id));
+      setSel(s => { const n = { ...s }; delete n[g.id]; return n; });
+    } catch (e) { setGErr(e.message); }
+  }
+
+  return (
+    <div style={{ border:`1px solid ${T.border}`, borderRadius:9, marginBottom:12, background:T.bg }}>
+      <div onClick={()=>setOpenPanel(o=>!o)} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 12px", cursor:"pointer" }}>
+        <span style={{ fontSize:11.5, fontWeight:600 }}>📐 작성 가이드</span>
+        <span style={{ fontSize:10.5, color: applied ? T.accent : T.muted }}>
+          {guides.length ? `등록 ${guides.length}건 · 적용 ${applied}건` : "등록된 가이드 없음"}
+        </span>
+        <span style={{ fontSize:10, color:T.muted }}>— 방법론 작성가이드·글로벌 표준(PMBOK·CMMI)·규제를 등록하면 AI가 준수하여 작성합니다 (전역 공용)</span>
+        <div style={{ flex:1 }} />
+        <span style={{ fontSize:10, color:T.muted }}>{openPanel ? "▲" : "▼"}</span>
+      </div>
+      {openPanel && (
+        <div style={{ padding:"0 12px 10px" }}>
+          {guides.length > 0 && (
+            <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:8 }}>
+              {guides.map(g => (
+                <div key={g.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 8px", border:`1px solid ${T.border}`, borderRadius:7, background:T.surface }}>
+                  <input type="checkbox" checked={!!sel[g.id]} disabled={disabled}
+                    onChange={e=>setSel(s=>({ ...s, [g.id]: e.target.checked }))} style={{ cursor:"pointer" }} />
+                  <span style={{ fontSize:11, fontWeight:600 }}>{g.name}</span>
+                  <span style={{ fontSize:9.5, color:T.accent, border:`1px solid ${T.accentDim}`, borderRadius:5, padding:"1px 6px" }}>{g.category}</span>
+                  <span title={g.summary} style={{ fontSize:10, color:T.muted, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{String(g.summary||"").replace(/\n/g," ")}</span>
+                  <button onClick={()=>remove(g)} disabled={disabled||gBusy} title="삭제" style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:11 }}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {!adding ? (
+            <button onClick={()=>setAdding(true)} disabled={disabled} style={{ background:"none", border:`1px dashed ${T.border}`, borderRadius:7, color:T.accent, cursor:"pointer", fontSize:11, padding:"5px 12px", fontFamily:"inherit" }}>＋ 가이드 등록</button>
+          ) : (
+            <div style={{ border:`1px dashed ${T.border}`, borderRadius:8, padding:10 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", gap:6, marginBottom:6 }}>
+                <input value={gName} onChange={e=>setGName(e.target.value)} placeholder="가이드 이름 (예: PMBOK 8판 품질관리 기준)" disabled={gBusy} style={inp} />
+                <select value={gCat} onChange={e=>setGCat(e.target.value)} disabled={gBusy} style={inp}>
+                  {GUIDE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <textarea value={gText} onChange={e=>setGText(e.target.value)} disabled={gBusy}
+                placeholder="가이드 내용 붙여넣기 또는 아래에서 파일 업로드 — 등록 시 AI가 핵심 작성 규칙만 추출해 저장하며, 산출물 작성 시 해당 규칙이 적용됩니다."
+                style={{ ...inp, minHeight:70, resize:"vertical", lineHeight:1.5, marginBottom:6 }} />
+              <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                <label style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"5px 10px", border:`1px dashed ${T.border}`, borderRadius:7, cursor: gBusy?"default":"pointer", fontSize:10.5, color:T.muted }}>
+                  📎 파일 업로드 (txt·docx·xlsx)
+                  <input type="file" accept=".txt,.docx,.xlsx" onChange={onGuideFile} disabled={gBusy} style={{ display:"none" }} />
+                </label>
+                {gFile && <span style={{ fontSize:10, color:T.accent }}>📄 {gFile}</span>}
+                {gBusy && gProg && <span style={{ fontSize:10.5, color:T.amber }}>⏳ {gProg}</span>}
+                <div style={{ flex:1 }} />
+                <button onClick={()=>{ setAdding(false); setGErr(null); }} disabled={gBusy} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted, cursor:"pointer", fontSize:10.5, padding:"4px 10px", fontFamily:"inherit" }}>취소</button>
+                <button onClick={register} disabled={gBusy} style={{ background:T.accent, border:"none", borderRadius:6, color:"#fff", cursor:"pointer", fontSize:10.5, padding:"4px 12px", fontFamily:"inherit", fontWeight:600 }}>{gBusy ? "등록 중…" : "✓ 등록"}</button>
+              </div>
+            </div>
+          )}
+          {gErr && <div style={{ color:T.red, fontSize:11, marginTop:6 }}>{gErr}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 요구사항 AI 작성 모달: 원문 입력(텍스트·txt·docx 업로드) → AI 도출·명세 → 검토·수정 → 확정 ──
 // 확정된 요구사항은 요구사항 정의서·명세서 docx 생성과 요구사항 추적 매트릭스(xlsx) 자동 채움에 사용됨
 function ReqGenModal({ onClose, form, wbs, requirements, setRequirements }) {
@@ -3782,6 +3949,15 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements }) {
   const [prog, setProg] = useState(null);
   const [error, setError] = useState(null);
   const [open, setOpen] = useState({});   // 행별 상세(명세) 펼침
+  const [guides, setGuides] = useState([]);          // 작성 가이드 (전역 라이브러리)
+  const [guideSel, setGuideSel] = useState({});      // { 가이드id: 적용 여부 } — 활성 가이드는 기본 적용
+  useEffect(() => {
+    fetchWritingGuides().then(gs => {
+      setGuides(gs);
+      const s = {}; gs.forEach(g => { if (g.is_active !== false) s[g.id] = true; });
+      setGuideSel(s);
+    }).catch(() => {});
+  }, []);
   const inp = { width:"100%", padding:"5px 7px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:11, fontFamily:"inherit", boxSizing:"border-box" };
   const ta = { ...inp, minHeight:44, resize:"vertical", lineHeight:1.5 };
 
@@ -3807,6 +3983,7 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements }) {
     const srcAll = srcText.trim();
     if (srcAll.length < 20) { setError("이해관계자 요구사항 원문을 20자 이상 입력하거나 파일을 업로드해 주세요."); return; }
     setBusy(true); setError(null);
+    const guideBlock = buildGuideBlock(guides.filter(g => guideSel[g.id]));   // 적용 선택된 작성 가이드 → 프롬프트 주입
     try {
       // 1차(RD1200): 원문 → 기능·비기능·인터페이스 요구사항 도출 — 원문이 길면 분할 호출 (Vercel 타임아웃 대응)
       const chunks = [];
@@ -3818,7 +3995,7 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements }) {
 프로젝트: ${form?.name || ""} (${form?.type || ""}) / 고객사: ${form?.client || ""}
 규칙: 요구사항 단위로 중복 없이 분할. 비기능은 ISO 9126 품질특성(기능성/신뢰성/사용성/효율성/유지보수성/이식성) 관점으로 식별. 최대 30건.
 JSON만 출력: {"items":[{"type":"기능|비기능|인터페이스","name":"요구사항명(25자 이내)","source":"원문 내 근거(15자 이내)","priority":"상|중|하","summary":"개요 1문장(50자 이내)"}]}
---- 원문 ---
+${guideBlock}--- 원문 ---
 ${chunks[i]}`, 6000);
         raw = raw.concat(Array.isArray(r?.items) ? r.items : []);
       }
@@ -3836,7 +4013,7 @@ ${chunks[i]}`, 6000);
         setProg({ percent: 40 + (i / list.length) * 40, label: `요구사항 명세 작성 중… (${Math.min(i + B, list.length)}/${list.length})` });
         const r = await callClaudeJson(`당신은 정보공학 방법론 요구정의 단계(RD1300 요구사항 명세)에 정통한 SI 품질보증 전문가입니다. 아래 요구사항 각각을 구현 가능성·테스트 가능성을 고려해 상세 명세하세요. 비기능은 측정기준을 포함하세요.
 JSON만 출력: {"items":[{"id":"...","detail":"상세 설명 2~3문장","acceptance":"측정 가능한 인수 기준 1~2문장","quality":"비기능이면 ISO 9126 품질특성명, 아니면 빈 문자열","assumptions":"가정·제약(없으면 빈 문자열)"}]}
---- 요구사항 ---
+${guideBlock}--- 요구사항 ---
 ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: g.summary })))}`, 6000);
         const map = {};
         (Array.isArray(r?.items) ? r.items : []).forEach(d => { if (d?.id) map[d.id] = d; });
@@ -3901,6 +4078,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
             <div style={{ flex:1 }} />
             <Btn onClick={generate} disabled={busy} style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ AI 재생성" : "⚡ AI 도출·명세"}</Btn>
           </div>
+          <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} />
           {(busy || prog) && <GenProgressBar progress={prog || { percent:3, label:"요구사항 분석 준비 중…" }} subText="원문 분량·요구사항 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
           {error && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9, marginBottom:10 }}>{error}</div>}
           {items.length > 0 && (
