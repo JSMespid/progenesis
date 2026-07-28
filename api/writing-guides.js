@@ -32,7 +32,13 @@ async function db(path, method = 'GET', body = null) {
     body: body ? JSON.stringify(body) : null,
   });
   const t = await r.text();
-  if (!r.ok) throw new Error(`supabase ${r.status}: ${t.slice(0, 200)}`);
+  if (!r.ok) {
+    // 테이블 미생성(PGRST205): 사전 조건 SQL 미실행 상태 — 조치 방법을 그대로 안내
+    if (t.includes('PGRST205') || t.includes('writing_guides')) {
+      throw new Error("writing_guides 테이블이 아직 생성되지 않았습니다. Supabase 대시보드 → SQL Editor에서 다음 SQL을 1회 실행한 뒤 다시 시도하세요: create table if not exists writing_guides (id uuid primary key default gen_random_uuid(), name text not null, category text not null default '기타', summary text not null default '', content text not null default '', is_active boolean not null default true, created_at timestamptz not null default now()); alter table writing_guides disable row level security;");
+    }
+    throw new Error(`supabase ${r.status}: ${t.slice(0, 200)}`);
+  }
   try { return t ? JSON.parse(t) : []; } catch { return []; }
 }
 
