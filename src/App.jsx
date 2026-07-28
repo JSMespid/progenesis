@@ -2624,8 +2624,116 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
     if (changed) f.content = xml;
   }
 
+  // ── 셀 위치 로고 삽입 공용부: 앵커 생성 + 시트 부착(기존 드로잉에 추가 또는 신규 드로잉 생성·연결) ──
+  const newDrawingParts = [];        // 신규 생성 드로잉 경로 (ContentTypes Override 필요)
+  const newKinds = new Set();        // 신규 드로잉이 사용하는 로고 종류 (미디어 추가용)
+  let drawMax = 0;
+  files.forEach(f => { const m = /^xl\/drawings\/drawing(\d+)\.xml$/.exec(f.path); if (m) drawMax = Math.max(drawMax, Number(m[1])); });
+  const picAnchor = (k, col, row, cy, colOff = 50000, rowOff = 50000) => {
+    const cx = Math.max(1, Math.round(cy * info[k].ratio));
+    const id = ++imgId;
+    return `<xdr:oneCellAnchor><xdr:from><xdr:col>${col}</xdr:col><xdr:colOff>${colOff}</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>${rowOff}</xdr:rowOff></xdr:from><xdr:ext cx="${cx}" cy="${cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${id}" name="PgLogo${id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${info[k].relId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`;
+  };
+  const IMGREL = k => `<Relationship Id="${info[k].relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${info[k].fileName}"/>`;
+  const attachAnchors = (sp, anchorsXml, kinds) => {
+    const sf = byPath[sp];
+    let sxml = typeof sf.content === "string" ? sf.content : td.decode(sf.content);
+    const sRelPath = sp.replace("xl/worksheets/", "xl/worksheets/_rels/") + ".rels";
+    const dM = /<drawing\s+r:id="([^"]+)"\s*\/>/.exec(sxml);
+    let drawPart = null;
+    if (dM && byPath[sRelPath]) {
+      const rXml = typeof byPath[sRelPath].content === "string" ? byPath[sRelPath].content : td.decode(byPath[sRelPath].content);
+      const relM = new RegExp(`<Relationship[^>]*Id="${dM[1]}"[^>]*Target="([^"]+)"`).exec(rXml);
+      if (relM) drawPart = "xl/" + relM[1].replace(/^\.\.\//, "").replace(/^\//, "").replace(/^xl\//, "");
+    }
+    if (drawPart && byPath[drawPart]) {
+      const df = byPath[drawPart];
+      const dxml = typeof df.content === "string" ? df.content : td.decode(df.content);
+      df.content = dxml.replace("</xdr:wsDr>", anchorsXml + "</xdr:wsDr>");
+      kinds.forEach(k => markUsed(drawPart, k));
+    } else {
+      const n = ++drawMax;
+      const dPath = `xl/drawings/drawing${n}.xml`;
+      const dF = { path: dPath, content: XMLH + `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${anchorsXml}</xdr:wsDr>` };
+      files.push(dF); byPath[dPath] = dF;
+      const dRelF = { path: `xl/drawings/_rels/drawing${n}.xml.rels`, content: XMLH + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${kinds.map(IMGREL).join("")}</Relationships>` };
+      files.push(dRelF); byPath[dRelF.path] = dRelF;
+      const drawRel = `<Relationship Id="rIdPgDrw${n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${n}.xml"/>`;
+      if (byPath[sRelPath]) {
+        const rx = typeof byPath[sRelPath].content === "string" ? byPath[sRelPath].content : td.decode(byPath[sRelPath].content);
+        byPath[sRelPath].content = rx.replace("</Relationships>", drawRel + "</Relationships>");
+      } else {
+        const nf = { path: sRelPath, content: XMLH + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${drawRel}</Relationships>` };
+        files.push(nf); byPath[sRelPath] = nf;
+      }
+      // <drawing/>는 legacyDrawing·tableParts 등보다 앞에 와야 함 (스키마 순서)
+      const ins = `<drawing r:id="rIdPgDrw${n}"/>`;
+      const posM = /<(legacyDrawing|legacyDrawingHF|picture|oleObjects|controls|webPublishItems|tableParts|extLst)\b/.exec(sxml);
+      sxml = posM ? sxml.slice(0, posM.index) + ins + sxml.slice(posM.index) : sxml.replace("</worksheet>", ins + "</worksheet>");
+      newDrawingParts.push(dPath);
+      kinds.forEach(k => newKinds.add(k));
+    }
+    sf.content = sxml;
+  };
+  // 시트명 → 경로 매핑 (workbook.xml + rels)
+  const sheetPathByName = {};
+  {
+    const wbF2 = byPath["xl/workbook.xml"];
+    const wbXml2 = typeof wbF2.content === "string" ? wbF2.content : td.decode(wbF2.content);
+    const wbRelF = byPath["xl/_rels/workbook.xml.rels"];
+    const wbRelXml = wbRelF ? (typeof wbRelF.content === "string" ? wbRelF.content : td.decode(wbRelF.content)) : "";
+    const relMap2 = {};
+    [...wbRelXml.matchAll(/<Relationship\b[^>]*>/g)].forEach(m => {
+      const id = /Id="([^"]+)"/.exec(m[0]); const tg = /Target="([^"]+)"/.exec(m[0]);
+      if (id && tg) relMap2[id[1]] = tg[1];
+    });
+    [...wbXml2.matchAll(/<sheet\b[^>]*>/g)].forEach(m => {
+      const name = /name="([^"]+)"/.exec(m[0])?.[1];
+      const rid = /r:id="([^"]+)"/.exec(m[0])?.[1];
+      if (name && rid && relMap2[rid]) sheetPathByName[name] = "xl/" + relMap2[rid].replace(/^\//, "").replace(/^xl\//, "");
+    });
+  }
+
+  // ── 표준 헤더 블록의 'SWSM' 셀 → 고객사 로고 삽입 ──
+  // 셀 텍스트를 비우고(스타일 유지) 해당 셀 위치에 고객사 로고를 앵커한다.
+  if (cl) {
+    const sstF = byPath["xl/sharedStrings.xml"];
+    const sstXml0 = sstF ? (typeof sstF.content === "string" ? sstF.content : td.decode(sstF.content)) : "";
+    const sst0 = [...sstXml0.matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join(""));
+    const colIdx = ref => { const l = /^([A-Z]+)/.exec(ref)?.[1] || "A"; let n = 0; for (const ch of l) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
+    const rowIdx = ref => Number(/(\d+)$/.exec(ref)?.[1] || 1) - 1;
+    const sheetPaths = files.map(f => f.path).filter(p => /^xl\/worksheets\/sheet\d+\.xml$/.test(p));
+    for (const sp of sheetPaths) {
+      const sf = byPath[sp];
+      let sxml = typeof sf.content === "string" ? sf.content : td.decode(sf.content);
+      let ref = null;
+      sxml = sxml.replace(/<c\b([^>]*?)(\/>|>([\s\S]*?)<\/c>)/g, (m, attrs, close, inner) => {
+        if (ref || inner === undefined) return m;
+        let text = "";
+        if (/t="s"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); text = v ? (sst0[Number(v[1])] || "") : ""; }
+        else if (/t="inlineStr"/.test(attrs)) text = [...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("");
+        if (text.trim() !== "SWSM") return m;
+        ref = /r="([A-Z]+\d+)"/.exec(attrs)?.[1] || "A1";
+        const sAttr = /s="\d+"/.exec(attrs)?.[0] || "";
+        return `<c r="${ref}"${sAttr ? " " + sAttr : ""}/>`;
+      });
+      if (!ref) continue;
+      sf.content = sxml;   // 셀 비움 먼저 반영 후 앵커 부착
+      attachAnchors(sp, picAnchor("C", colIdx(ref), rowIdx(ref), 300000), ["C"]);
+    }
+  }
+
+  // ── 표지 시트: 고객사 로고 + 그 아래 우리회사 로고 (docx 표지와 동일 구성) ──
+  const coverName = Object.keys(sheetPathByName).find(n => n === "표지") || Object.keys(sheetPathByName).find(n => n.includes("표지"));
+  if ((cl || co) && coverName && byPath[sheetPathByName[coverName]]) {
+    const anchors = []; const kinds = [];
+    if (cl) { anchors.push(picAnchor("C", 7, 13, 324000)); kinds.push("C"); }   // 14행 부근 고객사 로고 (높이 0.9cm)
+    if (co) { anchors.push(picAnchor("W", 7, 16, 324000)); kinds.push("W"); }   // 17행 부근 우리회사 로고
+    attachAnchors(sheetPathByName[coverName], anchors.join(""), kinds);
+  }
+
   const modified = Object.keys(usedByPart);
-  if (!modified.length) return null;   // 플레이스홀더 없음 → 원본 유지
+  if (!modified.length && !newDrawingParts.length) return null;   // 플레이스홀더·SWSM 셀·표지 대상 없음 → 원본 유지
 
   // 수정된 드로잉별 이미지 관계(rels) 추가·생성
   const REL = k => `<Relationship Id="${info[k].relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${info[k].fileName}"/>`;
@@ -2642,6 +2750,7 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
   }
   // 로고 미디어 파일 추가 (파일명 충돌 방지: pg_ 접두 신규 경로)
   const usedKinds = new Set(); modified.forEach(p => usedByPart[p].forEach(k => usedKinds.add(k)));
+  newKinds.forEach(k => usedKinds.add(k));
   usedKinds.forEach(k => { if (!byPath[`xl/media/${info[k].fileName}`]) files.push({ path: `xl/media/${info[k].fileName}`, content: info[k].bytes }); });
   // [Content_Types].xml에 이미지 확장자 Default 보강
   const ct = byPath["[Content_Types].xml"];
@@ -2650,6 +2759,9 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
     usedKinds.forEach(k => {
       const ext = info[k].fileName.split(".").pop();
       if (!new RegExp(`Extension="${ext}"`).test(cxml)) cxml = cxml.replace("</Types>", `<Default Extension="${ext}" ContentType="image/${ext === "png" ? "png" : "jpeg"}"/></Types>`);
+    });
+    newDrawingParts.forEach(p => {
+      if (!cxml.includes(`PartName="/${p}"`)) cxml = cxml.replace("</Types>", `<Override PartName="/${p}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`);
     });
     ct.content = cxml;
   }
@@ -3019,6 +3131,12 @@ function makeReqDocx(meta, ctx, phase, kind, doc) {
         ["유형", (it.type || "") + (it.type === "비기능" && it.quality ? ` (${it.quality})` : "")],
         ["우선순위", it.priority || "중"], ["출처", it.source || "-"],
         ["상세 설명", it.detail || it.summary || ""],
+        ...(it.type === "기능" && it.actors ? [["관련 액터", it.actors]] : []),
+        ...(it.type === "기능" && it.basicFlow ? [["기본 흐름", it.basicFlow]] : []),
+        ...(it.type === "기능" && it.subFlow ? [["서브 흐름", it.subFlow]] : []),
+        ...(it.type === "기능" && it.exceptionFlow ? [["예외 흐름", it.exceptionFlow]] : []),
+        ...(it.type === "기능" && it.precondition ? [["사전 조건", it.precondition]] : []),
+        ...(it.type === "기능" && it.postcondition ? [["사후 조건", it.postcondition]] : []),
         ["인수 기준", it.acceptance || ""],
         ["가정·제약", it.assumptions || "-"],
       ], 1);
@@ -3238,9 +3356,17 @@ async function injectRequirementsIntoSpecDocx(bytes, meta, req, doc) {
   const td = new TextDecoder();
   const f = files.find(x => x.path === "word/document.xml");
   if (!f) return null;
+  // 머리글·꼬리말 파트의 placeholder도 치환 ({프로젝트 명}·{시스템 명}·{작성자 명}·YYYY-MM-DD 등이 머리글 표에 존재)
+  const pairs = reqTplPlaceholderPairs(meta);
+  files.forEach(x => {
+    if (/^word\/(header|footer)\d+\.xml$/.test(x.path)) {
+      const hx = typeof x.content === "string" ? x.content : td.decode(x.content);
+      x.content = docxReplacePlaceholders(hx, pairs);
+    }
+  });
   let xml = typeof f.content === "string" ? f.content : td.decode(f.content);
   // 1) 표지·본문 placeholder 치환 (run 분할 대응 문단 단위)
-  xml = docxReplacePlaceholders(xml, reqTplPlaceholderPairs(meta));
+  xml = docxReplacePlaceholders(xml, pairs);
   // 2) 빈 명세 블록 표 탐지: '요구사항 ID' 라벨 다음 셀이 비어 있고 '요구사항 명세' 라벨을 가진 표
   //    문서 흐름상 [기능, 비기능, 인터페이스] 순으로 나타난다
   const tcRe = /<w:tc(?:\s[^>]*)?>[\s\S]*?<\/w:tc>/g;
@@ -3273,7 +3399,27 @@ async function injectRequirementsIntoSpecDocx(bytes, meta, req, doc) {
       "출처": it.source || "",
       "승인조건": it.acceptance || "",
     };
-    const specLines = [
+    const flow = s => String(s || "").split(/\s*;\s*/).map(x => x.trim()).filter(Boolean);
+    const hasUc = it.type === "기능" && (it.actors || it.basicFlow || it.precondition || it.postcondition);
+    const specLines = hasUc ? [
+      "1. 관련 액터",
+      "    " + (it.actors || "-"),
+      "2. 이벤트 흐름",
+      "    " + (it.detail || it.summary || ""),
+      "2.1 기본 흐름",
+      ...(flow(it.basicFlow).length ? flow(it.basicFlow).map((x, n) => `    ${n + 1}) ${x}`) : ["    -"]),
+      "2.2 서브 흐름",
+      ...(flow(it.subFlow).length ? flow(it.subFlow).map((x, n) => `    ${n + 1}) ${x}`) : ["    해당 없음"]),
+      "2.3 예외 흐름",
+      ...(flow(it.exceptionFlow).length ? flow(it.exceptionFlow).map((x, n) => `    ${n + 1}) ${x}`) : ["    해당 없음"]),
+      "3. 사전 조건",
+      "    " + (it.precondition || "-"),
+      "4. 사후 조건",
+      "    " + (it.postcondition || "-"),
+      "",
+      `▪ 인수 기준: ${it.acceptance || "-"}`,
+      `▪ 가정·제약: ${it.assumptions || "-"}`,
+    ] : [
       it.detail || it.summary || "",
       "",
       `▪ 인수 기준: ${it.acceptance || "-"}`,
@@ -4305,20 +4451,23 @@ ${chunks[i]}`, 6000);
         name: String(it.name || "").slice(0, 60), source: String(it.source || ""),
         priority: ["상", "중", "하"].includes(it.priority) ? it.priority : "중",
         summary: String(it.summary || ""), detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통",
+        actors: "", basicFlow: "", subFlow: "", exceptionFlow: "", precondition: "", postcondition: "",
       })));
-      // 2차(RD1300): 5건씩 상세 명세 — 상세설명·인수기준·품질특성·가정/제약
-      const B = 5;
+      // 2차(RD1300): 4건씩 상세 명세 — 상세설명·인수기준·품질특성·가정/제약 + 기능은 유스케이스 항목(관련 액터~사후 조건)
+      const B = 4;
       for (let i = 0; i < list.length; i += B) {
         const grp = list.slice(i, i + B);
         setProg({ percent: 40 + (i / list.length) * 40, label: `요구사항 명세 작성 중… (${Math.min(i + B, list.length)}/${list.length})` });
         const r = await callClaudeJson(`당신은 정보공학 방법론 요구정의 단계(RD1300 요구사항 명세)에 정통한 SI 품질보증 전문가입니다. 아래 요구사항 각각을 구현 가능성·테스트 가능성을 고려해 상세 명세하세요. 비기능은 측정기준을 포함하세요.
+기능 요구사항은 유스케이스 관점으로 다음을 추가 작성하세요: actors(관련 액터, 쉼표 구분), basicFlow(기본 흐름 3~6단계, 단계는 ';'로 구분), subFlow(서브 흐름, 없으면 빈 문자열), exceptionFlow(예외 흐름 1~3개, ';' 구분), precondition(사전 조건 1문장), postcondition(사후 조건 1문장). 비기능·인터페이스 요구사항은 이 6개 필드를 모두 빈 문자열로 하세요.
 규칙: id는 입력에 주어진 값을 그대로 반환(새 ID 부여·형식 변경 금지). 각 문자열 값은 줄바꿈 없이 한 문단으로 작성.
-JSON만 출력: {"items":[{"id":"...","detail":"상세 설명 2~3문장","acceptance":"측정 가능한 인수 기준 1~2문장","quality":"비기능이면 ISO 9126 품질특성명, 아니면 빈 문자열","assumptions":"가정·제약(없으면 빈 문자열)"}]}
+JSON만 출력: {"items":[{"id":"...","detail":"상세 설명 2~3문장","acceptance":"측정 가능한 인수 기준 1~2문장","quality":"비기능이면 ISO 9126 품질특성명, 아니면 빈 문자열","assumptions":"가정·제약(없으면 빈 문자열)","actors":"...","basicFlow":"...","subFlow":"...","exceptionFlow":"...","precondition":"...","postcondition":"..."}]}
 ${guideBlock}--- 요구사항 ---
 ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: g.summary })))}`, 6000);
         const map = {};
         (Array.isArray(r?.items) ? r.items : []).forEach(d => { if (d?.id) map[d.id] = d; });
-        list = list.map(it => map[it.id] ? { ...it, detail: String(map[it.id].detail || ""), acceptance: String(map[it.id].acceptance || ""), quality: String(map[it.id].quality || ""), assumptions: String(map[it.id].assumptions || "") } : it);
+        list = list.map(it => map[it.id] ? { ...it, detail: String(map[it.id].detail || ""), acceptance: String(map[it.id].acceptance || ""), quality: String(map[it.id].quality || ""), assumptions: String(map[it.id].assumptions || ""),
+          actors: String(map[it.id].actors || ""), basicFlow: String(map[it.id].basicFlow || ""), subFlow: String(map[it.id].subFlow || ""), exceptionFlow: String(map[it.id].exceptionFlow || ""), precondition: String(map[it.id].precondition || ""), postcondition: String(map[it.id].postcondition || "") } : it);
       }
       // 3차(배정): 요구사항 → WBS 최하위 기능 모듈. 공통·비기능처럼 특정 모듈에 귀속되지 않으면 "공통"
       if (leaves.length) {
@@ -4347,7 +4496,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
 
   const upd = (i, k, v) => setItems(list => list.map((it, j) => j === i ? { ...it, [k]: v } : it));
   const del = i => setItems(list => list.filter((_, j) => j !== i));
-  const add = () => setItems(list => assignReqIds([...list, { id: "", type: "기능", name: "", source: "", priority: "중", summary: "", detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통" }]));
+  const add = () => setItems(list => assignReqIds([...list, { id: "", type: "기능", name: "", source: "", priority: "중", summary: "", detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통", actors: "", basicFlow: "", subFlow: "", exceptionFlow: "", precondition: "", postcondition: "" }]));
   function confirmSave() {
     const valid = items.filter(it => String(it.name || "").trim());
     if (!valid.length) { setError("확정할 요구사항이 없습니다. 요구사항명을 입력해 주세요."); return; }
@@ -4427,6 +4576,14 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                         <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>인수 기준</div><textarea value={it.acceptance} onChange={e=>upd(i,"acceptance",e.target.value)} style={ta} /></div>
                         <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>품질특성 (비기능 · ISO 9126)</div><input value={it.quality} onChange={e=>upd(i,"quality",e.target.value)} placeholder="예: 효율성" style={inp} /></div>
                         <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>가정·제약</div><input value={it.assumptions} onChange={e=>upd(i,"assumptions",e.target.value)} style={inp} /></div>
+                        {it.type === "기능" && (<>
+                          <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>관련 액터</div><input value={it.actors || ""} onChange={e=>upd(i,"actors",e.target.value)} placeholder="예: 영업담당자, 관리자" style={inp} /></div>
+                          <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>사전 조건</div><input value={it.precondition || ""} onChange={e=>upd(i,"precondition",e.target.value)} style={inp} /></div>
+                          <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>기본 흐름 <span style={{ fontWeight:400 }}>(단계는 ';'로 구분)</span></div><textarea value={it.basicFlow || ""} onChange={e=>upd(i,"basicFlow",e.target.value)} style={ta} /></div>
+                          <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>서브 흐름 <span style={{ fontWeight:400 }}>(';' 구분 · 없으면 비움)</span></div><textarea value={it.subFlow || ""} onChange={e=>upd(i,"subFlow",e.target.value)} style={ta} /></div>
+                          <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>예외 흐름 <span style={{ fontWeight:400 }}>(';' 구분)</span></div><textarea value={it.exceptionFlow || ""} onChange={e=>upd(i,"exceptionFlow",e.target.value)} style={ta} /></div>
+                          <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>사후 조건</div><input value={it.postcondition || ""} onChange={e=>upd(i,"postcondition",e.target.value)} style={inp} /></div>
+                        </>)}
                       </div>
                     )}
                   </div>
