@@ -2629,13 +2629,20 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
   const newKinds = new Set();        // 신규 드로잉이 사용하는 로고 종류 (미디어 추가용)
   let drawMax = 0;
   files.forEach(f => { const m = /^xl\/drawings\/drawing(\d+)\.xml$/.exec(f.path); if (m) drawMax = Math.max(drawMax, Number(m[1])); });
+  const picXml = (k, cx, cy) => {
+    const id = ++imgId;
+    return `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${id}" name="PgLogo${id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${info[k].relId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>`;
+  };
   const picAnchor = (k, col, row, cy, colOff = 50000, rowOff = 50000) => {
     const cx = Math.max(1, Math.round(cy * info[k].ratio));
-    const id = ++imgId;
-    return `<xdr:oneCellAnchor><xdr:from><xdr:col>${col}</xdr:col><xdr:colOff>${colOff}</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>${rowOff}</xdr:rowOff></xdr:from><xdr:ext cx="${cx}" cy="${cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${id}" name="PgLogo${id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${info[k].relId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`;
+    return `<xdr:oneCellAnchor><xdr:from><xdr:col>${col}</xdr:col><xdr:colOff>${colOff}</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>${rowOff}</xdr:rowOff></xdr:from><xdr:ext cx="${cx}" cy="${cy}"/>${picXml(k, cx, cy)}<xdr:clientData/></xdr:oneCellAnchor>`;
+  };
+  // 절대좌표(absoluteAnchor) — 열 폭 계산 오차와 무관하게 위치 고정 → 완벽한 우측 정렬 보장
+  const absAnchor = (k, x, y, cy) => {
+    const cx = Math.max(1, Math.round(cy * info[k].ratio));
+    return `<xdr:absoluteAnchor><xdr:pos x="${Math.round(x)}" y="${Math.round(y)}"/><xdr:ext cx="${cx}" cy="${cy}"/>${picXml(k, cx, cy)}<xdr:clientData/></xdr:absoluteAnchor>`;
   };
   const IMGREL = k => `<Relationship Id="${info[k].relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${info[k].fileName}"/>`;
-  // 열 폭(문자 단위) → 픽셀 (Calibri 11 기준 MDW=7) / EMU 변환은 px*9525
   const colPx = w => Math.round(w * 7 + 5);
   const parseColWidths = sxml => {
     const def = Number(/defaultColWidth="([\d.]+)"/.exec(sxml)?.[1] || 8.43);
@@ -2648,7 +2655,36 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
     });
     return { def, map };
   };
-  // 특정 열의 폭을 최소 width(문자 단위) 이상으로 보장 — 기존 <col> 범위는 분할, 없으면 추가
+  // 시트 기하: 열 폭·행 높이·병합 범위 (0-base)
+  const sheetGeom = sxml => {
+    const { def, map } = parseColWidths(sxml);
+    const defHt = Number(/defaultRowHeight="([\d.]+)"/.exec(sxml)?.[1] || 16.5);
+    const rowHt = {};
+    [...sxml.matchAll(/<row\b[^>]*>/g)].forEach(m => {
+      const r = Number(/r="(\d+)"/.exec(m[0])?.[1]); const h = /ht="([\d.]+)"/.exec(m[0]);
+      if (r && h) rowHt[r] = Number(h[1]);
+    });
+    const merges = [...sxml.matchAll(/<mergeCell ref="([A-Z]+\d+):([A-Z]+\d+)"/g)].map(m => [m[1], m[2]]);
+    const colWEmu = c => colPx(map[c + 1] ?? def) * 9525;
+    const rowHEmu = r => Math.round((rowHt[r + 1] ?? defHt) * 12700);
+    const rowTop = r => { let a = 0; for (let i = 0; i < r; i++) a += rowHEmu(i); return a; };
+    return { colWEmu, rowHEmu, rowTop, merges };
+  };
+  const refCR = ref => { const l = /^([A-Z]+)/.exec(ref)?.[1] || "A"; let c = 0; for (const ch of l) c = c * 26 + (ch.charCodeAt(0) - 64); return { c: c - 1, r: Number(/(\d+)$/.exec(ref)?.[1] || 1) - 1 }; };
+  // ref 셀(병합 범위 포함)의 가로·세로 정중앙에 로고를 배치
+  const centeredAnchor = (k, sxml, ref, cy) => {
+    const g = sheetGeom(sxml);
+    const { c, r } = refCR(ref);
+    let c2 = c, r2 = r;
+    for (const [a, b] of g.merges) {
+      const A = refCR(a), B = refCR(b);
+      if (c >= A.c && c <= B.c && r >= A.r && r <= B.r) { c2 = B.c; r2 = B.r; break; }
+    }
+    let W = 0; for (let i = c; i <= c2; i++) W += g.colWEmu(i);
+    let H = 0; for (let i = r; i <= r2; i++) H += g.rowHEmu(i);
+    const cx = Math.max(1, Math.round(cy * info[k].ratio));
+    return picAnchor(k, c, r, cy, Math.max(0, Math.round((W - cx) / 2)), Math.max(0, Math.round((H - cy) / 2)));
+  };
   const ensureColWidth = (sxml, colNum, width) => {
     const wStr = width.toFixed(2);
     const mk = `<col min="${colNum}" max="${colNum}" width="${wStr}" customWidth="1"/>`;
@@ -2704,7 +2740,6 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
         const nf = { path: sRelPath, content: XMLH + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${drawRel}</Relationships>` };
         files.push(nf); byPath[sRelPath] = nf;
       }
-      // <drawing/>는 legacyDrawing·tableParts 등보다 앞에 와야 함 (스키마 순서)
       const ins = `<drawing r:id="rIdPgDrw${n}"/>`;
       const posM = /<(legacyDrawing|legacyDrawingHF|picture|oleObjects|controls|webPublishItems|tableParts|extLst)\b/.exec(sxml);
       sxml = posM ? sxml.slice(0, posM.index) + ins + sxml.slice(posM.index) : sxml.replace("</worksheet>", ins + "</worksheet>");
@@ -2713,7 +2748,6 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
     }
     sf.content = sxml;
   };
-  // 시트명 → 경로 매핑 (workbook.xml + rels)
   const sheetPathByName = {};
   {
     const wbF2 = byPath["xl/workbook.xml"];
@@ -2731,15 +2765,36 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
       if (name && rid && relMap2[rid]) sheetPathByName[name] = "xl/" + relMap2[rid].replace(/^\//, "").replace(/^xl\//, "");
     });
   }
+  // 수식 셀 제거 시 calcChain 정리 + 열 때 전체 재계산 (수식 캐시의 옛 placeholder 표시 갱신)
+  const forceRecalc = () => {
+    const idx = files.findIndex(f => f.path === "xl/calcChain.xml");
+    if (idx > -1) { files.splice(idx, 1); delete byPath["xl/calcChain.xml"]; }
+    const wr = byPath["xl/_rels/workbook.xml.rels"];
+    if (wr) {
+      const rx = typeof wr.content === "string" ? wr.content : td.decode(wr.content);
+      wr.content = rx.replace(/<Relationship\b[^>]*Target="calcChain\.xml"[^>]*\/>/g, "");
+    }
+    const ct0 = byPath["[Content_Types].xml"];
+    if (ct0) {
+      const cx0 = typeof ct0.content === "string" ? ct0.content : td.decode(ct0.content);
+      ct0.content = cx0.replace(/<Override\b[^>]*PartName="\/xl\/calcChain\.xml"[^>]*\/>/g, "");
+    }
+    const wbF3 = byPath["xl/workbook.xml"];
+    if (wbF3) {
+      let wx = typeof wbF3.content === "string" ? wbF3.content : td.decode(wbF3.content);
+      if (/<calcPr\b/.test(wx)) { if (!/fullCalcOnLoad=/.test(wx)) wx = wx.replace(/<calcPr\b/, '<calcPr fullCalcOnLoad="1" '); }
+      else wx = /<extLst\b/.test(wx) ? wx.replace(/<extLst\b/, '<calcPr fullCalcOnLoad="1"/><extLst') : wx.replace("</workbook>", '<calcPr fullCalcOnLoad="1"/></workbook>');
+      wbF3.content = wx;
+    }
+  };
 
-  // ── 표준 헤더 블록의 'SWSM' 셀 → 고객사 로고 삽입 ──
-  // 셀 텍스트를 비우고(스타일 유지) 해당 셀 위치에 고객사 로고를 앵커한다.
+  // ── 표준 헤더 블록의 'SWSM' 셀 → 고객사 로고 (모든 시트, 병합 셀 정중앙 배치) ──
+  // 공유문자열·인라인·수식 캐시(t="str") 유형 모두 탐지. 열 폭은 로고에 맞춰 자동 확장.
   if (cl) {
     const sstF = byPath["xl/sharedStrings.xml"];
     const sstXml0 = sstF ? (typeof sstF.content === "string" ? sstF.content : td.decode(sstF.content)) : "";
     const sst0 = [...sstXml0.matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join(""));
-    const colIdx = ref => { const l = /^([A-Z]+)/.exec(ref)?.[1] || "A"; let n = 0; for (const ch of l) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
-    const rowIdx = ref => Number(/(\d+)$/.exec(ref)?.[1] || 1) - 1;
+    let removedFormula = false;
     const sheetPaths = files.map(f => f.path).filter(p => /^xl\/worksheets\/sheet\d+\.xml$/.test(p));
     for (const sp of sheetPaths) {
       const sf = byPath[sp];
@@ -2750,43 +2805,39 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
         let text = "";
         if (/t="s"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); text = v ? (sst0[Number(v[1])] || "") : ""; }
         else if (/t="inlineStr"/.test(attrs)) text = [...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("");
+        else if (/t="str"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); text = v ? v[1] : ""; }
         if (text.trim() !== "SWSM") return m;
         ref = /r="([A-Z]+\d+)"/.exec(attrs)?.[1] || "A1";
+        if (inner.includes("<f")) removedFormula = true;
         const sAttr = /s="\d+"/.exec(attrs)?.[0] || "";
         return `<c r="${ref}"${sAttr ? " " + sAttr : ""}/>`;
       });
       if (!ref) continue;
-      // 로고가 한 칸에 들어가도록 해당 열 폭을 로고 폭 + 여백에 맞춰 확장
       const cySw = 300000;
       const cxSw = Math.max(1, Math.round(cySw * info.C.ratio));
-      const needPx = Math.ceil(cxSw / 9525) + 16;   // 좌우 여백 포함
-      sxml = ensureColWidth(sxml, colIdx(ref) + 1, Math.max(0, (needPx - 5) / 7));
-      sf.content = sxml;   // 셀 비움·열 폭 반영 후 앵커 부착
-      attachAnchors(sp, picAnchor("C", colIdx(ref), rowIdx(ref), cySw, 40000, 40000), ["C"]);
+      const needPx = Math.ceil(cxSw / 9525) + 16;
+      sxml = ensureColWidth(sxml, refCR(ref).c + 1, Math.max(0, (needPx - 5) / 7));
+      sf.content = sxml;   // 셀 비움·열 폭 반영 후 정중앙 앵커 부착
+      attachAnchors(sp, centeredAnchor("C", sxml, ref, cySw), ["C"]);
     }
+    if (removedFormula) forceRecalc();
   }
 
-  // ── 표지 시트: 고객사 로고 + 그 아래 우리회사 로고 (docx 표지와 동일 구성) ──
+  // ── 표지 시트: 고객사 로고 + 그 아래 우리회사 로고 — 절대좌표로 오른쪽 끝선에 완벽 우측 정렬 ──
   const coverName = Object.keys(sheetPathByName).find(n => n === "표지") || Object.keys(sheetPathByName).find(n => n.includes("표지"));
   if ((cl || co) && coverName && byPath[sheetPathByName[coverName]]) {
-    // 표지 본문(제목·문서번호 등)과 같은 오른쪽 끝선에 로고의 오른쪽 변을 맞춘다
     const cf = byPath[sheetPathByName[coverName]];
     const cvXml = typeof cf.content === "string" ? cf.content : td.decode(cf.content);
-    const { def, map } = parseColWidths(cvXml);
+    const g = sheetGeom(cvXml);
     const dimL = /<dimension ref="[A-Z]+\d+:([A-Z]+)\d+"/.exec(cvXml)?.[1] || "L";
     let lastCol = 0; for (const ch of dimL) lastCol = lastCol * 26 + (ch.charCodeAt(0) - 64); lastCol -= 1;
-    const emuAt = [];   // emuAt[c] = c번째(0-base) 열의 왼쪽 EMU
-    let acc = 0;
-    for (let c = 0; c <= lastCol + 1; c++) { emuAt[c] = acc; acc += colPx(map[c + 1] ?? def) * 9525; }
-    const rightEdge = emuAt[lastCol + 1];
+    let rightEdge = 0; for (let c2 = 0; c2 <= lastCol; c2++) rightEdge += g.colWEmu(c2);
+    const anchors = []; const kinds = [];
     const placeRight = (k, row, cy) => {
       const cx = Math.max(1, Math.round(cy * info[k].ratio));
-      let targetX = Math.max(0, rightEdge - 30000 - cx);
-      let c = 0; while (c < lastCol && emuAt[c + 1] <= targetX) c++;
-      return picAnchor(k, c, row, cy, Math.max(0, Math.round(targetX - emuAt[c])), 20000);
+      return absAnchor(k, Math.max(0, rightEdge - 30000 - cx), g.rowTop(row) + 20000, cy);
     };
-    const anchors = []; const kinds = [];
-    if (cl) { anchors.push(placeRight("C", 13, 324000)); kinds.push("C"); }   // 14행 부근 고객사 로고 (높이 0.9cm)
+    if (cl) { anchors.push(placeRight("C", 13, 324000)); kinds.push("C"); }   // 14행 부근 고객사 로고
     if (co) { anchors.push(placeRight("W", 16, 324000)); kinds.push("W"); }   // 17행 부근 우리회사 로고
     attachAnchors(sheetPathByName[coverName], anchors.join(""), kinds);
   }
