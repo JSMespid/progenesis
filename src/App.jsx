@@ -2635,6 +2635,44 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
     return `<xdr:oneCellAnchor><xdr:from><xdr:col>${col}</xdr:col><xdr:colOff>${colOff}</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>${rowOff}</xdr:rowOff></xdr:from><xdr:ext cx="${cx}" cy="${cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${id}" name="PgLogo${id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${info[k].relId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`;
   };
   const IMGREL = k => `<Relationship Id="${info[k].relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${info[k].fileName}"/>`;
+  // 열 폭(문자 단위) → 픽셀 (Calibri 11 기준 MDW=7) / EMU 변환은 px*9525
+  const colPx = w => Math.round(w * 7 + 5);
+  const parseColWidths = sxml => {
+    const def = Number(/defaultColWidth="([\d.]+)"/.exec(sxml)?.[1] || 8.43);
+    const map = {};
+    const colsM = /<cols>([\s\S]*?)<\/cols>/.exec(sxml);
+    if (colsM) [...colsM[1].matchAll(/<col\b[^>]*\/>/g)].forEach(m => {
+      const mn = Number(/min="(\d+)"/.exec(m[0])?.[1]); const mx = Number(/max="(\d+)"/.exec(m[0])?.[1]);
+      const w = Number(/width="([\d.]+)"/.exec(m[0])?.[1]);
+      if (mn && mx && w) for (let c = mn; c <= mx; c++) map[c] = w;
+    });
+    return { def, map };
+  };
+  // 특정 열의 폭을 최소 width(문자 단위) 이상으로 보장 — 기존 <col> 범위는 분할, 없으면 추가
+  const ensureColWidth = (sxml, colNum, width) => {
+    const wStr = width.toFixed(2);
+    const mk = `<col min="${colNum}" max="${colNum}" width="${wStr}" customWidth="1"/>`;
+    const colsM = /<cols>([\s\S]*?)<\/cols>/.exec(sxml);
+    if (!colsM) return sxml.replace("<sheetData>", `<cols>${mk}</cols><sheetData>`);
+    let inner = colsM[1]; let handled = false;
+    inner = inner.replace(/<col\b[^>]*\/>/g, tag => {
+      const mn = Number(/min="(\d+)"/.exec(tag)?.[1]); const mx = Number(/max="(\d+)"/.exec(tag)?.[1]);
+      if (!mn || !mx || colNum < mn || colNum > mx) return tag;
+      handled = true;
+      const curW = Number(/width="([\d.]+)"/.exec(tag)?.[1] || 0);
+      if (curW >= width) return tag;
+      const parts = [];
+      if (mn <= colNum - 1) parts.push(tag.replace(/min="\d+"/, `min="${mn}"`).replace(/max="\d+"/, `max="${colNum - 1}"`));
+      let solo = tag.replace(/min="\d+"/, `min="${colNum}"`).replace(/max="\d+"/, `max="${colNum}"`);
+      solo = /width="[\d.]+"/.test(solo) ? solo.replace(/width="[\d.]+"/, `width="${wStr}"`) : solo.replace("/>", ` width="${wStr}"/>`);
+      if (!/customWidth=/.test(solo)) solo = solo.replace("/>", ` customWidth="1"/>`);
+      parts.push(solo);
+      if (colNum + 1 <= mx) parts.push(tag.replace(/min="\d+"/, `min="${colNum + 1}"`).replace(/max="\d+"/, `max="${mx}"`));
+      return parts.join("");
+    });
+    if (!handled) inner += mk;
+    return sxml.replace(colsM[0], `<cols>${inner}</cols>`);
+  };
   const attachAnchors = (sp, anchorsXml, kinds) => {
     const sf = byPath[sp];
     let sxml = typeof sf.content === "string" ? sf.content : td.decode(sf.content);
@@ -2718,17 +2756,38 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
         return `<c r="${ref}"${sAttr ? " " + sAttr : ""}/>`;
       });
       if (!ref) continue;
-      sf.content = sxml;   // 셀 비움 먼저 반영 후 앵커 부착
-      attachAnchors(sp, picAnchor("C", colIdx(ref), rowIdx(ref), 300000), ["C"]);
+      // 로고가 한 칸에 들어가도록 해당 열 폭을 로고 폭 + 여백에 맞춰 확장
+      const cySw = 300000;
+      const cxSw = Math.max(1, Math.round(cySw * info.C.ratio));
+      const needPx = Math.ceil(cxSw / 9525) + 16;   // 좌우 여백 포함
+      sxml = ensureColWidth(sxml, colIdx(ref) + 1, Math.max(0, (needPx - 5) / 7));
+      sf.content = sxml;   // 셀 비움·열 폭 반영 후 앵커 부착
+      attachAnchors(sp, picAnchor("C", colIdx(ref), rowIdx(ref), cySw, 40000, 40000), ["C"]);
     }
   }
 
   // ── 표지 시트: 고객사 로고 + 그 아래 우리회사 로고 (docx 표지와 동일 구성) ──
   const coverName = Object.keys(sheetPathByName).find(n => n === "표지") || Object.keys(sheetPathByName).find(n => n.includes("표지"));
   if ((cl || co) && coverName && byPath[sheetPathByName[coverName]]) {
+    // 표지 본문(제목·문서번호 등)과 같은 오른쪽 끝선에 로고의 오른쪽 변을 맞춘다
+    const cf = byPath[sheetPathByName[coverName]];
+    const cvXml = typeof cf.content === "string" ? cf.content : td.decode(cf.content);
+    const { def, map } = parseColWidths(cvXml);
+    const dimL = /<dimension ref="[A-Z]+\d+:([A-Z]+)\d+"/.exec(cvXml)?.[1] || "L";
+    let lastCol = 0; for (const ch of dimL) lastCol = lastCol * 26 + (ch.charCodeAt(0) - 64); lastCol -= 1;
+    const emuAt = [];   // emuAt[c] = c번째(0-base) 열의 왼쪽 EMU
+    let acc = 0;
+    for (let c = 0; c <= lastCol + 1; c++) { emuAt[c] = acc; acc += colPx(map[c + 1] ?? def) * 9525; }
+    const rightEdge = emuAt[lastCol + 1];
+    const placeRight = (k, row, cy) => {
+      const cx = Math.max(1, Math.round(cy * info[k].ratio));
+      let targetX = Math.max(0, rightEdge - 30000 - cx);
+      let c = 0; while (c < lastCol && emuAt[c + 1] <= targetX) c++;
+      return picAnchor(k, c, row, cy, Math.max(0, Math.round(targetX - emuAt[c])), 20000);
+    };
     const anchors = []; const kinds = [];
-    if (cl) { anchors.push(picAnchor("C", 7, 13, 324000)); kinds.push("C"); }   // 14행 부근 고객사 로고 (높이 0.9cm)
-    if (co) { anchors.push(picAnchor("W", 7, 16, 324000)); kinds.push("W"); }   // 17행 부근 우리회사 로고
+    if (cl) { anchors.push(placeRight("C", 13, 324000)); kinds.push("C"); }   // 14행 부근 고객사 로고 (높이 0.9cm)
+    if (co) { anchors.push(placeRight("W", 16, 324000)); kinds.push("W"); }   // 17행 부근 우리회사 로고
     attachAnchors(sheetPathByName[coverName], anchors.join(""), kinds);
   }
 
