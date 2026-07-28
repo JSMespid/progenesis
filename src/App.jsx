@@ -4066,6 +4066,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
           <button onClick={onClose} style={{ background:"none", border:"none", color:T.muted, fontSize:18, cursor:"pointer" }}>✕</button>
         </div>
         <div style={{ padding:"14px 18px", overflowY:"auto" }}>
+          <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} />
           <div style={{ fontSize:11, fontWeight:600, marginBottom:6 }}>이해관계자 요구사항 원문 <span style={{ color:T.muted, fontWeight:400 }}>(RFP 발췌·인터뷰 기록·회의록 등 붙여넣기 또는 파일 업로드)</span></div>
           <textarea value={srcText} onChange={e=>setSrcText(e.target.value)} placeholder="예) 사용자는 네트워크 장비 목록을 조건별로 검색할 수 있어야 한다. 시스템 응답시간은 3초 이내여야 한다. …" disabled={busy}
             style={{ ...ta, minHeight:110, marginBottom:8 }} />
@@ -4078,7 +4079,6 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
             <div style={{ flex:1 }} />
             <Btn onClick={generate} disabled={busy} style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ AI 재생성" : "⚡ AI 도출·명세"}</Btn>
           </div>
-          <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} />
           {(busy || prog) && <GenProgressBar progress={prog || { percent:3, label:"요구사항 분석 준비 중…" }} subText="원문 분량·요구사항 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
           {error && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9, marginBottom:10 }}>{error}</div>}
           {items.length > 0 && (
