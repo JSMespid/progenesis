@@ -211,7 +211,26 @@ async function callClaudeJson(prompt, maxTokens=8000, model="claude-haiku-4-5-20
   if (!text.trim()) throw new Error("AI 응답이 비어 있습니다.");
 
   // JSON 파싱 방어: 모델이 마크다운/설명을 섞거나 응답이 잘려도 최대한 복구
-  const cleaned = text.replace(/```json|```/g,"").trim();
+  // 0) 문자열 내부의 리터럴 개행·탭·CR을 이스케이프로 정규화
+  //    (모델이 작성 가이드를 따라 장문·다단 상세를 쓸 때 JSON 문자열에 실제 줄바꿈을 넣는 경우가 잦음 → JSON.parse 실패 원인)
+  const escapeCtrlInStrings = (s) => {
+    let out = "", inStr = false, esc = false;
+    for (const ch of s) {
+      if (inStr) {
+        if (esc) { out += ch; esc = false; continue; }
+        if (ch === "\\") { out += ch; esc = true; continue; }
+        if (ch === '"') { inStr = false; out += ch; continue; }
+        if (ch === "\n") { out += "\\n"; continue; }
+        if (ch === "\r") { continue; }
+        if (ch === "\t") { out += "\\t"; continue; }
+        out += ch; continue;
+      }
+      if (ch === '"') inStr = true;
+      out += ch;
+    }
+    return out;
+  };
+  const cleaned = escapeCtrlInStrings(text.replace(/```json|```/g,"").trim());
   try {
     return JSON.parse(cleaned);
   } catch (_) {}
@@ -3791,7 +3810,8 @@ function buildGuideBlock(guides, cap = 4000) {
     block += piece;
   }
   if (!block) return "";
-  return `\n--- 작성 가이드 (아래 기준을 반드시 준수하여 작성) ---${block}--- 작성 가이드 끝 ---\n`;
+  return `\n--- 작성 가이드 (요구사항의 내용·표현·품질 기준으로 반드시 준수) ---${block}--- 작성 가이드 끝 ---
+※ 주의: 작성 가이드는 내용 작성 기준이다. 출력 JSON 스키마·필드 구성·id 값은 반드시 아래 지시를 그대로 따르고, 가이드의 문서 양식·ID 체계를 이유로 출력 형식이나 id를 바꾸지 마라.\n`;
 }
 
 // 가이드 원문 → AI 요약(핵심 작성 규칙만 추출) — 등록 시 1회 수행 후 저장, 작성 시에는 요약본만 주입
@@ -4039,6 +4059,7 @@ ${chunks[i]}`, 6000);
         const grp = list.slice(i, i + B);
         setProg({ percent: 40 + (i / list.length) * 40, label: `요구사항 명세 작성 중… (${Math.min(i + B, list.length)}/${list.length})` });
         const r = await callClaudeJson(`당신은 정보공학 방법론 요구정의 단계(RD1300 요구사항 명세)에 정통한 SI 품질보증 전문가입니다. 아래 요구사항 각각을 구현 가능성·테스트 가능성을 고려해 상세 명세하세요. 비기능은 측정기준을 포함하세요.
+규칙: id는 입력에 주어진 값을 그대로 반환(새 ID 부여·형식 변경 금지). 각 문자열 값은 줄바꿈 없이 한 문단으로 작성.
 JSON만 출력: {"items":[{"id":"...","detail":"상세 설명 2~3문장","acceptance":"측정 가능한 인수 기준 1~2문장","quality":"비기능이면 ISO 9126 품질특성명, 아니면 빈 문자열","assumptions":"가정·제약(없으면 빈 문자열)"}]}
 ${guideBlock}--- 요구사항 ---
 ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: g.summary })))}`, 6000);
