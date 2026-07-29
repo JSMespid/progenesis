@@ -2794,19 +2794,23 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
     const sstF = byPath["xl/sharedStrings.xml"];
     const sstXml0 = sstF ? (typeof sstF.content === "string" ? sstF.content : td.decode(sstF.content)) : "";
     const sst0 = [...sstXml0.matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join(""));
+    const cellTextOf = (attrs, inner) => {   // 셀 XML → 표시 텍스트 (s·inlineStr·str 공용)
+      if (/t="s"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); return v ? (sst0[Number(v[1])] || "") : ""; }
+      if (/t="inlineStr"/.test(attrs)) return [...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("");
+      if (/t="str"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); return v ? v[1] : ""; }
+      return "";
+    };
     let removedFormula = false;
-    const sheetPaths = files.map(f => f.path).filter(p => /^xl\/worksheets\/sheet\d+\.xml$/.test(p));
+    const sheetPaths = files.map(f => f.path).filter(p => /^xl\/worksheets\/[^\/]+\.xml$/i.test(p));
+    const logoSheets = new Set();   // 이 브랜치에서 로고를 넣은 시트
     for (const sp of sheetPaths) {
       const sf = byPath[sp];
       let sxml = typeof sf.content === "string" ? sf.content : td.decode(sf.content);
       let ref = null;
       sxml = sxml.replace(/<c\b([^>]*?)(\/>|>([\s\S]*?)<\/c>)/g, (m, attrs, close, inner) => {
         if (ref || inner === undefined) return m;
-        let text = "";
-        if (/t="s"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); text = v ? (sst0[Number(v[1])] || "") : ""; }
-        else if (/t="inlineStr"/.test(attrs)) text = [...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("");
-        else if (/t="str"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); text = v ? v[1] : ""; }
-        if (text.trim() !== "SWSM") return m;
+        const text = cellTextOf(attrs, inner);
+        if (text.replace(/[\s\u00a0]/g, "").toUpperCase() !== "SWSM") return m;
         ref = /r="([A-Z]+\d+)"/.exec(attrs)?.[1] || "A1";
         if (inner.includes("<f")) removedFormula = true;
         const sAttr = /s="\d+"/.exec(attrs)?.[0] || "";
@@ -2819,6 +2823,62 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
       sxml = ensureColWidth(sxml, refCR(ref).c + 1, Math.max(0, (needPx - 5) / 7));
       sf.content = sxml;   // 셀 비움·열 폭 반영 후 정중앙 앵커 부착
       attachAnchors(sp, centeredAnchor("C", sxml, ref, cySw), ["C"]);
+      logoSheets.add(sp);
+    }
+
+    // ── 폴백: 표준 헤더(프로젝트·문서번호 등)가 있는데 로고가 없는 시트 → A1 병합 영역(로고 박스)에 고객사 로고 ──
+    // 템플릿·작성가이드·작성예 시트처럼 SWSM 셀 탐지에 걸리지 않는 시트를 커버. 표지 시트는 별도 로직이 처리하므로 제외.
+    const drawPartOf = sp => {   // 시트에 연결된 드로잉 파트 경로 (텍스트박스 교체로 이미 로고가 들어갔는지 판단용)
+      const sf0 = byPath[sp]; if (!sf0) return null;
+      const sxml0 = typeof sf0.content === "string" ? sf0.content : td.decode(sf0.content);
+      const dM0 = /<drawing\s+r:id="([^"]+)"\s*\/>/.exec(sxml0);
+      const rp0 = sp.replace("xl/worksheets/", "xl/worksheets/_rels/") + ".rels";
+      if (!dM0 || !byPath[rp0]) return null;
+      const rXml0 = typeof byPath[rp0].content === "string" ? byPath[rp0].content : td.decode(byPath[rp0].content);
+      const relM0 = new RegExp(`<Relationship[^>]*Id="${dM0[1]}"[^>]*Target="([^"]+)"`).exec(rXml0);
+      return relM0 ? "xl/" + relM0[1].replace(/^\.\.\//, "").replace(/^\//, "").replace(/^xl\//, "") : null;
+    };
+    const coverPath = Object.entries(sheetPathByName).find(([n]) => n === "표지" || n.includes("표지"))?.[1] || null;
+    for (const sp of sheetPaths) {
+      if (logoSheets.has(sp) || sp === coverPath) continue;
+      const dp = drawPartOf(sp);
+      if (dp && usedByPart[dp] && usedByPart[dp].has("C")) continue;   // 플레이스홀더 텍스트박스 교체로 이미 로고 존재
+      const sf = byPath[sp];
+      let sxml = typeof sf.content === "string" ? sf.content : td.decode(sf.content);
+      // 표준 헤더 감지: 상단 8행 안에 '프로젝트' + ('문서번호'|'단계'|'작성일자') 라벨 존재
+      let head = "";
+      sxml.replace(/<c\b([^>]*?)(\/>|>([\s\S]*?)<\/c>)/g, (m, attrs, close, inner) => {
+        if (inner === undefined) return m;
+        const rw = /r="[A-Z]+(\d+)"/.exec(attrs);
+        if (rw && Number(rw[1]) <= 8) head += cellTextOf(attrs, inner) + "|";
+        return m;
+      });
+      const hz = head.replace(/[\s\u00a0]/g, "");
+      if (!hz.includes("프로젝트") || !(hz.includes("문서번호") || hz.includes("단계") || hz.includes("작성일자"))) continue;
+      // A1을 포함하는 병합 영역 = 헤더 로고 박스 → 영역 내 텍스트·수식 셀 비움 (남아있는 회사명 표기 제거)
+      let c2 = 0, r2 = 0;
+      for (const m of sxml.matchAll(/<mergeCell ref="([A-Z]+\d+):([A-Z]+\d+)"/g)) {
+        const A = refCR(m[1]), B = refCR(m[2]);
+        if (A.c === 0 && A.r === 0) { c2 = B.c; r2 = B.r; break; }
+      }
+      sxml = sxml.replace(/<c\b([^>]*?)(\/>|>([\s\S]*?)<\/c>)/g, (m, attrs, close, inner) => {
+        if (inner === undefined) return m;
+        const rr = /r="([A-Z]+\d+)"/.exec(attrs)?.[1]; if (!rr) return m;
+        const { c, r } = refCR(rr);
+        if (c > c2 || r > r2) return m;
+        if (inner.includes("<f")) removedFormula = true;
+        const sAttr = /s="\d+"/.exec(attrs)?.[0] || "";
+        return `<c r="${rr}"${sAttr ? " " + sAttr : ""}/>`;
+      });
+      // 로고 크기: 로고 박스(병합 영역) 안에 맞춤 — 열 폭·표 레이아웃은 건드리지 않음
+      const g1 = sheetGeom(sxml);
+      let W = 0; for (let i = 0; i <= c2; i++) W += g1.colWEmu(i);
+      let H = 0; for (let i = 0; i <= r2; i++) H += g1.rowHEmu(i);
+      let cyFb = Math.min(300000, Math.max(1, Math.round(H * 0.85)));
+      if (cyFb * info.C.ratio > W * 0.92) cyFb = Math.max(1, Math.floor((W * 0.92) / info.C.ratio));
+      sf.content = sxml;   // 셀 비움 반영 후 정중앙 앵커 부착
+      attachAnchors(sp, centeredAnchor("C", sxml, "A1", cyFb), ["C"]);
+      logoSheets.add(sp);
     }
     if (removedFormula) forceRecalc();
   }
