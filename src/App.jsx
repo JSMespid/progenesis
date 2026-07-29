@@ -4644,6 +4644,9 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                   <button onClick={()=>setSrcFiles(fs=>fs.filter(x=>x.name!==f.name))} disabled={busy} title="파일 제거" style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:10.5, padding:0, lineHeight:1 }}>✕</button>
                 </span>
               ))}
+              {srcFiles.length > 0 && (
+                <span style={{ fontSize:10, color:T.green }}>✓ 첨부됨 · AI 생성 시 함께 분석됩니다</span>
+              )}
               <div style={{ flex:1 }} />
               <Btn onClick={generate} disabled={busy} style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ AI 재생성" : "⚡ AI 도출·명세"}</Btn>
             </div>
