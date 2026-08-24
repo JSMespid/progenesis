@@ -2774,15 +2774,25 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
       if (!k || !info[k]) return anchor;
       // 크기: 원래 텍스트박스 높이(cy)를 유지하고 너비(cx)는 로고 비율에 맞춤
       const extM = /<xdr:ext\s+cx="(\d+)"\s+cy="(\d+)"\s*\/>/.exec(anchor);
-      const cy = extM ? Number(extM[2]) : 336246;
+      const spExtM = /<a:ext\s+cx="(\d+)"\s+cy="(\d+)"\s*\/>/.exec(spM[0]);
+      const cy = spExtM ? Number(spExtM[2]) : extM ? Number(extM[2]) : 336246;
       const cx = Math.max(1, Math.round(cy * info[k].ratio));
       const offM = /<a:off\s+x="(-?\d+)"\s+y="(-?\d+)"\s*\/>/.exec(spM[0]);
-      const off = offM ? `<a:off x="${offM[1]}" y="${offM[2]}"/>` : '<a:off x="0" y="0"/>';
       const id = ++imgId;
-      const pic = `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${id}" name="PgLogo${id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${info[k].relId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm>${off}<a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>`;
-      let out = anchor.replace(spM[0], pic);
-      if (extM) out = out.replace(extM[0], `<xdr:ext cx="${cx}" cy="${cy}"/>`);
+      const picWithOff = off => `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${id}" name="PgLogo${id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${info[k].relId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm>${off}<a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>`;
       markUsed(part, k); changed = true;
+      // 우측 정렬: 원래 텍스트박스의 "오른쪽 모서리"를 고정 — 가로로 긴 로고가 오른쪽으로 튀어나가지 않도록
+      // 텍스트박스의 절대좌표(a:off)와 원래 너비를 알 수 있으면 절대좌표 앵커로 전환하여 우측 끝선을 보존한다.
+      if (offM && spExtM) {
+        const origX = Number(offM[1]), origY = Number(offM[2]);
+        const origCx = Number(spExtM[1]);
+        const newX = Math.max(0, origX + origCx - cx);   // 오른쪽 끝선(origX+origCx) 유지
+        return `<xdr:absoluteAnchor><xdr:pos x="${newX}" y="${origY}"/><xdr:ext cx="${cx}" cy="${cy}"/>${picWithOff('<a:off x="0" y="0"/>')}<xdr:clientData/></xdr:absoluteAnchor>`;
+      }
+      // 폴백: 절대좌표를 알 수 없으면 기존 방식(제자리 치환·좌측 고정) 유지
+      const off = offM ? `<a:off x="${offM[1]}" y="${offM[2]}"/>` : '<a:off x="0" y="0"/>';
+      let out = anchor.replace(spM[0], picWithOff(off));
+      if (extM) out = out.replace(extM[0], `<xdr:ext cx="${cx}" cy="${cy}"/>`);
       return out;
     });
     if (changed) f.content = xml;
