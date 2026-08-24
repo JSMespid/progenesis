@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { SDLC_FACTOR_CRITERIA } from './sdlcFactorCriteria';
 import TailoringGuideModal from './TailoringGuideModal';
 import { TAILORING_GUIDES, getGuideForOSSP } from './tailoringGuides';
@@ -1991,6 +1991,8 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
   const holidays = wbsSetup?.holidays || [];
   const [showCal, setShowCal] = useState(false);
   const [showMgmt, setShowMgmt] = useState(false);   // 관리 프로세스 작업 목록 펼침
+  const [buildMsg, setBuildMsg] = useState(null);    // WBS 생성 결과 피드백 { ok, text }
+  const scheduleRef = useRef(null);                  // 생성 후 ④ 일정 계획으로 스크롤 이동
 
   // ── 관리 프로세스 작업: PDP(테일러링결과서)에서 '적용'으로 확정된 항목만 그대로 WBS에 반영 ──
   //    (별도 포함/제외 선택 없음 — 적용 여부는 PDP·프로세스 테일러링 탭에서만 결정)
@@ -2079,6 +2081,11 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
 
   // ── WBS 생성 — 엑셀 매크로 'WBS자동생성'의 번호 체계 a.b.c.d.e 이식 ──
   function buildWBS() {
+    setBuildMsg(null);
+    try {
+    // 기존 WBS에 일정·작업자 입력이 있으면 초기화 여부 확인 (재생성 시 입력값 소실 방지)
+    const hasInputs = (wbsData?.tasks || []).some(t => (t.subtasks || []).some(s => s.start || s.finish || s.assignee || s.effort));
+    if (hasInputs && !window.confirm("WBS를 다시 생성하면 입력한 일정·작업자·공수가 초기화됩니다. 계속할까요?")) return;
     const rows = [];
     let a = 0;
     // 1) 관리 프로세스 작업 (프로세스 테일러링 적용분) — 영역 단위, 시스템 구성요소 분해 없음
@@ -2127,7 +2134,10 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
         });
       }
     }
-    if (!rows.length) return;
+    if (!rows.length) {
+      setBuildMsg({ ok:false, text:"생성할 작업이 없습니다. 매트릭스에서 구성요소를 선택하거나 공통을 체크하세요." });
+      return;
+    }
     const tasks = [];
     let cur = null;
     rows.forEach((r, idx) => {
@@ -2140,6 +2150,13 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
       }
     });
     setWbsData({ tasks, pbsText, holidays });
+    const leafCnt = tasks.reduce((n,t)=>n+(t.subtasks||[]).length, 0);
+    setBuildMsg({ ok:true, text:`WBS 생성 완료 — 단계 ${tasks.length}개 · Task ${leafCnt}건. 아래 ④ 일정 계획에서 일정을 입력하세요.` });
+    setTimeout(() => scheduleRef.current?.scrollIntoView({ behavior:"smooth", block:"start" }), 100);
+    } catch (e) {
+      console.error(e);
+      setBuildMsg({ ok:false, text:"WBS 생성 중 오류: " + e.message });
+    }
   }
 
   // 단계(요약) 행 롤업: 하위 작업의 시작 최소 ~ 종료 최대 · 공수 합계
@@ -2188,6 +2205,13 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
           <div style={{ fontSize: 13, fontWeight: 600 }}>② 단계별 산출물 × 시스템 구성요소 매트릭스 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· 선택 {selectedCount}칸{commonCount > 0 ? ` · 공통 ${commonCount}건` : ""}</span></div>
           <Btn onClick={buildWBS} disabled={selectedCount === 0 && commonCount === 0 && mgmtItems.length === 0} style={{ fontSize: 12, padding: "6px 12px" }}>⚙ WBS 생성</Btn>
         </div>
+        {buildMsg && (
+          <div style={{ fontSize: 11, padding: "8px 12px", borderRadius: 8, marginBottom: 8,
+            color: buildMsg.ok ? T.green : T.red, background: (buildMsg.ok ? T.green : T.red) + "11",
+            border: `1px solid ${(buildMsg.ok ? T.green : T.red)}44` }}>
+            {buildMsg.ok ? "✓ " : "⚠ "}{buildMsg.text}
+          </div>
+        )}
         {leaves.length === 0 ? (
           <div style={{ fontSize: 11, color: T.muted, padding: "14px 12px", background: T.bg, border: `1px dashed ${T.border}`, borderRadius: 10 }}>
             시스템 구성요소를 먼저 입력하면 매트릭스가 표시됩니다.
@@ -2275,7 +2299,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
 
       {/* 4. 일정 계획 (생성 결과 편집) */}
       {wbsData?.tasks?.length > 0 && (
-        <div style={{ animation: "fadeIn .4s" }}>
+        <div ref={scheduleRef} style={{ animation: "fadeIn .4s", scrollMarginTop: 70 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>④ 일정 계획</div>
@@ -3357,6 +3381,38 @@ function reqSpecLeaves(wbs) {
     if (!c) return false;
     return !codes.some(o => o !== c && o.startsWith(c + "."));   // 하위 행이 없으면 최하위
   }).map(s => ({ wbsNo: String(s.wbsCode), name: String(s.task || "").trim() }));
+}
+
+// ── 요구사항 → WBS 모듈 규칙 기반 배정 (AI 미사용 우선) ──────────────
+// 판정 순서: ① 비기능·인터페이스 → "공통"  ② 기능 → 모듈명 2문자 n-gram이 요구사항명·개요에
+// 몇 개 등장하는지로 점수화하여 최고점 모듈  ③ 점수 미달(단서 없음) → null 반환(AI 폴백 대상)
+// 한국어 복합어 대응: "견적작성" → [견적,적작,작성] 분해 후 "견적을 작성" 같은 문장과도 매칭
+const ASSIGN_GENERIC_GRAMS = new Set(["관리","조회","등록","수정","삭제","화면","시스템","정보","처리","기능","목록","출력"]);
+function moduleNameGrams(name) {
+  const n = String(name || "").toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
+  const grams = new Set();
+  for (let i = 0; i + 2 <= n.length; i++) grams.add(n.slice(i, i + 2));
+  return { norm: n, grams: [...grams] };
+}
+function ruleAssignModule(item, leaves) {
+  if (item.type !== "기능") return "공통";   // 비기능·인터페이스는 전사 공통
+  const text = `${item.name || ""} ${item.summary || ""}`.toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
+  let best = null, bestScore = 0;
+  for (const l of leaves) {
+    const { norm, grams } = moduleNameGrams(l.name);
+    if (!norm) continue;
+    let score = 0;
+    for (const g of grams) if (text.includes(g)) score += ASSIGN_GENERIC_GRAMS.has(g) ? 0.5 : 1;   // 범용어는 반가중
+    if (norm.length >= 3 && text.includes(norm)) score += 3;   // 모듈명 전체 포함 시 강한 가점
+    // 핵심어 가점: "통계관리"→"통계"처럼 범용 접미어를 제거한 핵심어가 텍스트에 있으면 배정 확신 상승
+    let core = norm;
+    for (const suf of ["관리", "조회", "화면", "기능", "시스템", "정보", "처리", "목록"]) {
+      if (core.length > suf.length + 1 && core.endsWith(suf)) { core = core.slice(0, -suf.length); break; }
+    }
+    if (core !== norm && core.length >= 2 && !ASSIGN_GENERIC_GRAMS.has(core) && text.includes(core)) score += 2;
+    if (score > bestScore) { bestScore = score; best = l.wbsNo; }
+  }
+  return bestScore >= 2 ? best : null;   // 고유 단서 2개 미만이면 규칙 배정 보류 → AI 폴백
 }
 // docx 바이트 → 평문 텍스트 (요구사항 원문 파일 업로드용)
 async function docxBytesToText(bytes) {
@@ -4779,27 +4835,46 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
         list = list.map(it => map[it.id] ? { ...it, detail: String(map[it.id].detail || ""), acceptance: String(map[it.id].acceptance || ""), quality: String(map[it.id].quality || ""), assumptions: String(map[it.id].assumptions || ""),
           actors: String(map[it.id].actors || ""), basicFlow: String(map[it.id].basicFlow || ""), subFlow: String(map[it.id].subFlow || ""), exceptionFlow: String(map[it.id].exceptionFlow || ""), precondition: String(map[it.id].precondition || ""), postcondition: String(map[it.id].postcondition || "") } : it);
       }
-      // 3차(배정): 요구사항 → WBS 최하위 기능 모듈. 공통·비기능처럼 특정 모듈에 귀속되지 않으면 "공통"
+      // 3차(배정): 규칙 기반 우선(AI 미사용) — 비기능·인터페이스는 "공통", 기능은 모듈명 n-gram 매칭.
+      //            고유 단서가 부족한 잔여분만 AI로 배정하고, AI마저 실패하면 "공통" 폴백(사용자 검토·수정 전제).
+      let ruleCnt = 0, aiCnt = 0;
       if (leaves.length) {
-        const A = 10;
-        for (let i = 0; i < list.length; i += A) {
-          const grp = list.slice(i, i + A);
-          setProg({ percent: 80 + (i / list.length) * 18, label: `기능 모듈 배정 중… (${Math.min(i + A, list.length)}/${list.length})` });
-          const r = await callClaudeJson(`당신은 SI 요구사항 관리 전문가입니다. 각 요구사항을 아래 WBS 최하위 기능 모듈 중 가장 적합한 곳에 배정하세요. 특정 모듈에 귀속되지 않는 전사 공통·보안·성능 등 비기능 요구사항은 "공통"으로 배정하세요.
+        const pendIds = new Set();
+        list = list.map(it => {
+          const w = ruleAssignModule(it, leaves);
+          if (w === null) { pendIds.add(it.id); return it; }
+          ruleCnt += 1;
+          return { ...it, wbsNo: w };
+        });
+        const pending = list.filter(it => pendIds.has(it.id));
+        if (pending.length) {
+          try {
+            const A = 10;
+            for (let i = 0; i < pending.length; i += A) {
+              const grp = pending.slice(i, i + A);
+              setProg({ percent: 80 + (i / pending.length) * 18, label: `기능 모듈 배정 중… 규칙 ${ruleCnt}건 완료 · AI 보완 (${Math.min(i + A, pending.length)}/${pending.length})` });
+              const r = await callClaudeJson(`당신은 SI 요구사항 관리 전문가입니다. 각 요구사항을 아래 WBS 최하위 기능 모듈 중 가장 적합한 곳에 배정하세요. 특정 모듈에 귀속되지 않는 전사 공통·보안·성능 등 비기능 요구사항은 "공통"으로 배정하세요.
 모듈 목록: ${JSON.stringify(leaves)}
 JSON만 출력: {"items":[{"id":"...","wbsNo":"모듈의 wbsNo 또는 공통"}]}
 --- 요구사항 ---
 ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: g.summary })))}`, 4000);
-          const amap = {};
-          (Array.isArray(r?.items) ? r.items : []).forEach(d => { if (d?.id) amap[d.id] = String(d.wbsNo || "공통"); });
-          list = list.map(it => {
-            const w = amap[it.id];
-            return w ? { ...it, wbsNo: leafName[w] !== undefined ? w : "공통" } : it;
-          });
+              const amap = {};
+              (Array.isArray(r?.items) ? r.items : []).forEach(d => { if (d?.id) amap[d.id] = String(d.wbsNo || "공통"); });
+              list = list.map(it => {
+                if (!pendIds.has(it.id)) return it;
+                const w = amap[it.id];
+                if (w === undefined) return it;
+                aiCnt += 1;
+                return { ...it, wbsNo: leafName[w] !== undefined ? w : "공통" };
+              });
+            }
+          } catch (_) { /* AI 배정 실패 무시 — 규칙 결과 유지, 잔여는 아래에서 공통 폴백 */ }
+          // AI 미응답·실패 잔여분: "공통" 폴백 (검토 화면에서 수정 가능)
+          list = list.map(it => (pendIds.has(it.id) && !it.wbsNo) ? { ...it, wbsNo: "공통" } : it);
         }
       }
       setItems(list);
-      setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세${leaves.length ? "·모듈 배정" : ""} 완료 — 아래에서 검토·수정 후 확정하세요.` });
+      setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세${leaves.length ? `·모듈 배정(규칙 ${ruleCnt}건${aiCnt ? ` · AI ${aiCnt}건` : ""})` : ""} 완료 — 아래에서 검토·수정 후 확정하세요.` });
     } catch (e) { setError("AI 생성 실패: " + e.message); setProg(null); }
     setBusy(false);
   }
