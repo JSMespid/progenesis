@@ -3048,10 +3048,29 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
   }
 
   // ── 표지 시트: 고객사 로고 + 그 아래 우리회사 로고 — 절대좌표로 오른쪽 끝선에 완벽 우측 정렬 ──
+  // 단, 표지에 플레이스홀더 텍스트박스("고객사로고"/"우리회사로고")가 있어 이미 치환된 로고는 건너뜀 (중복 삽입 방지).
+  // 판정: 표지 시트에 연결된 드로잉 XML에 해당 로고의 embed 관계 ID(rIdPgLogoC/W)가 이미 존재하는지 확인 — 재주입 시 멱등성도 보장.
   const coverName = Object.keys(sheetPathByName).find(n => n === "표지") || Object.keys(sheetPathByName).find(n => n.includes("표지"));
   if ((cl || co) && coverName && byPath[sheetPathByName[coverName]]) {
-    const cf = byPath[sheetPathByName[coverName]];
+    const coverSp = sheetPathByName[coverName];
+    const cf = byPath[coverSp];
     const cvXml = typeof cf.content === "string" ? cf.content : td.decode(cf.content);
+    // 표지에 연결된 드로잉 XML 조회 (플레이스홀더 치환으로 로고가 이미 들어갔는지 판단)
+    let coverDrawXml = "";
+    {
+      const dM = /<drawing\s+r:id="([^"]+)"\s*\/>/.exec(cvXml);
+      const rp = coverSp.replace("xl/worksheets/", "xl/worksheets/_rels/") + ".rels";
+      if (dM && byPath[rp]) {
+        const rXml = typeof byPath[rp].content === "string" ? byPath[rp].content : td.decode(byPath[rp].content);
+        const relM = new RegExp(`<Relationship[^>]*Id="${dM[1]}"[^>]*Target="([^"]+)"`).exec(rXml);
+        if (relM) {
+          const dp = "xl/" + relM[1].replace(/^\.\.\//, "").replace(/^\//, "").replace(/^xl\//, "");
+          if (byPath[dp]) coverDrawXml = typeof byPath[dp].content === "string" ? byPath[dp].content : td.decode(byPath[dp].content);
+        }
+      }
+    }
+    const hasC = coverDrawXml.includes(`r:embed="${info.C ? info.C.relId : ""}"`) && !!info.C;
+    const hasW = coverDrawXml.includes(`r:embed="${info.W ? info.W.relId : ""}"`) && !!info.W;
     const g = sheetGeom(cvXml);
     const dimL = /<dimension ref="[A-Z]+\d+:([A-Z]+)\d+"/.exec(cvXml)?.[1] || "L";
     let lastCol = 0; for (const ch of dimL) lastCol = lastCol * 26 + (ch.charCodeAt(0) - 64); lastCol -= 1;
@@ -3061,9 +3080,9 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
       const cx = Math.max(1, Math.round(cy * info[k].ratio));
       return absAnchor(k, Math.max(0, rightEdge - 30000 - cx), g.rowTop(row) + 20000, cy);
     };
-    if (cl) { anchors.push(placeRight("C", 13, 324000)); kinds.push("C"); }   // 14행 부근 고객사 로고
-    if (co) { anchors.push(placeRight("W", 16, 324000)); kinds.push("W"); }   // 17행 부근 우리회사 로고
-    attachAnchors(sheetPathByName[coverName], anchors.join(""), kinds);
+    if (cl && !hasC) { anchors.push(placeRight("C", 13, 324000)); kinds.push("C"); }   // 14행 부근 고객사 로고
+    if (co && !hasW) { anchors.push(placeRight("W", 16, 324000)); kinds.push("W"); }   // 17행 부근 우리회사 로고
+    if (anchors.length) attachAnchors(coverSp, anchors.join(""), kinds);
   }
 
   const modified = Object.keys(usedByPart);
