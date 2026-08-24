@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { SDLC_FACTOR_CRITERIA, criteriaToPromptText } from './sdlcFactorCriteria';
+import { SDLC_FACTOR_CRITERIA } from './sdlcFactorCriteria';
 import TailoringGuideModal from './TailoringGuideModal';
 import { TAILORING_GUIDES, getGuideForOSSP } from './tailoringGuides';
 import { PROCESS_TAILORING_GUIDE, processMark, processKey, resolveProcessTailoring } from './processTailoringGuide';
@@ -366,22 +366,11 @@ export default function ProGenesis() {
     return callClaudeJson(prompt, maxTokens, model);
   }
   
-  async function recommendSDLC() {
+  // SDLC 추천 — AI 미사용. PMBOK 8판 개발접근법 선정 요인 기반 결정적 스코어링(ruleBasedSDLC)
+  function recommendSDLC() {
     setRecommending(true); setGenError(null); setSdlcRecommendation(null);
     try {
-      const result = await callClaude(`당신은 PMBOK 8판에 정통한 프로젝트 관리 전문가입니다. 아래 프로젝트 특성에 맞는 SDLC(소프트웨어 개발 생애주기) 모델을 추천하세요.
-프로젝트 유형: ${projectForm.type}
-요구사항 명확성: ${sdlcFactors.req_clarity}
-요구사항 변동성: ${sdlcFactors.req_volatility}
-인도(딜리버리) 방식: ${sdlcFactors.delivery}
-리스크 수준: ${sdlcFactors.risk}
-규제/컴플라이언스: ${sdlcFactors.regulation}
-팀 구성: ${sdlcFactors.team}
-각 특성 값의 판정 기준(사용자가 이 정의를 보고 선택했음):
-${criteriaToPromptText()}
-후보 모델: Waterfall(폭포수), V-Model, Iterative(반복형), Incremental(점진형), Spiral(나선형), Agile/Scrum, DevOps
-PMBOK의 예측형↔적응형 스펙트럼과 요구 변동성·인도 빈도·리스크·규제·팀 분산도를 근거로 판단하세요.
-JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)","label":"string","approach":"예측형|적응형|하이브리드"},"reason":"string(한국어 2~3문장, PMBOK 요인 근거 명시)","alternatives":[{"id":"string","label":"string","note":"string(언제 이 대안이 더 나은지 한국어 1문장)"}]}`);
+      const result = ruleBasedSDLC(sdlcFactors, projectForm.type);
       setSdlcRecommendation(result);
       if (result?.recommended) setSelectedSDLC(result.recommended);
     } catch(e) { setGenError("SDLC 추천 실패: "+e.message); }
@@ -412,15 +401,24 @@ JSON만 출력: {"recommended":{"id":"string(영문 소문자, 예: waterfall)",
       const procSummary = `적용 등급 ${tailoring.process?.level||"L3"} · 적용대상 ${procApplicable2.length}건 (적용 ${procApplicable2.filter(r=>r.status==="적용").length} / 변경적용 ${procApplicable2.filter(r=>r.status==="변경적용").length} / 미적용 ${procApplicable2.filter(r=>r.status==="미적용").length})`
         + (procChanged.length ? ` — 변경·미적용: ${procChanged.slice(0,10).map(r=>`${r.process}${r.activity?"›"+r.activity:""}(${r.status}${r.reason?": "+r.reason:""})`).join(", ")}` : "");
 
-      const result = await callClaude(`당신은 PMBOK 8판에 정통한 품질보증(QA) 전문가입니다. PDP(Project's Defined Process)는 OSSP(Organization's Set of Standard Process)를 테일러링 가이드 기준으로 테일러링한 테일러링결과서입니다.
-프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, SDLC: ${selectedSDLC?.label||"미지정"}, OSSP: ${selectedOSSP?.label}, 기간: ${projectForm.startDate}~${projectForm.endDate}, PM: ${projectForm.pm}
-적용 테일러링 가이드: ${guide.title}
-프로젝트 규모: ${scaleLabel}, 설계방식: ${guide.hasDesignMethod ? (tailoring.method||"UML") : "해당 없음"}
-테일러링 확정 산출물(단계별): ${tailoringSummary}
-프로세스 테일러링(관리 프로세스, 프로세스 테일러링 가이드 V2.0 기준): ${procSummary}
-PMBOK 8판의 테일러링 원칙과 품질 성과영역 관점을 반영하고, 위 테일러링 기준(규모·설계방식·단계별 산출물·관리 프로세스 이행 수준)을 근거로 테일러링결과서의 프로젝트 개요를 작성하라.
-분량 제한(응답 잘림 방지): objectives 최대 4개. 각 문자열은 간결하게.
-PDP JSON만 출력(설명·마크다운 금지): {"overview":{"purpose":"string","scope":"string","objectives":["string"]}}`, 2000);
+      // PDP 개요 — AI 미사용. 테일러링 확정 결과를 근거로 표준 문안 템플릿으로 생성 (재현성·즉시성 확보)
+      const phaseCount = Object.keys(byPhase).length;
+      const level = tailoring.process?.level || "L3";
+      const designTxt = guide.hasDesignMethod ? `, 설계방식 ${tailoring.method||"UML"}` : "";
+      const period = (projectForm.startDate && projectForm.endDate) ? `${projectForm.startDate}~${projectForm.endDate}` : "";
+      const strictReg = sdlcFactors?.regulation === "엄격";
+      const result = {
+        overview: {
+          purpose: `본 문서는 ${projectForm.client ? projectForm.client + " " : ""}"${projectForm.name}" 프로젝트(유형: ${projectForm.type})에 적용할 프로젝트 정의 프로세스(PDP)를 수립하기 위해, ${selectedOSSP?.label || "조직 표준 프로세스(OSSP)"}를 「${guide.title}」 기준으로 테일러링한 결과를 정의하는 것을 목적으로 한다. PMBOK® 8판의 테일러링 원칙에 따라 프로젝트 규모(${scaleLabel})${designTxt} 등 프로젝트 특성을 반영하였다.`,
+          scope: `적용 범위는 ${period ? "사업 기간(" + period + ") 중 " : ""}${selectedSDLC?.label || "선정 SDLC"} 기반 ${phaseCount}개 단계의 확정 산출물 ${applied.length}종과, 프로세스 테일러링 가이드 V2.0에 따른 관리 프로세스(적용 등급 ${level}, 적용대상 ${procApplicable2.length}건)의 이행 활동 전체로 한다. 단계별 확정 산출물: ${tailoringSummary}`,
+          objectives: [
+            `테일러링 확정 산출물 ${applied.length}종의 단계별 작성·검토·승인 이행`,
+            `필수(M) 산출물의 예외 없는 100% 작성 및 베이스라인 관리`,
+            `관리 프로세스 적용 등급 ${level} 기준 이행 및 품질보증 활동 수행`,
+            strictReg ? "법정 감리·인증 대응을 위한 프로세스 증적의 체계적 확보" : "PMBOK® 8판 품질 성과영역 기준의 예방 중심 품질 관리 정착",
+          ],
+        },
+      };
       setPdpData(result);
     } catch(e) { setGenError("PDP 생성 실패: "+e.message); }
     setGenerating(false);
@@ -437,14 +435,18 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       if (Array.isArray(result?.pbs) && result.pbs.length) {
         setWbsSetup(s => ({ ...s, pbsText: result.pbs.join("\n") }));
       } else { throw new Error("PBS 응답 형식 오류"); }
-    } catch(e) { setGenError("PBS 추천 실패: "+e.message); }
+    } catch(e) {
+      // AI 실패 시 프로젝트 유형별 프리셋 PBS로 폴백 — 사용자가 편집하여 사용
+      const preset = PBS_PRESETS[projectForm.type] || PBS_PRESETS["신규개발"];
+      setWbsSetup(s => ({ ...s, pbsText: preset.join("\n") }));
+      setGenError("AI PBS 추천 실패로 기본 프리셋을 적용했습니다. 내용을 편집해 사용하세요. ("+e.message+")");
+    }
     setGenerating(false);
   }
 
   async function generateDeliverables() {
     setGenerating(true); setGenError(null); setDeliverablesData(null);
     setGenProgress({ percent: 5, label: "WBS 산출물 수집 중…" });
-    let progTimer = null;   // AI 호출 중 진행률을 점진 증가시키는 타이머
     try {
       // ── WBS의 최하위 Task에 지정된 산출물을 그대로 수집 (단계별 카테고리, 단계 내 중복 제거) ──
       // WBS 화면에서 직접 수정·추가한 산출물명까지 그대로 반영된다.
@@ -533,28 +535,13 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         recon: { leafTotal, leafWithDeliv, dupIncluded, pdpInjected },
       };
 
-      // ── AI는 각 문서의 목적 설명(1문장)만 작성 — 실패해도 목록은 유지 ──
-      // AI 호출은 응답 시점을 알 수 없으므로 90%까지 점진적으로 차오르게 표시
-      setGenProgress({ percent: 30, label: `AI가 산출물 ${allDocs.length}건의 목적 설명 작성 중…` });
-      progTimer = setInterval(() => {
-        setGenProgress(p => (p && p.percent < 90) ? { ...p, percent: Math.min(90, p.percent + Math.max(0.4, (90 - p.percent) * 0.05)) } : p);
-      }, 400);
-      try {
-        const result = await callClaude(`당신은 PMBOK 8판에 정통한 품질보증(QA) 전문가입니다. 아래 SI 프로젝트 산출물 각각의 목적을 한국어 1문장(30자 이내)으로 작성하라.
-프로젝트: ${projectForm.name}, 고객사: ${projectForm.client}, OSSP: ${selectedOSSP?.label}, SDLC: ${selectedSDLC?.label||"미지정"}
-산출물 목록: ${[...new Map(allDocs.map(d => [d.code, d])).values()].map(d => `${d.code} ${d.name}`).join(", ")}
-JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 8000);
-        if (result?.purposes) {
-          allDocs.forEach(d => { if (result.purposes[d.code]) d.purpose = String(result.purposes[d.code]); });
-        }
-      } catch (_) { /* 목적 생성 실패는 무시 — 기본 설명 유지 */ }
-
-      if (progTimer) { clearInterval(progTimer); progTimer = null; }
+      // ── 각 문서의 목적 설명(1문장) — AI 미사용. 산출물명 키워드 사전(deriveDeliverablePurpose)으로 결정적 생성 ──
+      setGenProgress({ percent: 60, label: `산출물 ${allDocs.length}건의 목적 설명 생성 중…` });
+      allDocs.forEach(d => { d.purpose = deriveDeliverablePurpose(d.name) || d.purpose; });
       setGenProgress({ percent: 100, label: "산출물 생성 완료" });
       setDeliverablesData({ categories, summary });
       setTimeout(() => setGenProgress(p => (p && p.percent >= 100 ? null : p)), 1500);
     } catch(e) {
-      if (progTimer) { clearInterval(progTimer); progTimer = null; }
       setGenProgress(null);
       setGenError("산출물 생성 실패: "+e.message);
     }
@@ -761,6 +748,10 @@ JSON만 출력(코드를 key로): {"purposes":{"코드":"목적 1문장"}}`, 800
             <button onClick={logout} style={{ marginTop:12, display:"flex", alignItems:"center", gap:6, padding:"7px 10px", borderRadius:8, background:"transparent", color:T.muted, border:`1px solid ${T.border}`, cursor:"pointer", fontSize:12, fontFamily:"inherit", width:"100%" }}>
               <span>⏻</span> 로그아웃
             </button>
+            {/* 상표 귀속 문구 (PMI Trademark Usage Guidelines 준수) */}
+            <div style={{ marginTop:12, fontSize:8.5, color:T.muted, lineHeight:1.5, opacity:.8 }}>
+              PMBOK is a registered mark of Project Management Institute, Inc. 본 서비스는 PMI와 제휴·보증 관계가 없습니다.
+            </div>
           </div>
         </aside>
 
@@ -1019,11 +1010,156 @@ const SDLC_FACTORS = [
   { id:"team",           label:"팀 구성",           options:["집중","혼합","분산"] },
 ];
 
+// ── SDLC 규칙 기반 추천 엔진 (AI 미사용) ──────────────────────────────
+// PMBOK 8판 개발접근법 선정 요인을 예측형(−)↔적응형(+) 스펙트럼 점수로 환산 후
+// 접근법 구간 → 세부 모델 분기 규칙으로 결정. 입력 조합이 유한(3^6)하므로 완전 결정적.
+const SDLC_SCORES = {
+  req_clarity:    { 낮음:+2, 보통:0, 높음:-2 },
+  req_volatility: { 낮음:-2, 보통:0, 높음:+2 },
+  delivery:       { 일괄:-2, 단계적:+1, 빈번:+2 },
+  risk:           { 낮음:0,  보통:0, 높음:+1 },   // 높은 리스크는 반복·검증 강화 방향
+  regulation:     { 없음:+1, 보통:0, 엄격:-2 },
+  team:           { 집중:+1, 혼합:0, 분산:-1 },
+};
+function ruleBasedSDLC(f, projectType) {
+  const score = Object.entries(SDLC_SCORES)
+    .reduce((s,[k,m]) => s + (m[f[k]] ?? 0), 0);
+  let approach = score <= -3 ? "예측형" : score >= 3 ? "적응형" : "하이브리드";
+
+  // 접근법 내 세부 모델 분기
+  let id;
+  // 리스크 주도 우선 규칙: 리스크 높음 + 요구 불명확(+빈번 인도 아님) → 접근법 구간과 무관하게 나선형
+  if (f.risk === "높음" && f.req_clarity === "낮음" && f.delivery !== "빈번") {
+    id = "spiral"; approach = "하이브리드";
+  } else if (approach === "예측형") {
+    id = (f.regulation === "엄격" || f.risk === "높음") ? "v-model" : "waterfall";
+  } else if (approach === "적응형") {
+    id = (f.delivery === "빈번" && (projectType === "유지보수" || projectType === "고도화")) ? "devops" : "agile";
+  } else {
+    if (f.risk === "높음" && f.req_clarity === "낮음") id = "spiral";
+    else if (f.delivery === "단계적") id = "incremental";
+    else id = "iterative";
+  }
+  const model = SDLC_MODELS.find(m => m.id === id);
+
+  const MODEL_REASON = {
+    "waterfall":   "요구가 명확·안정적이고 일괄 인도 구조이므로 순차 개발이 효율적입니다.",
+    "v-model":     "규제·리스크 요건이 높아 단계별 검증(V&V)과 증적 확보가 중요하므로 V-Model이 적합합니다.",
+    "spiral":      "요구 불확실성과 리스크가 모두 커 리스크 분석 주도의 반복 접근이 필요합니다.",
+    "incremental": "기능 묶음 단위의 단계적 인도 구조에 맞춰 점진적으로 인도하는 방식이 적합합니다.",
+    "iterative":   "핵심 기능부터 구현 후 반복 보완하는 균형적 접근이 적합합니다.",
+    "agile":       "요구 변동이 크고 잦은 인도가 필요하므로 짧은 반복 주기의 적응형 개발이 적합합니다.",
+    "devops":      "운영 중 시스템의 지속 개선·배포가 핵심이므로 CI/CD 기반 DevOps가 적합합니다.",
+  };
+  const reason = `요구사항 명확성 '${f.req_clarity}'·변동성 '${f.req_volatility}', 인도 방식 '${f.delivery}', 리스크 '${f.risk}', 규제 '${f.regulation}', 팀 구성 '${f.team}'을 PMBOK® 8판 개발접근법 선정 요인에 대입한 결과 스펙트럼 점수 ${score>0?"+":""}${score}점으로 ${approach} 접근이 적합합니다. ${MODEL_REASON[id]}`;
+
+  // 대안 2종 — 인접 접근법 중심 규칙
+  const ALT_NOTE = {
+    "waterfall":   "규제·리스크가 완화되면 관리 부담이 적은 폭포수가 더 효율적입니다.",
+    "v-model":     "법정 감리·인증 요건이 추가되면 단계별 검증 증적이 강한 V-Model이 더 낫습니다.",
+    "spiral":      "리스크가 더 커지거나 요구가 더 불명확해지면 리스크 주도 나선형이 더 낫습니다.",
+    "incremental": "고객이 기능 묶음별 조기 오픈을 원하면 점진형 인도가 더 낫습니다.",
+    "iterative":   "핵심 기능 우선 검증이 중요해지면 반복형이 더 낫습니다.",
+    "agile":       "요구 변동이 더 커지고 고객 협업이 긴밀하면 Agile/Scrum이 더 낫습니다.",
+    "devops":      "운영 이관 후에도 지속 배포가 이어지면 DevOps 전환이 더 낫습니다.",
+  };
+  const altIds = SDLC_MODELS.filter(m => m.id !== id)
+    .sort((a,b) => {
+      const rank = m2 => (m2.approach === approach ? 0 : m2.approach === "하이브리드" || approach === "하이브리드" ? 1 : 2);
+      return rank(a) - rank(b);
+    }).slice(0,2);
+  const alternatives = altIds.map(m => ({ id:m.id, label:m.label, note:ALT_NOTE[m.id] }));
+
+  return { recommended: { id, label: model?.label || id, approach }, reason, alternatives };
+}
+
+// ── 산출물 목적 사전 (AI 미사용) — 산출물명 키워드 매칭으로 1문장 결정적 생성 ──
+const PURPOSE_RULES = [
+  [/사업수행계획|수행계획서/, "프로젝트 수행 범위·일정·체계 확정"],
+  [/테일러링결과|PDP/i,      "OSSP 테일러링 결과의 공식 정의"],
+  [/WBS|작업분류/i,          "작업 분해 및 일정 기준선 수립"],
+  [/요구사항\s*정의/,        "이해관계자 요구의 식별·확정"],
+  [/요구사항\s*명세/,        "요구의 구현·검증 가능 수준 상세화"],
+  [/요구사항\s*추적|RTM/i,   "요구-설계-시험 간 추적성 확보"],
+  [/인터페이스\s*정의/,      "대내외 연계 규격의 확정"],
+  [/아키텍처|구조\s*설계/,   "시스템 구조·기술 방식 확정"],
+  [/화면\s*설계|UI/i,        "사용자 화면 명세 및 합의"],
+  [/(DB|데이터베이스|ERD).*(설계)|테이블\s*정의/i, "데이터 구조 설계의 확정"],
+  [/프로그램\s*명세|컴포넌트\s*설계|상세\s*설계/, "구현 단위 설계 명세 확정"],
+  [/단위\s*(시험|테스트)/,   "구현 단위의 결함 조기 검출"],
+  [/통합\s*(시험|테스트)/,   "모듈 간 연동 정합성 검증"],
+  [/시스템\s*(시험|테스트)/, "요구 충족 여부의 종합 검증"],
+  [/인수\s*(시험|테스트)/,   "고객 관점 최종 승인 근거 확보"],
+  [/(시험|테스트)\s*계획/,   "시험 범위·전략·기준 사전 정의"],
+  [/(시험|테스트)\s*결과/,   "시험 수행 증적 및 결함 조치 확인"],
+  [/전환\s*계획|이행\s*계획/, "운영 전환 절차·리스크 사전 정의"],
+  [/전환\s*결과|이행\s*결과/, "전환 수행 결과의 검증·승인"],
+  [/교육/,                    "사용자·운영자 역량 이전"],
+  [/운영\s*(매뉴얼|지침)/,   "운영 절차의 표준화·이관"],
+  [/사용자\s*매뉴얼/,        "사용자 활용 방법 안내"],
+  [/완료\s*보고|종료\s*보고/, "사업 결과의 공식 보고·승인"],
+  [/회의록/,                  "의사결정 사항의 기록·공유"],
+  [/(진척|주간|월간).*(보고)/, "진척 현황 공유 및 이슈 조기 식별"],
+  [/위험|리스크/,             "위험 식별·대응의 체계적 관리"],
+  [/이슈/,                    "이슈 추적 및 해결 이력 관리"],
+  [/변경\s*(요청|관리)/,     "변경의 통제된 평가·승인"],
+  [/형상|베이스라인/,         "산출물 형상의 무결성 유지"],
+  [/품질보증|QA\s*계획/i,    "품질 활동 계획·기준 수립"],
+  [/검토\s*(결과|보고)|검수/, "산출물 적합성의 공식 확인"],
+  [/감리/,                    "법정 감리 대응 증적 확보"],
+  [/보안/,                    "보안 요건 이행의 확인·증적화"],
+];
+function deriveDeliverablePurpose(name) {
+  const n = String(name || "");
+  for (const [re, purpose] of PURPOSE_RULES) if (re.test(n)) return purpose;
+  return `${n} 작성을 통한 단계 품질 확보`;
+}
+
+// ── PBS 프리셋 (AI 실패 시 폴백) — 프로젝트 유형별 기본 제품 분해 구조 ──
+const PBS_PRESETS = {
+  "신규개발": [
+    "응용시스템 > 사용자 포털 > 메인/안내",
+    "응용시스템 > 사용자 포털 > 업무 신청/조회",
+    "응용시스템 > 관리자 시스템 > 기준정보 관리",
+    "응용시스템 > 관리자 시스템 > 사용자/권한 관리",
+    "응용시스템 > 공통 > 인증/보안",
+    "응용시스템 > 공통 > 코드/파일 관리",
+    "연계 > 대내외 인터페이스",
+    "데이터 > DB 구축",
+    "기반환경 > 서버/네트워크 구성",
+  ],
+  "고도화": [
+    "개선대상 > 사용자 기능 개선",
+    "개선대상 > 관리자 기능 개선",
+    "개선대상 > 공통 > 성능/보안 개선",
+    "신규기능 > 추가 업무 기능",
+    "연계 > 인터페이스 신설/변경",
+    "데이터 > 데이터 이행/정비",
+    "기반환경 > 인프라 증설/전환",
+  ],
+  "유지보수": [
+    "운영지원 > 장애 대응",
+    "운영지원 > 정기 점검/백업",
+    "개선 > 기능 개선(SR)",
+    "개선 > 성능/보안 패치",
+    "데이터 > 데이터 정비/추출 지원",
+    "공통 > 형상/배포 관리",
+  ],
+  "컨설팅": [
+    "현황분석 > 업무 현황 분석",
+    "현황분석 > 시스템/인프라 진단",
+    "목표수립 > 목표모델(To-Be) 정의",
+    "목표수립 > 개선과제 도출",
+    "이행계획 > 로드맵/우선순위",
+    "이행계획 > 소요예산/조직 방안",
+  ],
+};
+
 function StepSDLC({ factors, setFactors, selected, setSelected, recommendation, recommending, genError, onRecommend }) {
   return (
     <div>
       <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>SDLC(개발 생애주기) 선택</h2>
-      <p style={{ fontSize:12, color:T.muted, marginBottom:16 }}>프로젝트 특성을 입력하면 PMBOK 기준으로 적합한 모델을 추천합니다. 최종 선택은 직접 확정하세요.</p>
+      <p style={{ fontSize:12, color:T.muted, marginBottom:16 }}>프로젝트 특성을 입력하면 PMBOK® 8판 기준으로 적합한 모델을 추천합니다. 최종 선택은 직접 확정하세요.</p>
 
       {/* 프로젝트 특성 입력 — 각 버튼 아래에 판정 기준 표시 */}
       <div style={{ display:"flex", flexDirection:"column", gap:14, marginBottom:16 }}>
@@ -1059,10 +1195,10 @@ function StepSDLC({ factors, setFactors, selected, setSelected, recommendation, 
 
       <div style={{ marginBottom:16 }}>
         <Btn onClick={onRecommend} disabled={recommending} style={{ fontSize:12, padding:"8px 14px" }}>
-          {recommending ? "분석 중…" : "⚡ AI 추천 받기"}
+          {recommending ? "분석 중…" : "⚡ PMBOK® 기준 추천"}
         </Btn>
       </div>
-      {recommending && <Spinner text="PMBOK 기준으로 분석 중…" />}
+
       {genError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9, marginBottom:12 }}>{genError}</div>}
 
       {/* 추천 근거 */}
@@ -1070,7 +1206,7 @@ function StepSDLC({ factors, setFactors, selected, setSelected, recommendation, 
         <div style={{ marginBottom:16, animation:"fadeIn .4s" }}>
           <Card style={{ padding:14, background:T.bg, border:`1px solid ${T.accent}55` }}>
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
-              <Badge color={T.green}>AI 추천</Badge>
+              <Badge color={T.green}>PMBOK® 기준 추천</Badge>
               <span style={{ fontWeight:700, fontSize:14 }}>{recommendation.recommended.label}</span>
               {recommendation.recommended.approach && <Badge color={T.accent}>{recommendation.recommended.approach}</Badge>}
             </div>
@@ -1108,6 +1244,10 @@ function StepSDLC({ factors, setFactors, selected, setSelected, recommendation, 
             </div>
           );
         })}
+      </div>
+      {/* 상표 귀속 문구 — PMBOK® 마크가 표시되는 화면에 상시 노출 (모바일 포함) */}
+      <div style={{ marginTop:16, fontSize:9, color:T.muted, lineHeight:1.5, opacity:.8 }}>
+        PMBOK is a registered mark of Project Management Institute, Inc. 본 서비스는 PMI와 제휴·보증 관계가 없습니다.
       </div>
     </div>
   );
@@ -1563,7 +1703,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
         <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>PDP (테일러링결과서) 생성</h2><p style={{ fontSize:11, color:T.muted }}>OSSP를 테일러링가이드 기준으로 테일러링한 결과를 정식 문서로 작성합니다.</p></div>
-        {!pdpData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ AI 생성</Btn>}
+        {!pdpData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ 생성</Btn>}
       </div>
       {generating && <Spinner text="테일러링결과서 작성 중…" />}
       {genError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9 }}>{genError}</div>}
@@ -4497,7 +4637,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
         <span style={{ fontSize:10.5, color: applied ? T.accent : T.muted }}>
           {guides.length ? `등록 ${guides.length}건 · 적용 ${applied}건` : "등록된 가이드 없음"}
         </span>
-        <span style={{ fontSize:10, color:T.muted }}>— 방법론 작성가이드·글로벌 표준(PMBOK·CMMI)·규제를 등록하면 AI가 준수하여 작성합니다 (전역 공용)</span>
+        <span style={{ fontSize:10, color:T.muted }}>— 방법론 작성가이드·글로벌 표준(PMBOK®·CMMI)·규제를 등록하면 AI가 준수하여 작성합니다 (전역 공용)</span>
         <div style={{ flex:1 }} />
         <span style={{ fontSize:10, color:T.muted }}>{openPanel ? "▲" : "▼"}</span>
       </div>
@@ -4802,12 +4942,12 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
         <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>산출물 자동생성</h2><p style={{ fontSize:11, color:T.muted }}>WBS에 반영되는 모든 단계의 산출물 문서 패키지를 구성합니다 (관리 프로세스 + 방법론 전 단계).</p></div>
-        {!deliverablesData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ AI 생성</Btn>}
+        {!deliverablesData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ 생성</Btn>}
       </div>
       {(generating || genProgress) && (
         <GenProgressBar
           progress={genProgress || { percent: 5, label: "산출물 생성 준비 중…" }}
-          subText="AI 호출 상황에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />
+          subText="WBS 산출물을 수집·구성합니다." />
       )}
       {genError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9 }}>{genError}</div>}
       {deliverablesData && (
