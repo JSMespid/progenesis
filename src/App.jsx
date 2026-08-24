@@ -2772,27 +2772,43 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
       const text = [...spM[0].matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map(m => m[1]).join("").replace(/[\s\u00a0{}]/g, "");
       const k = text === "고객사로고" ? "C" : text === "우리회사로고" ? "W" : null;
       if (!k || !info[k]) return anchor;
+      // 좌표·크기 파싱 — 속성 순서·추가 속성·공백 표기에 무관하게 태그 단위로 개별 추출 (템플릿별 XML 표기 차이 흡수)
+      const attrNum = (tag, at) => { if (!tag) return null; const m = new RegExp(`\\b${at}="(-?\\d+)"`).exec(tag); return m ? Number(m[1]) : null; };
+      const xfrmM = /<a:xfrm[^>]*>([\s\S]*?)<\/a:xfrm>/.exec(spM[0]);
+      const offTag = xfrmM ? (/<a:off\b[^>]*\/?>/.exec(xfrmM[1]) || [null])[0] : null;
+      const spExtTag = xfrmM ? (/<a:ext\b[^>]*\/?>/.exec(xfrmM[1]) || [null])[0] : null;
+      const anchorExtTag = (/<xdr:ext\b[^>]*\/?>/.exec(anchor) || [null])[0];
+      const ox = attrNum(offTag, "x"), oy = attrNum(offTag, "y");
+      const ocx = attrNum(spExtTag, "cx");
+      const ocy = attrNum(spExtTag, "cy");
+      const acx = attrNum(anchorExtTag, "cx"), acy = attrNum(anchorExtTag, "cy");
       // 크기: 원래 텍스트박스 높이(cy)를 유지하고 너비(cx)는 로고 비율에 맞춤
-      const extM = /<xdr:ext\s+cx="(\d+)"\s+cy="(\d+)"\s*\/>/.exec(anchor);
-      const spExtM = /<a:ext\s+cx="(\d+)"\s+cy="(\d+)"\s*\/>/.exec(spM[0]);
-      const cy = spExtM ? Number(spExtM[2]) : extM ? Number(extM[2]) : 336246;
+      const cy = ocy ?? acy ?? 336246;
       const cx = Math.max(1, Math.round(cy * info[k].ratio));
-      const offM = /<a:off\s+x="(-?\d+)"\s+y="(-?\d+)"\s*\/>/.exec(spM[0]);
       const id = ++imgId;
       const picWithOff = off => `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${id}" name="PgLogo${id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${info[k].relId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm>${off}<a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>`;
       markUsed(part, k); changed = true;
       // 우측 정렬: 원래 텍스트박스의 "오른쪽 모서리"를 고정 — 가로로 긴 로고가 오른쪽으로 튀어나가지 않도록
-      // 텍스트박스의 절대좌표(a:off)와 원래 너비를 알 수 있으면 절대좌표 앵커로 전환하여 우측 끝선을 보존한다.
-      if (offM && spExtM) {
-        const origX = Number(offM[1]), origY = Number(offM[2]);
-        const origCx = Number(spExtM[1]);
-        const newX = Math.max(0, origX + origCx - cx);   // 오른쪽 끝선(origX+origCx) 유지
-        return `<xdr:absoluteAnchor><xdr:pos x="${newX}" y="${origY}"/><xdr:ext cx="${cx}" cy="${cy}"/>${picWithOff('<a:off x="0" y="0"/>')}<xdr:clientData/></xdr:absoluteAnchor>`;
+      // 텍스트박스의 절대좌표(a:off)와 원래 너비(a:ext)를 알 수 있으면 절대좌표 앵커로 전환하여 우측 끝선을 보존한다.
+      if (ox !== null && ocx !== null) {
+        const newX = Math.max(0, ox + ocx - cx);   // 오른쪽 끝선(ox+ocx) 유지
+        return `<xdr:absoluteAnchor><xdr:pos x="${newX}" y="${oy ?? 0}"/><xdr:ext cx="${cx}" cy="${cy}"/>${picWithOff('<a:off x="0" y="0"/>')}<xdr:clientData/></xdr:absoluteAnchor>`;
       }
-      // 폴백: 절대좌표를 알 수 없으면 기존 방식(제자리 치환·좌측 고정) 유지
-      const off = offM ? `<a:off x="${offM[1]}" y="${offM[2]}"/>` : '<a:off x="0" y="0"/>';
+      // 폴백: 절대좌표를 알 수 없으면 제자리 치환 — 이때도 앵커 ext 너비를 알면 colOff를 당겨 우측 끝선 보존 시도
+      if (acx !== null) {
+        const shift = cx - acx;   // 늘어난 너비만큼 왼쪽으로 이동해야 우측 끝선 유지
+        const fromM = /<xdr:from>([\s\S]*?)<\/xdr:from>/.exec(anchor);
+        const colOffM = fromM ? /<xdr:colOff>(-?\d+)<\/xdr:colOff>/.exec(fromM[1]) : null;
+        if (colOffM && shift > 0 && Number(colOffM[1]) - shift >= 0) {
+          let out = anchor.replace(spM[0], picWithOff('<a:off x="0" y="0"/>'));
+          out = out.replace(fromM[1], fromM[1].replace(colOffM[0], `<xdr:colOff>${Number(colOffM[1]) - shift}</xdr:colOff>`));
+          if (anchorExtTag) out = out.replace(anchorExtTag, `<xdr:ext cx="${cx}" cy="${cy}"/>`);
+          return out;
+        }
+      }
+      const off = (ox !== null) ? `<a:off x="${ox}" y="${oy ?? 0}"/>` : '<a:off x="0" y="0"/>';
       let out = anchor.replace(spM[0], picWithOff(off));
-      if (extM) out = out.replace(extM[0], `<xdr:ext cx="${cx}" cy="${cy}"/>`);
+      if (anchorExtTag) out = out.replace(anchorExtTag, `<xdr:ext cx="${cx}" cy="${cy}"/>`);
       return out;
     });
     if (changed) f.content = xml;
