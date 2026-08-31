@@ -2843,11 +2843,61 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
   const usedByPart = {};   // drawing 경로 → Set("C"/"W")
   const markUsed = (part, k) => { (usedByPart[part] = usedByPart[part] || new Set()).add(k); };
 
+  // ── 드로잉 → 시트 XML 역매핑 (앵커 좌표 계산에 열 폭이 필요) ──
+  const sheetXmlForDrawing = {};
+  files.filter(sf => /^xl\/worksheets\/sheet\d+\.xml$/.test(sf.path)).forEach(sf => {
+    const sxml = typeof sf.content === "string" ? sf.content : td.decode(sf.content);
+    const dM = /<drawing\s+r:id="([^"]+)"\s*\/>/.exec(sxml);
+    if (!dM) return;
+    const relP = sf.path.replace("xl/worksheets/", "xl/worksheets/_rels/") + ".rels";
+    if (!byPath[relP]) return;
+    const rXml = typeof byPath[relP].content === "string" ? byPath[relP].content : td.decode(byPath[relP].content);
+    const relM = new RegExp(`<Relationship[^>]*Id="${dM[1]}"[^>]*Target="([^"]+)"`).exec(rXml);
+    if (!relM) return;
+    sheetXmlForDrawing["xl/" + relM[1].replace(/^\.\.\//, "").replace(/^\//, "").replace(/^xl\//, "")] = sxml;
+  });
+  // 열 폭 테이블(EMU) — 시트 선언값 기준 + 같은 드로잉의 twoCellAnchor 캐시로 배율 보정.
+  // 템플릿마다 기본 글꼴이 달라 '문자 폭 → 픽셀' 환산에 오차가 생기므로,
+  // from/to와 캐시 크기(a:ext)를 모두 가진 도형에서 실제 배율을 역산해 곱한다.
+  const colTableFor = (sxml, dxml) => {
+    const def = Number(/defaultColWidth="([\d.]+)"/.exec(sxml || "")?.[1] || 8.43);
+    const map = {};
+    const colsM = /<cols>([\s\S]*?)<\/cols>/.exec(sxml || "");
+    if (colsM) [...colsM[1].matchAll(/<col\b[^>]*\/>/g)].forEach(m => {
+      const mn = Number(/min="(\d+)"/.exec(m[0])?.[1]); const mx = Number(/max="(\d+)"/.exec(m[0])?.[1]);
+      const w = Number(/width="([\d.]+)"/.exec(m[0])?.[1]);
+      if (mn && mx && w) for (let c = mn; c <= Math.min(mx, 1024); c++) map[c] = w;
+    });
+    const base = c => Math.round((map[c + 1] ?? def) * 7 + 5) * 9525;
+    const ratios = [];
+    [...String(dxml || "").matchAll(/<xdr:twoCellAnchor[\s\S]*?<\/xdr:twoCellAnchor>/g)].forEach(m => {
+      const a = m[0];
+      const fM = /<xdr:from>([\s\S]*?)<\/xdr:from>/.exec(a), tM = /<xdr:to>([\s\S]*?)<\/xdr:to>/.exec(a);
+      const exM = /<a:ext\b[^>]*\bcx="(\d+)"/.exec(a);
+      if (!fM || !tM || !exM) return;
+      const g = (s, t) => { const x = new RegExp(`<xdr:${t}>(-?\\d+)</xdr:${t}>`).exec(s); return x ? Number(x[1]) : null; };
+      const fc = g(fM[1], "col"), fo = g(fM[1], "colOff") || 0, tc = g(tM[1], "col"), to = g(tM[1], "colOff") || 0;
+      if (fc === null || tc === null || tc <= fc) return;
+      let span = 0; for (let c = fc; c < tc; c++) span += base(c);
+      if (span <= 0) return;
+      const rt = (Number(exM[1]) + fo - to) / span;
+      if (rt > 0.5 && rt < 2) ratios.push(rt);
+    });
+    // 캐시는 도형마다 저장 시점이 달라 서로 어긋날 수 있다. 가장 작은 배율을 택해
+    // 왼쪽 이동량을 넉넉히 잡는다 — 안쪽으로 조금 들어가는 오차는 눈에 띄지 않지만,
+    // 바깥으로 나가는 오차는 인쇄 영역을 벗어나 즉시 문제가 되기 때문.
+    let scale = 1;
+    if (ratios.length) scale = Math.min(...ratios);
+    scale = Math.min(1.5, Math.max(0.75, scale));
+    return c => Math.max(1, Math.round(base(c) * scale));
+  };
+
   // 드로잉별로 플레이스홀더 텍스트박스(xdr:sp) → 그림(xdr:pic) 교체
   const drawingPaths = files.map(f => f.path).filter(p => /^xl\/drawings\/drawing\d+\.xml$/.test(p));
   for (const part of drawingPaths) {
     const f = byPath[part];
     let xml = typeof f.content === "string" ? f.content : td.decode(f.content);
+    const colW = colTableFor(sheetXmlForDrawing[part], xml);
     let changed = false;
     xml = xml.replace(/<xdr:(oneCellAnchor|twoCellAnchor)(\s[^>]*)?>(?:(?!<\/xdr:\1>).)*?<\/xdr:\1>/gs, anchor => {
       const spM = /<xdr:sp[\s>](?:(?!<\/xdr:sp>).)*?<\/xdr:sp>/s.exec(anchor);
@@ -2871,23 +2921,36 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
       const id = ++imgId;
       const picWithOff = off => `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${id}" name="PgLogo${id}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${info[k].relId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm>${off}<a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>`;
       markUsed(part, k); changed = true;
-      // 우측 정렬: 원래 텍스트박스의 "오른쪽 모서리"를 고정 — 가로로 긴 로고가 오른쪽으로 튀어나가지 않도록
-      // 텍스트박스의 절대좌표(a:off)와 원래 너비(a:ext)를 알 수 있으면 절대좌표 앵커로 전환하여 우측 끝선을 보존한다.
-      if (ox !== null && ocx !== null) {
-        const newX = Math.max(0, ox + ocx - cx);   // 오른쪽 끝선(ox+ocx) 유지
-        return `<xdr:absoluteAnchor><xdr:pos x="${newX}" y="${oy ?? 0}"/><xdr:ext cx="${cx}" cy="${cy}"/>${picWithOff('<a:off x="0" y="0"/>')}<xdr:clientData/></xdr:absoluteAnchor>`;
-      }
-      // 폴백: 절대좌표를 알 수 없으면 제자리 치환 — 이때도 앵커 ext 너비를 알면 colOff를 당겨 우측 끝선 보존 시도
-      if (acx !== null) {
-        const shift = cx - acx;   // 늘어난 너비만큼 왼쪽으로 이동해야 우측 끝선 유지
-        const fromM = /<xdr:from>([\s\S]*?)<\/xdr:from>/.exec(anchor);
-        const colOffM = fromM ? /<xdr:colOff>(-?\d+)<\/xdr:colOff>/.exec(fromM[1]) : null;
-        if (colOffM && shift > 0 && Number(colOffM[1]) - shift >= 0) {
-          let out = anchor.replace(spM[0], picWithOff('<a:off x="0" y="0"/>'));
-          out = out.replace(fromM[1], fromM[1].replace(colOffM[0], `<xdr:colOff>${Number(colOffM[1]) - shift}</xdr:colOff>`));
-          if (anchorExtTag) out = out.replace(anchorExtTag, `<xdr:ext cx="${cx}" cy="${cy}"/>`);
-          return out;
+      // 우측 정렬: 플레이스홀더의 "오른쪽 끝선"을 유지하되, 반드시 셀 앵커(from) 기준으로 계산한다.
+      // ※ 캐시 좌표(a:off)를 절대좌표 앵커로 옮기면 안 된다 — a:off는 템플릿을 마지막으로 저장한
+      //   세션의 열 폭이 박제된 값이라, 여는 쪽(엑셀)의 실제 열 폭과 다르면 로고가 통째로 밀린다.
+      //   셀 앵커로 두면 엑셀이 자기 기하로 위치를 계산하므로 템플릿 원안대로 놓인다.
+      const fromM2 = /<xdr:from>([\s\S]*?)<\/xdr:from>/.exec(anchor);
+      if (fromM2) {
+        const gv = (s, t) => { const x = new RegExp(`<xdr:${t}>(-?\\d+)</xdr:${t}>`).exec(s); return x ? Number(x[1]) : 0; };
+        let col = gv(fromM2[1], "col"), colOff = gv(fromM2[1], "colOff");
+        const row = gv(fromM2[1], "row"), rowOff = gv(fromM2[1], "rowOff");
+        // 플레이스홀더 원래 너비: 앵커 ext > (twoCellAnchor면 from~to 실측) > 도형 캐시 폭
+        let phCx = acx;
+        const toM2 = /<xdr:to>([\s\S]*?)<\/xdr:to>/.exec(anchor);
+        if (phCx === null && toM2) {
+          const tc = gv(toM2[1], "col"), to = gv(toM2[1], "colOff");
+          if (tc >= col) { let s2 = 0; for (let c = col; c < tc; c++) s2 += colW(c); phCx = Math.max(1, s2 + to - colOff); }
         }
+        if (phCx === null) phCx = ocx;
+        if (phCx !== null) {
+          let shift = cx - phCx;
+          while (shift > 0) {                       // 로고가 더 넓다 → 왼쪽으로 밀어 우측 끝선 유지
+            if (colOff >= shift) { colOff -= shift; shift = 0; break; }
+            if (col === 0) { colOff = 0; shift = 0; break; }
+            shift -= colOff; col -= 1; colOff = colW(col);
+          }
+          if (shift < 0) {                          // 로고가 더 좁다 → 오른쪽으로 당김
+            colOff -= shift;
+            while (colOff >= colW(col)) { colOff -= colW(col); col += 1; }
+          }
+        }
+        return `<xdr:oneCellAnchor><xdr:from><xdr:col>${col}</xdr:col><xdr:colOff>${Math.max(0, Math.round(colOff))}</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>${rowOff}</xdr:rowOff></xdr:from><xdr:ext cx="${cx}" cy="${cy}"/>${picWithOff('<a:off x="0" y="0"/>')}<xdr:clientData/></xdr:oneCellAnchor>`;
       }
       const off = (ox !== null) ? `<a:off x="${ox}" y="${oy ?? 0}"/>` : '<a:off x="0" y="0"/>';
       let out = anchor.replace(spM[0], picWithOff(off));
