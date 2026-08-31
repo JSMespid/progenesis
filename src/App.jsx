@@ -1891,6 +1891,26 @@ function parseDate(s) { return new Date(s + "T00:00:00"); }
 function addDaysStr(s, n) { const d = parseDate(s); d.setDate(d.getDate() + n); return fmtDate(d); }
 function isWorkday(s, hol) { const w = parseDate(s).getDay(); return w !== 0 && w !== 6 && !hol.includes(s); }
 function nextWorkday(s, hol) { let x = s, g = 0; while (!isWorkday(x, hol) && g < 370) { x = addDaysStr(x, 1); g++; } return x; }
+function prevWorkday(s, hol) { let x = s, g = 0; while (!isWorkday(x, hol) && g < 370) { x = addDaysStr(x, -1); g++; } return x; }
+// 근무일 기준 이동: n>0 → n근무일 뒤, n<0 → n근무일 앞, n=0 → 근무일로 스냅
+function shiftWorkdays(s, n, hol) {
+  const step = n < 0 ? -1 : 1;
+  let x = n < 0 ? prevWorkday(s, hol) : nextWorkday(s, hol), k = Math.abs(n), g = 0;
+  while (k > 0 && g < 3700) { x = addDaysStr(x, step); if (isWorkday(x, hol)) k--; g++; }
+  return x;
+}
+// 선행 표기 파서 — MS Project 표기와 동일 규칙
+//   "1.2"     → FS, 지연 0        "1.2+3" → FS, 지연 +3근무일
+//   "1.2-2"   → FS, 지연 -2(중첩)  "1.2SS" → SS(시작-시작)
+//   유형 생략 시 FS, 지연 생략 시 0. 지연 단위는 근무일.
+function parsePredToken(tok) {
+  const t = String(tok || "").trim().toUpperCase().replace(/\s+/g, "");
+  if (!t) return null;
+  const m = t.match(/^([0-9]+(?:\.[0-9]+)*)(FS|SS)?(?:([+-])(\d+)(?:D|일)?)?$/);
+  if (!m) return null;
+  return { code: m[1], type: m[2] || "FS", lag: m[3] ? (m[3] === "-" ? -Number(m[4]) : Number(m[4])) : 0 };
+}
+function parsePred(str) { return String(str || "").split(",").map(parsePredToken).filter(Boolean); }
 // 시작일을 1일째로 세어 n번째 근무일을 반환 (공수 n일 → 종료일)
 function addWorkdays(s, n, hol) {
   let x = nextWorkday(s, hol), c = 1, g = 0;
@@ -1904,7 +1924,11 @@ function countWorkdays(a, b, hol) {
   while (x <= b && g < 3700) { if (isWorkday(x, hol)) c++; x = addDaysStr(x, 1); g++; }
   return c;
 }
-// 전진 일정 재계산: 선행(FS) 종료일 → 시작일(동일 날짜), 시작일+공수 → 종료일. 연쇄 전파.
+// 전진 일정 재계산 (MS Project 동일 규칙)
+//  · FS: 후행 시작일 = 선행 종료일의 '다음 근무일' + 지연(근무일)
+//  · SS: 후행 시작일 = 선행 시작일 + 지연(근무일)
+//  · 종료일 = 시작일부터 세어 공수(근무일)번째 날 (시작일 포함, inclusive)
+//  여러 선행이면 가장 늦은 시작일을 채택. 연쇄 전파.
 function recalcSchedule(tasks, holidays) {
   const all = []; tasks.forEach(t => (t.subtasks || []).forEach(s => all.push(s)));
   const byCode = {}; all.forEach(s => { byCode[s.wbsCode] = s; });
@@ -1912,16 +1936,25 @@ function recalcSchedule(tasks, holidays) {
   for (let it = 0; it < cap; it++) {
     let changed = false;
     for (const s of all) {
-      if (s.pred) {
-        // 선행(FS) 작업의 종료일을 그대로 시작일로 사용 (여러 개면 가장 늦은 종료일)
-        const fins = String(s.pred).split(",").map(x => byCode[x.trim()]).filter(p => p && p.finish).map(p => p.finish);
-        if (fins.length) {
-          const ns = fins.sort().slice(-1)[0];
+      // 자기 참조·미존재 코드·표기 오류는 무시 (화면에서 별도 경고 표시)
+      const links = parsePred(s.pred).filter(L => L.code !== s.wbsCode && byCode[L.code]);
+      if (links.length) {
+        const cands = [];
+        for (const L of links) {
+          const p = byCode[L.code];
+          if (L.type === "SS") {
+            if (p.start) cands.push(shiftWorkdays(p.start, L.lag, holidays));
+          } else if (p.finish) {
+            // 선행 종료일 다음 근무일이 기준점 (선행 종료일 당일에 시작하지 않음)
+            cands.push(shiftWorkdays(nextWorkday(addDaysStr(p.finish, 1), holidays), L.lag, holidays));
+          }
+        }
+        if (cands.length) {
+          let ns = cands[0]; for (const c of cands) if (c > ns) ns = c;
           if (s.start !== ns) { s.start = ns; changed = true; }
         }
-      }
-      // 직접 입력한 시작일만 근무일로 스냅 (선행에서 온 시작일은 선행 종료일과 정확히 일치시킴)
-      if (!s.pred && s.start && !isWorkday(s.start, holidays)) {
+      } else if (s.start && !isWorkday(s.start, holidays)) {
+        // 직접 입력한 시작일은 근무일로 스냅
         const ns = nextWorkday(s.start, holidays);
         if (ns !== s.start) { s.start = ns; changed = true; }
       }
@@ -1934,6 +1967,36 @@ function recalcSchedule(tasks, holidays) {
     if (!changed) break;
   }
   return tasks;
+}
+
+// 선행 입력 검증 — 표기 오류 / 미존재 WBS / 자기 참조 / 순환 참조를 wbsCode별 메시지로 반환
+function scheduleIssues(tasks) {
+  const all = []; (tasks || []).forEach(t => (t.subtasks || []).forEach(s => all.push(s)));
+  const codes = new Set(all.map(s => s.wbsCode));
+  const edges = {}, issues = {};
+  for (const s of all) {
+    const bad = [], ok = [];
+    String(s.pred || "").split(",").map(x => x.trim()).filter(Boolean).forEach(tok => {
+      const p = parsePredToken(tok);
+      if (!p) bad.push(tok + " (표기 오류)");
+      else if (p.code === s.wbsCode) bad.push(tok + " (자기 참조)");
+      else if (!codes.has(p.code)) bad.push(tok + " (없는 WBS 코드)");
+      else ok.push(p.code);
+    });
+    edges[s.wbsCode] = ok;
+    if (bad.length) issues[s.wbsCode] = bad.join(", ");
+  }
+  const state = {}, cyc = new Set();
+  const dfs = (c, stack) => {
+    if (state[c] === 2) return;
+    if (state[c] === 1) { const i = stack.indexOf(c); if (i >= 0) stack.slice(i).forEach(x => cyc.add(x)); return; }
+    state[c] = 1; stack.push(c);
+    (edges[c] || []).forEach(n => dfs(n, stack));
+    stack.pop(); state[c] = 2;
+  };
+  Object.keys(edges).forEach(c => dfs(c, []));
+  cyc.forEach(c => { issues[c] = (issues[c] ? issues[c] + ", " : "") + "순환 참조"; });
+  return issues;
 }
 
 // 공휴일 지정용 월 달력 — 주말 색상 구분, 평일 클릭으로 공휴일 토글
@@ -2172,6 +2235,10 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
     borderBottom: `1px dashed ${T.border}`, color: T.text, fontSize: 10.5, fontFamily: "inherit", outline: "none", padding: "2px 2px" };
   const edDate = { ...edInput, colorScheme: "dark", width: 112 };
 
+  // 선행 입력 검증 (표기 오류 / 없는 WBS / 자기 참조 / 순환 참조)
+  const predIssues = wbsData?.tasks?.length ? scheduleIssues(wbsData.tasks) : {};
+  const issueCount = Object.keys(predIssues).length;
+
   return (
     <div>
       <div style={{ marginBottom: 14 }}>
@@ -2306,6 +2373,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
               <Badge color={T.green}>✓ {wbsData.tasks.reduce((n, t) => n + 1 + (t.subtasks?.length || 0), 0)}개 항목</Badge>
               <Badge color={T.accent}>단계 {wbsData.tasks.length} · 최하위 Task {wbsData.tasks.reduce((n, t) => n + (t.subtasks?.length || 0), 0)}건 · 산출물 {wbsData.tasks.reduce((n, t) => n + (t.subtasks || []).filter(s => String(s.deliverable || "").trim()).length, 0)}건</Badge>
               {holidays.length > 0 && <Badge color={T.red}>공휴일 {holidays.length}일</Badge>}
+              {issueCount > 0 && <Badge color={T.red}>⚠ 선행 오류 {issueCount}건</Badge>}
             </div>
             <Btn variant="outline" onClick={() => setShowCal(v => !v)} style={{ fontSize: 11, padding: "4px 10px" }}>
               📅 {showCal ? "달력 닫기" : "달력 · 공휴일 설정"}
@@ -2317,9 +2385,12 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
               <HolidayCalendar holidays={holidays} onToggle={toggleHoliday} />
               <div style={{ flex: 1, minWidth: 220, fontSize: 11, color: T.muted, lineHeight: 1.8 }}>
                 <div style={{ fontWeight: 700, color: T.text, marginBottom: 4 }}>일정 계산 규칙 (근무일 기준)</div>
-                <div>· 시작일 + 투입공수(근무일) → 종료일 자동 계산 (주말·공휴일 제외)</div>
+                <div>· 시작일 + 투입공수(근무일) → 종료일 자동 계산 (시작일 포함, 주말·공휴일 제외)</div>
                 <div>· 종료일을 직접 수정하면 투입공수를 역산</div>
-                <div>· 선행에 선행 WBS 코드 입력(쉼표 구분) → 선행 작업의 종료일이 시작일로 자동 입력 (여러 개면 가장 늦은 종료일)</div>
+                <div>· 선행(FS): 선행 작업 <b style={{ color: T.text }}>종료일의 다음 근무일</b>이 시작일 — MS Project 동일 규칙</div>
+                <div>· 선행 여러 개는 쉼표 구분 → 가장 늦은 시작일 채택</div>
+                <div>· 지연·중첩: <b style={{ color: T.accent }}>1.1+2</b> = 2근무일 지연, <b style={{ color: T.accent }}>1.1-1</b> = 1근무일 중첩</div>
+                <div>· 동시 착수: <b style={{ color: T.accent }}>1.1SS</b> (시작-시작), 지연 결합 <b style={{ color: T.accent }}>1.1SS+3</b></div>
                 <div>· 공휴일 변경 시 전체 일정 즉시 재계산</div>
                 {holidays.length > 0 && (
                   <div style={{ marginTop: 6 }}>
@@ -2344,7 +2415,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
                   <td style={{ ...th, textAlign: "left", minWidth: 170 }}>Task</td>
                   <td style={{ ...th, minWidth: 100 }}>산출물</td>
                   <td style={{ ...th, minWidth: 70 }}>작업자</td>
-                  <td style={{ ...th, minWidth: 80 }}>선행<br/><span style={{ fontWeight: 400, fontSize: 8.5 }}>(선행 WBS, 쉼표)</span></td>
+                  <td style={{ ...th, minWidth: 92 }}>선행<br/><span style={{ fontWeight: 400, fontSize: 8.5 }}>(WBS[FS|SS][±지연])</span></td>
                   <td style={th}>시작일</td>
                   <td style={th}>종료일</td>
                   <td style={{ ...th, width: 60 }}>공수(일)</td>
@@ -2376,11 +2447,18 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
                             <input value={s.assignee || ""} onChange={e => updateRow(t.id, s.id, { assignee: e.target.value })} style={edInput} />
                           </td>
                           <td style={cell}>
-                            <input value={s.pred || ""} onChange={e => updateRow(t.id, s.id, { pred: e.target.value })} placeholder="예: 1.1.1" style={edInput} />
+                            <input value={s.pred || ""} onChange={e => updateRow(t.id, s.id, { pred: e.target.value })}
+                              placeholder="예: 1.1.1, 1.2+2"
+                              title={predIssues[s.wbsCode] || "선행 WBS 코드 · 쉼표로 복수 · FS/SS · ±지연(근무일)"}
+                              style={predIssues[s.wbsCode]
+                                ? { ...edInput, borderBottom: `1px solid ${T.red}`, color: T.red }
+                                : edInput} />
                           </td>
                           <td style={{ ...cell, whiteSpace: "nowrap" }}>
                             <input type="date" value={s.start || ""} onChange={e => updateRow(t.id, s.id, { start: e.target.value })}
-                              disabled={!!s.pred} title={s.pred ? "선행 작업에 의해 자동 계산됩니다" : ""} style={{ ...edDate, opacity: s.pred ? 0.55 : 1 }} />
+                              disabled={!!s.pred && !predIssues[s.wbsCode]}
+                              title={s.pred ? (predIssues[s.wbsCode] ? "선행 입력에 오류가 있어 자동 계산되지 않습니다 — 직접 수정하거나 선행을 고치세요" : "선행 작업에 의해 자동 계산됩니다") : ""}
+                              style={{ ...edDate, opacity: (s.pred && !predIssues[s.wbsCode]) ? 0.55 : 1 }} />
                           </td>
                           <td style={{ ...cell, whiteSpace: "nowrap" }}>
                             <input type="date" value={s.finish || ""} onChange={e => updateRow(t.id, s.id, { finish: e.target.value })} style={edDate} />
@@ -2397,6 +2475,11 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
               </tbody>
             </table>
           </div>
+          {issueCount > 0 && (
+            <div style={{ fontSize: 10.5, color: T.red, marginTop: 6, lineHeight: 1.7 }}>
+              ⚠ 선행 입력 오류 {issueCount}건 — 해당 행은 일정 자동 계산에서 제외됩니다. ({Object.entries(predIssues).slice(0, 5).map(([c, m]) => `${c} → ${m}`).join(" / ")}{issueCount > 5 ? ` 외 ${issueCount - 5}건` : ""})
+            </div>
+          )}
           <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>
             ※ 매트릭스를 수정한 뒤 "WBS 생성"을 다시 누르면 구조가 재생성됩니다 (입력한 일정은 초기화). 일정·작업자·사유는 프로젝트 저장 시 함께 보존됩니다.
           </div>
@@ -3925,6 +4008,7 @@ function makeXlsx({ sheetName = "Sheet1", rows }) {
 // - 시트: WBS(일정+간트) / 공휴일 / 사용법
 // - B3 셀 하나로 차트 단위(일/주) 전환 — 조건부 서식·날짜 축이 수식으로 즉시 반영
 // - 일정 수식: 선행(FS) 종료 + 1근무일 → 시작일(WORKDAY), 시작일 + 공수 - 1근무일 → 종료일
+//              선행 표기는 MS Project 규칙(1.1 / 1.1+2 / 1.1-1 / 1.1SS / 1.1SS+3)을 그대로 지원
 // - 간트 막대·진척·오늘·주말·공휴일은 조건부 서식(범용 엑셀 기법)으로 표현
 // ═══════════════════════════════════════════════════════════════════
 
@@ -4091,9 +4175,29 @@ function makeWbsGanttXlsx(wbs, meta) {
       cells.push(cStr(r, 2, it.deliverable || "", S.txt));
       cells.push(cStr(r, 3, it.assignee || "", S.ctr));
       cells.push(it.pred ? cStr(r, 4, it.pred, S.predTxt) : cEmpty(r, 4, S.predTxt));
-      // F 시작일: 선행이 있으면 위쪽 행에서 선행 종료일을 그대로 사용 (선행은 위쪽 행만 참조 — 순환 참조 방지)
+      // F 시작일 — FS는 선행 '종료일의 다음 근무일'(MS Project 동일). 선행은 위쪽 행만 참조(순환 참조 방지).
       if (r > DATA_START) {
-        const f = `IF($E${r}="",${staticStart},IFERROR(INDEX($G$${DATA_START}:$G$${r - 1},MATCH($E${r}&"",$A$${DATA_START}:$A$${r - 1},0)),${staticStart}))`;
+        const links = parsePred(it.pred);
+        const simple = links.length <= 1 && links.every(L => L.type === "FS" && L.lag === 0);
+        let f;
+        if (simple) {
+          // 단순 FS(지연 0) — 엑셀에서 선행(E) 텍스트를 바꾸면 즉시 재연결되는 동적 수식 유지
+          const idx = `INDEX($G$${DATA_START}:$G$${r - 1},MATCH($E${r}&"",$A$${DATA_START}:$A$${r - 1},0))`;
+          f = `IF($E${r}="",${staticStart},IFERROR(WORKDAY(${idx},1,HolidayList),${staticStart}))`;
+        } else {
+          // 복수 선행·지연·SS — 생성 시점 파싱 결과를 수식으로 고정하고 가장 늦은 시작일 채택
+          const terms = links.slice(0, 8).map(L => {
+            const mt = `MATCH("${L.code}",$A$${DATA_START}:$A$${r - 1},0)`;
+            if (L.type === "SS") {
+              const idxF = `INDEX($F$${DATA_START}:$F$${r - 1},${mt})`;
+              return L.lag === 0 ? `IFERROR(${idxF},0)` : `IFERROR(WORKDAY(${idxF},${L.lag},HolidayList),0)`;
+            }
+            const idxG = `INDEX($G$${DATA_START}:$G$${r - 1},${mt})`;
+            return `IFERROR(WORKDAY(${idxG},${1 + L.lag},HolidayList),0)`;
+          });
+          const mx = terms.length > 1 ? `MAX(${terms.join(",")})` : terms[0];
+          f = `IF(${mx}=0,${staticStart},${mx})`;
+        }
         cells.push(cFml(r, 5, f, S.date));
       } else {
         cells.push(startFn ? cFml(r, 5, startFn, S.date) : cEmpty(r, 5, S.date));
@@ -4180,16 +4284,27 @@ function makeWbsGanttXlsx(wbs, meta) {
     ["2. 차트 시작일", true],
     ["   · D3 셀의 날짜를 바꾸면 간트 차트가 해당 날짜부터 표시됩니다.", false],
     ["3. 일정 자동 계산 (근무일 기준)", true],
-    ["   · 시작일(F) + 공수(H) → 종료일(G) 자동 계산: 주말(토·일)과 공휴일 시트의 날짜를 제외합니다.", false],
-    ["   · 선행(E)에 선행 작업의 WBS 코드를 입력하면 선행 작업의 종료일이 시작일로 자동 입력됩니다.", false],
-    ["   · 제약: 선행은 자신보다 위쪽 행의 작업만 참조할 수 있습니다 (순환 참조 방지). 쉼표로 여러 개를 입력하면 자동 계산 대신 저장된 날짜가 유지됩니다.", false],
+    ["   · 시작일(F) + 공수(H) → 종료일(G) 자동 계산: 시작일을 1일째로 세며 주말(토·일)과 공휴일 시트의 날짜를 제외합니다.", false],
+    ["   · 선행(E)에 선행 작업의 WBS 코드를 입력하면 선행 작업 '종료일의 다음 근무일'이 시작일이 됩니다 (FS 관계, MS Project와 동일).", false],
+    ["   · 지연·중첩: 1.1+2 = 2근무일 지연 후 시작 / 1.1-1 = 1근무일 앞당겨 중첩 시작.", false],
+    ["   · 동시 착수: 1.1SS = 선행과 같은 날 시작 (시작-시작), 1.1SS+3 = 선행 시작 3근무일 후 시작.", false],
+    ["   · 복수 선행: 쉼표로 구분하면 가장 늦은 시작일이 채택됩니다 (예: 1.1, 1.2+1).", false],
+    ["   · 제약: 선행은 자신보다 위쪽 행의 작업만 참조할 수 있습니다 (순환 참조 방지).", false],
     ["   · 선행 열은 텍스트 서식이므로 1.1처럼 입력하면 WBS 코드로 정확히 인식됩니다.", false],
-    ["4. 진척률과 상태", true],
+    ["   · 단순 FS(지연 없는 단일 선행)는 이 시트에서 선행(E)을 고쳐도 즉시 재연결됩니다. 지연·SS·복수 선행은 생성 시점 관계로 고정되므로, 관계를 바꾸려면 ProGenesis 화면에서 수정 후 다시 내보내세요.", false],
+    ["4. MS Project로 가져오기", true],
+    ["   · [파일] > [열기]에서 이 파일을 선택하고 마법사에서 '새 맵'을 만들어 열을 매핑합니다.", false],
+    ["   · 선행(E) 열은 '선행 작업(Predecessors)'이 아니라 'WBS 선행 작업(WBS Predecessors)' 필드에 매핑하세요.", false],
+    ["     ('선행 작업' 필드는 WBS 코드가 아닌 작업 ID(행 번호)를 받으므로 링크가 연결되지 않습니다.)", false],
+    ["   · 시작일(F)을 함께 가져오면 '~ 이후 시작' 제약이 걸려 링크 계산과 충돌할 수 있습니다.", false],
+    ["     WBS·작업명·공수·선행만 가져온 뒤 MS Project가 일정을 계산하게 하면 본 워크북과 동일한 결과가 나옵니다.", false],
+    ["   · MS Project의 프로젝트 달력(휴무일)을 '공휴일' 시트와 동일하게 맞춰야 날짜가 일치합니다.", false],
+    ["5. 진척률과 상태", true],
     ["   · 진척률(I)을 입력하면 막대 위에 진한 색으로 진척 구간이 표시됩니다 (0%~100%).", false],
     ["   · 상태(J)는 오늘 날짜 기준으로 예정/진행/지연/완료가 자동 표시됩니다.", false],
-    ["5. 공휴일 관리", true],
+    ["6. 공휴일 관리", true],
     ["   · '공휴일' 시트 A열(2행~61행)에 날짜를 추가/삭제하면 일정 계산과 간트 음영에 즉시 반영됩니다.", false],
-    ["6. 행 그룹(개요)", true],
+    ["7. 행 그룹(개요)", true],
     ["   · 좌측 개요 버튼(1/2/3…)으로 단계별 하위 작업을 접거나 펼 수 있습니다.", false],
     ["", false],
     ["※ 본 워크북은 ProGenesis가 표준 엑셀 기능(수식·조건부 서식)만으로 자동 생성한 문서입니다 (매크로 없음).", false],
