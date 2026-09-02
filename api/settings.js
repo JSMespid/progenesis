@@ -106,10 +106,20 @@ export default async function handler(req, res) {
           APP_LOGIN_ID: !!process.env.APP_LOGIN_ID,
           APP_SESSION_SECRET: !!process.env.APP_SESSION_SECRET,
         };
+        // 테이블 존재 점검: PostgREST의 select는 "컬럼 목록"이므로 select=1 같은 값은
+        // 42703(column "1" does not exist)을 유발한다. 컬럼을 지정하지 않고 limit=1만 건다.
+        // 실패 시 원인 메시지를 함께 돌려주어 화면에서 바로 조치할 수 있게 한다.
         const tables = {};
         for (const t of ['app_users', 'app_settings', 'app_audit_logs', 'projects', 'ossp', 'writing_guides']) {
-          try { await db(`/${t}?select=1&limit=1`); tables[t] = 'ok'; }
-          catch (e) { tables[t] = (e.message === 'SETUP_REQUIRED') ? 'missing' : 'error'; }
+          try {
+            await db(`/${t}?limit=1`);
+            tables[t] = { status: 'ok' };
+          } catch (e) {
+            tables[t] = {
+              status: e.message === 'SETUP_REQUIRED' ? 'missing' : 'error',
+              message: e.message === 'SETUP_REQUIRED' ? '테이블이 없습니다. 설치 SQL을 실행하세요.' : e.message,
+            };
+          }
         }
         let userCount = 0, adminCount = 0;
         try {
