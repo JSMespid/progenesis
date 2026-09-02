@@ -7280,15 +7280,25 @@ function SystemTab({ flash }) {
             </div>
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: T.muted, marginBottom: 10, letterSpacing: 0.6 }}>데이터베이스 테이블</div>
-              {Object.entries(diag.tables).map(([k, v]) => (
-                <div key={k} style={{ display: "flex", alignItems: "center", padding: "6px 0", fontSize: 11.5 }}>
-                  {dot(v === "ok")}
-                  <span style={{ fontFamily: "monospace", color: v === "ok" ? T.text : T.muted }}>{k}</span>
-                  <span style={{ color: T.muted, fontSize: 10, marginLeft: 8 }}>
-                    {v === "ok" ? "정상" : v === "missing" ? "미생성 — 설치 SQL 실행 필요" : "조회 오류"}
-                  </span>
-                </div>
-              ))}
+              {Object.entries(diag.tables).map(([k, v]) => {
+                // 구버전 응답은 문자열("ok"), 신버전은 { status, message } — 양쪽 모두 처리
+                const st = typeof v === "string" ? v : v?.status;
+                const detail = typeof v === "string" ? "" : (v?.message || "");
+                return (
+                  <div key={k} style={{ display: "flex", alignItems: "flex-start", padding: "6px 0", fontSize: 11.5 }}>
+                    <span style={{ marginTop: 4 }}>{dot(st === "ok")}</span>
+                    <div style={{ minWidth: 0 }}>
+                      <span style={{ fontFamily: "monospace", color: st === "ok" ? T.text : T.muted }}>{k}</span>
+                      <span style={{ color: T.muted, fontSize: 10, marginLeft: 8 }}>
+                        {st === "ok" ? "정상" : st === "missing" ? "미생성 — 설치 SQL 실행 필요" : "조회 오류"}
+                      </span>
+                      {st !== "ok" && detail && (
+                        <div style={{ color: T.red, fontSize: 9.5, marginTop: 2, lineHeight: 1.5, wordBreak: "break-word" }}>{detail}</div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
               <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 11.5, color: T.muted, lineHeight: 1.9 }}>
                 등록 사용자 <b style={{ color: T.text }}>{diag.userCount}</b>명 (활성 관리자 <b style={{ color: diag.adminCount ? T.text : T.amber }}>{diag.adminCount}</b>명)<br />
                 AI 키 출처 <b style={{ color: T.text }}>{{ db: "설정 저장값", env: "환경변수", none: "미설정" }[diag.aiKeySource]}</b><br />
