@@ -227,14 +227,22 @@ function docCodeWithPrefix(code) {
 
 // 문서 작성/검토/승인자 결정: 프로젝트별 지정값 → 조직 기본값 → PM 순
 function docApprovers(meta) {
+  // 로고와 동일한 규칙: 위저드 입력값(meta.*) → 저장된 프로젝트(tailoring.docMeta)
+  //                    → 설정의 조직 기본값(DOC_SETTINGS) → (작성자만) PM
+  const dm = meta?.tailoring?.docMeta || {};
+  const pick = (k) => meta?.[k] || dm[k] || DOC_SETTINGS[k] || "";
   return {
-    author: meta?.author || DOC_SETTINGS.author || meta?.pm || "",
-    reviewer: meta?.reviewer || DOC_SETTINGS.reviewer || "",
-    approver: meta?.approver || DOC_SETTINGS.approver || "",
-    org: [DOC_SETTINGS.orgName, DOC_SETTINGS.dept].filter(Boolean).join(" · "),
-    distribution: meta?.distribution || DOC_SETTINGS.distribution || "",
+    author: pick("author") || meta?.pm || "",
+    reviewer: pick("reviewer"),
+    approver: pick("approver"),
+    org: meta?.orgName || dm.orgName || [DOC_SETTINGS.orgName, DOC_SETTINGS.dept].filter(Boolean).join(" · "),
+    distribution: pick("distribution"),
   };
 }
+
+// 위저드에서 프로젝트별로 덮어쓸 수 있는 문서 메타 필드
+const DOC_OVERRIDE_FIELDS = ["author", "reviewer", "approver", "distribution"];
+const DISTRIBUTION_OPTIONS = ["사내 한정", "고객사 공유", "대외비", "공개"];
 
 const ROLE_LABELS = { admin: "관리자", pm: "PM", qa: "품질보증담당자", viewer: "조회 전용", legacy: "재인증 필요" };
 const ROLE_DESC = {
@@ -431,7 +439,8 @@ export default function ProGenesis() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
-  const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", startDate:"", endDate:"", pm:"", clientLogo:null, companyLogo:null });
+  const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", startDate:"", endDate:"", pm:"",
+    author:"", reviewer:"", approver:"", distribution:"", clientLogo:null, companyLogo:null });
   const [selectedOSSP, setSelectedOSSP] = useState(null);
   const [customOSSP, setCustomOSSP] = useState([]);
   const [builtinOSSP, setBuiltinOSSP] = useState([]);   // DB에 시딩된 기본 제공 방법론 (자산 업로드용 UUID 보유)
@@ -764,7 +773,9 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   // 완료(저장)된 프로젝트를 위저드로 다시 열어 수정 — 저장된 데이터를 위저드 상태로 복원
   function editProject(p) {
     setEditingId(p.id);
+    const dm = p.tailoring?.docMeta || {};
     setProjectForm({ name:p.name||"", client:p.client||"", type:p.type||"신규개발", startDate:p.startDate||"", endDate:p.endDate||"", pm:p.pm||"",
+      author:dm.author||"", reviewer:dm.reviewer||"", approver:dm.approver||"", distribution:dm.distribution||"",
       clientLogo:p.tailoring?.logos?.client||null, companyLogo:p.tailoring?.logos?.company||null });
     setSelectedOSSP(p.ossp||null);
     const t = p.tailoring || {};
@@ -791,7 +802,10 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       status:"진행중", ossp:selectedOSSP,
       // sdlc 전용 컬럼 없이 tailoring(JSON)에 함께 보존 → DB 스키마 변경 불필요
       tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors, requirements: requirements||null,
-        logos:{ client:projectForm.clientLogo||null, company:projectForm.companyLogo||null } },
+        logos:{ client:projectForm.clientLogo||null, company:projectForm.companyLogo||null },
+        // 프로젝트별 문서 메타 오버라이드 — 저장 후 재다운로드 시에도 동일하게 적용된다
+        docMeta:{ author:projectForm.author||"", reviewer:projectForm.reviewer||"",
+          approver:projectForm.approver||"", distribution:projectForm.distribution||"" } },
       pdp:pdpData, wbs:wbsData, deliverables:deliverablesData,
     };
     try {
@@ -803,7 +817,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       await fetchProjects();
     } catch(e) { console.error(e); }
     setEditingId(null);
-    setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",startDate:"",endDate:"",pm:"" });
+    setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",startDate:"",endDate:"",pm:"",
+      author:"",reviewer:"",approver:"",distribution:"" });
     setTimeout(()=>{ if (appSettings) applySettingsDefaults(appSettings); }, 0);   // 설정의 QA 기본정책·기본 로고 재적용
     setSelectedOSSP(null); setTailoring({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준",review_cycle:"격주",test_level:"통합",risk:"강화" });
     setSelectedSDLC(null); setSdlcRecommendation(null);
@@ -1141,16 +1156,44 @@ function StepInfo({ form, setForm }) {
       <h2 style={{ fontSize:15, fontWeight:600, marginBottom:16 }}>프로젝트 기본 정보</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
         <Input label="프로젝트명 *" value={form.name} onChange={f("name")} placeholder="예: 스마트팩토리 MES 고도화" />
-        <Input label="고객사 *" value={form.client} onChange={f("client")} placeholder="예: (주)한국제조" />
+        <div>
+          <Input label="고객사(발주처) *" value={form.client} onChange={f("client")} placeholder="예: (주)한국제조" />
+          <div style={{ fontSize:10, color:T.muted, marginTop:5, lineHeight:1.6 }}>
+            사업을 발주한 회사입니다. 우리 회사(수행사) 상호는 설정 → 조직·문서 기본값에서 관리합니다
+            {DOC_SETTINGS.orgName ? <> — 현재 <b style={{ color:T.text }}>{DOC_SETTINGS.orgName}</b></> : null}.
+          </div>
+        </div>
         <Select label="프로젝트 유형" value={form.type} onChange={f("type")} options={["신규개발","고도화","유지보수","컨설팅"].map(v=>({value:v,label:v}))} />
         <Input label="PM *" value={form.pm} onChange={f("pm")} placeholder="예: 홍길동" />
         <Input label="시작일 *" type="date" value={form.startDate} onChange={f("startDate")} />
         <Input label="종료일 *" type="date" value={form.endDate} onChange={f("endDate")} />
+        {/* 문서 담당자 — 비워두면 설정(설정 → 조직·문서 기본값)의 값이 사용된다.
+            여기에 입력하면 이 프로젝트의 모든 산출물에서 설정값보다 우선 적용된다. */}
+        <div>
+          <div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>문서 담당자 (선택)</div>
+          <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
+            산출물 문서의 문서정보표·승인란에 기재됩니다. 비워두면 설정의 조직 기본값이 사용됩니다.
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:12 }}>
+            <Input label="작성자" value={form.author||""} onChange={f("author")}
+              placeholder={DOC_SETTINGS.author ? `기본값: ${DOC_SETTINGS.author}` : (form.pm ? `미입력 시 PM(${form.pm})` : "예: 품질보증담당자")} />
+            <Input label="검토자" value={form.reviewer||""} onChange={f("reviewer")}
+              placeholder={DOC_SETTINGS.reviewer ? `기본값: ${DOC_SETTINGS.reviewer}` : "예: PM"} />
+            <Input label="승인자" value={form.approver||""} onChange={f("approver")}
+              placeholder={DOC_SETTINGS.approver ? `기본값: ${DOC_SETTINGS.approver}` : "예: 사업총괄"} />
+            <Select label="배포 구분" value={form.distribution||""} onChange={f("distribution")}
+              options={[{ value:"", label:`설정 기본값 사용${DOC_SETTINGS.distribution ? ` (${DOC_SETTINGS.distribution})` : ""}` },
+                ...DISTRIBUTION_OPTIONS.map(v=>({ value:v, label:v }))]} />
+          </div>
+        </div>
         <div>
           <div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>문서 로고</div>
-          <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>산출물 문서(docx)의 표지와 문서 정보 표에 삽입됩니다. (PNG/JPG · 1MB 이하)</div>
+          <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
+            산출물 문서(docx)의 표지와 문서 정보 표에 삽입됩니다. (PNG/JPG · 1MB 이하)
+            {(DOC_SETTINGS.clientLogo || DOC_SETTINGS.companyLogo) && " 비워두면 설정의 조직 기본 로고가 사용됩니다."}
+          </div>
           <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-            {[["clientLogo","고객사 로고"],["companyLogo","우리회사 로고"]].map(([k,label])=>(
+            {[["clientLogo","고객사(발주처) 로고"],["companyLogo","우리회사(수행사) 로고"]].map(([k,label])=>(
               <div key={k} style={{ flex:1, minWidth:220, border:`1px dashed ${T.border}`, borderRadius:10, padding:12 }}>
                 <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>{label}</div>
                 {form[k]?.dataUrl ? (
@@ -7011,20 +7054,42 @@ function OrgTab({ flash, settings, onReload }) {
 
   return (
     <div>
-      <SettingsSection title="조직 정보" desc="PDP·산출물 문서의 표지와 문서정보표에 사용되는 조직 식별 정보입니다.">
+      <SettingsSection
+        title="우리 조직 정보 (수행사)"
+        desc="사업을 수행하는 우리 회사의 정보입니다. 산출물 문서의 표지와 문서정보표 「작성조직」 항목에 사용되며, 모든 프로젝트에 공통으로 적용됩니다."
+      >
+        {/* 고객사(발주처)와의 혼동이 잦은 지점 — 무엇을 넣어야 하는지 고정 안내 */}
+        <div style={{ display: "flex", gap: 10, padding: "11px 14px", background: T.amber + "12",
+          border: `1px solid ${T.amber}44`, borderRadius: 10, marginBottom: 16 }}>
+          <span style={{ color: T.amber, fontSize: 13, lineHeight: 1.4, flexShrink: 0 }}>⚠</span>
+          <div style={{ fontSize: 11, color: T.text, lineHeight: 1.75 }}>
+            <b>고객사(발주처)를 입력하는 칸이 아닙니다.</b> 문서를 작성·제출하는 <b>우리 회사</b>의 상호를 넣으세요.<br />
+            고객사는 프로젝트마다 다르므로 새 프로젝트 <b>1단계 「고객사」</b> 칸에서 입력합니다.
+          </div>
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
-          <Input label="조직명 (국문)" value={org.orgName || ""} onChange={v => setOrg(p => ({ ...p, orgName: v }))} placeholder="예: (주)아이티센글로벌" />
-          <Input label="조직명 (영문)" value={org.orgNameEn || ""} onChange={v => setOrg(p => ({ ...p, orgNameEn: v }))} placeholder="예: ITCEN GLOBAL" />
+          <Input label="수행사명 (국문)" value={org.orgName || ""} onChange={v => setOrg(p => ({ ...p, orgName: v }))} placeholder="우리 회사 상호 (예: (주)○○정보기술)" />
+          <Input label="수행사명 (영문)" value={org.orgNameEn || ""} onChange={v => setOrg(p => ({ ...p, orgNameEn: v }))} placeholder="우리 회사 영문 상호" />
           <Input label="담당 부서" value={org.dept || ""} onChange={v => setOrg(p => ({ ...p, dept: v }))} placeholder="예: 품질보증팀 (QA)" />
         </div>
+        {/* 입력 즉시 문서에 어떻게 찍히는지 미리보기 — 잘못 넣었을 때 바로 알아채도록 */}
+        {(org.orgName || org.dept) && (
+          <div style={{ marginTop: 14, padding: "10px 14px", background: T.bg, borderRadius: 9, fontSize: 11, color: T.muted, lineHeight: 1.7 }}>
+            문서 표기 미리보기 — 작성조직:{" "}
+            <span style={{ color: T.text, fontWeight: 600 }}>
+              {[org.orgName, org.dept].filter(Boolean).join(" · ")}
+            </span>
+            {org.orgNameEn && <span style={{ marginLeft: 8, fontStyle: "italic" }}>({org.orgNameEn})</span>}
+          </div>
+        )}
       </SettingsSection>
 
       <SettingsSection
         title="기본 문서 로고"
-        desc="새 프로젝트를 시작할 때 자동으로 채워지는 로고입니다. 프로젝트별로 다른 로고가 필요하면 위저드 1단계에서 개별 변경할 수 있습니다. (PNG/JPG · 300KB 이하)"
+        desc="새 프로젝트를 시작할 때 자동으로 채워지는 로고입니다. 고객사 로고는 프로젝트마다 바뀌므로 자주 거래하는 곳이 아니면 비워두고, 위저드 1단계에서 개별 지정하는 편이 좋습니다. (PNG/JPG · 300KB 이하)"
       >
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {[["clientLogo", "고객사 기본 로고"], ["companyLogo", "우리회사 로고"]].map(([k, label]) => (
+          {[["clientLogo", "고객사(발주처) 기본 로고"], ["companyLogo", "우리회사(수행사) 로고"]].map(([k, label]) => (
             <div key={k} style={{ flex: 1, minWidth: 230, border: `1px dashed ${T.border}`, borderRadius: 10, padding: 14 }}>
               <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>{label}</div>
               {org[k]?.dataUrl ? (
@@ -7097,13 +7162,21 @@ function QaTab({ flash, settings, onReload, onApplyDefaults }) {
       const value = { ...q, holidays };
       await apiFetch("/api/settings", { method: "PUT", body: JSON.stringify({ key: "qa_defaults", value }) });
       setHolidayText(holidays.join("\n"));
-      const s = await onReload();
-      if (s && onApplyDefaults) onApplyDefaults(s);
+      await onReload();   // 저장만 — 진행 중인 위저드 입력은 건드리지 않는다 (조직·문서 탭과 동일)
       flash(bad.length ? "warn" : "ok",
-        `QA 기본 정책을 저장했습니다. 공휴일 ${holidays.length}일 등록.` +
+        `QA 기본 정책을 저장했습니다. 공휴일 ${holidays.length}일 등록. 새로 시작하는 프로젝트부터 적용됩니다.` +
         (bad.length ? `\n형식이 올바르지 않아 제외된 항목 ${bad.length}건: ${bad.slice(0, 5).join(", ")}` : ""));
     } catch (e) { flash("error", e.message); }
     setBusy(false);
+  }
+
+  // 저장된 기본값을 진행 중인 위저드에 명시적으로 덮어쓴다 (되돌릴 수 없으므로 확인을 받는다)
+  function applyNow() {
+    if (!settings?.qa_defaults) { flash("error", "먼저 기본 정책을 저장하세요."); return; }
+    if (!confirm("저장된 QA 기본 정책을 진행 중인 프로젝트에 적용합니다.\n" +
+      "위저드에서 이미 조정한 규모·설계방식·프로세스 등급·SDLC 요인이 덮어쓰기 됩니다. 계속할까요?")) return;
+    onApplyDefaults(settings);
+    flash("ok", "진행 중인 프로젝트에 기본 정책을 적용했습니다. 테일러링 단계에서 결과를 확인하세요.");
   }
 
   return (
@@ -7149,8 +7222,15 @@ function QaTab({ flash, settings, onReload, onApplyDefaults }) {
           placeholder={"2026-01-01\n2026-03-01\n2026-05-05"}
           style={{ width: "100%", minHeight: 130, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10,
             padding: "10px 14px", color: T.text, fontSize: 13, fontFamily: "monospace", outline: "none", resize: "vertical", lineHeight: 1.7 }} />
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
-          <Btn onClick={save} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "저장 중…" : "저장 후 즉시 적용"}</Btn>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 10.5, color: T.muted, lineHeight: 1.6, flex: 1, minWidth: 240 }}>
+            <b>저장</b>은 새로 시작하는 프로젝트에만 적용됩니다.
+            진행 중인 프로젝트에도 반영하려면 <b>현재 프로젝트에 적용</b>을 누르세요.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn variant="outline" onClick={applyNow} disabled={busy} style={{ fontSize: 12, padding: "7px 16px" }}>현재 프로젝트에 적용</Btn>
+            <Btn onClick={save} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "저장 중…" : "저장"}</Btn>
+          </div>
         </div>
       </SettingsSection>
     </div>
