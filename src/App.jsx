@@ -217,31 +217,59 @@ function applyDocSettings(s) {
 }
 
 // 문서번호에 조직 접두어 부여 (이미 접두어가 붙어 있으면 중복 부여하지 않음 — 멱등)
-function docCodeWithPrefix(code) {
+// 문서 메타 항목 해석 — 모든 항목에 동일한 우선순위를 적용한다.
+//   위저드 입력값(meta.*) → 저장된 프로젝트(tailoring.docMeta) → 설정의 조직 기본값(DOC_SETTINGS)
+// 실무 기준: 수행사명·부서는 조직 상수라 대부분 설정값을 그대로 쓰고(컨소시엄 등 예외만 위저드에서 지정),
+//           문서번호 접두어는 사업마다 달라 위저드에서 지정하는 것이 일반적이다.
+function docMetaValue(meta, key) {
+  const dm = meta?.tailoring?.docMeta || {};
+  return String(meta?.[key] || dm[key] || DOC_SETTINGS[key] || "").trim();
+}
+
+// 이 프로젝트에 적용될 문서번호 접두어
+function docCodePrefix(meta) { return docMetaValue(meta, "codePrefix"); }
+
+// 문서코드에 접두어 부여. 이미 접두어가 붙어 있으면 중복 부여하지 않는다(멱등).
+function docCodeWithPrefix(code, meta) {
   const c = String(code || "").trim();
-  const p = String(DOC_SETTINGS.codePrefix || "").trim();
+  const p = docCodePrefix(meta);
   if (!c || c === "-") return p || "-";
   if (!p || c === p || c.startsWith(p + "-")) return c;
   return `${p}-${c}`;
 }
 
-// 문서 작성/검토/승인자 결정: 프로젝트별 지정값 → 조직 기본값 → PM 순
+// 고객사 약칭 코드 — 접두어가 없을 때만 문서번호에 사용한다.
+// 한글 상호를 그대로 자르면 "(주)한"처럼 깨지므로, 영문·숫자만 추출해 쓰고 없으면 PRJ로 대체한다.
+function clientCode(client) {
+  const alnum = String(client || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  return alnum ? alnum.slice(0, 6) : "PRJ";
+}
+
+// 프로젝트 문서번호 조립.
+//   접두어 있음 → {접두어}-{문서코드}-{연도}   (접두어가 사업을 식별하므로 고객사 코드 불필요)
+//   접두어 없음 → {문서코드}-{고객사코드}-{연도}
+function projectDocNo(meta, baseCode) {
+  const year = new Date().getFullYear();
+  const p = docCodePrefix(meta);
+  return p ? `${p}-${baseCode}-${year}` : `${baseCode}-${clientCode(meta?.client)}-${year}`;
+}
+
+// 문서 작성/검토/승인자·작성조직 결정
 function docApprovers(meta) {
-  // 로고와 동일한 규칙: 위저드 입력값(meta.*) → 저장된 프로젝트(tailoring.docMeta)
-  //                    → 설정의 조직 기본값(DOC_SETTINGS) → (작성자만) PM
-  const dm = meta?.tailoring?.docMeta || {};
-  const pick = (k) => meta?.[k] || dm[k] || DOC_SETTINGS[k] || "";
+  const org = docMetaValue(meta, "orgName");
+  const dept = docMetaValue(meta, "dept");
   return {
-    author: pick("author") || meta?.pm || "",
-    reviewer: pick("reviewer"),
-    approver: pick("approver"),
-    org: meta?.orgName || dm.orgName || [DOC_SETTINGS.orgName, DOC_SETTINGS.dept].filter(Boolean).join(" · "),
-    distribution: pick("distribution"),
+    author: docMetaValue(meta, "author") || meta?.pm || "",
+    reviewer: docMetaValue(meta, "reviewer"),
+    approver: docMetaValue(meta, "approver"),
+    orgNameEn: docMetaValue(meta, "orgNameEn"),
+    org: [org, dept].filter(Boolean).join(" · "),
+    distribution: docMetaValue(meta, "distribution"),
   };
 }
 
 // 위저드에서 프로젝트별로 덮어쓸 수 있는 문서 메타 필드
-const DOC_OVERRIDE_FIELDS = ["author", "reviewer", "approver", "distribution"];
+const DOC_OVERRIDE_FIELDS = ["codePrefix", "author", "reviewer", "approver", "distribution", "orgName", "orgNameEn", "dept"];
 const DISTRIBUTION_OPTIONS = ["사내 한정", "고객사 공유", "대외비", "공개"];
 
 const ROLE_LABELS = { admin: "관리자", pm: "PM", qa: "품질보증담당자", viewer: "조회 전용", legacy: "재인증 필요" };
@@ -440,7 +468,7 @@ export default function ProGenesis() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
   const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", startDate:"", endDate:"", pm:"",
-    author:"", reviewer:"", approver:"", distribution:"", clientLogo:null, companyLogo:null });
+    ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=""; return o; }, {}), clientLogo:null, companyLogo:null });
   const [selectedOSSP, setSelectedOSSP] = useState(null);
   const [customOSSP, setCustomOSSP] = useState([]);
   const [builtinOSSP, setBuiltinOSSP] = useState([]);   // DB에 시딩된 기본 제공 방법론 (자산 업로드용 UUID 보유)
@@ -775,7 +803,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     setEditingId(p.id);
     const dm = p.tailoring?.docMeta || {};
     setProjectForm({ name:p.name||"", client:p.client||"", type:p.type||"신규개발", startDate:p.startDate||"", endDate:p.endDate||"", pm:p.pm||"",
-      author:dm.author||"", reviewer:dm.reviewer||"", approver:dm.approver||"", distribution:dm.distribution||"",
+      ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=dm[k]||""; return o; }, {}),
       clientLogo:p.tailoring?.logos?.client||null, companyLogo:p.tailoring?.logos?.company||null });
     setSelectedOSSP(p.ossp||null);
     const t = p.tailoring || {};
@@ -804,8 +832,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors, requirements: requirements||null,
         logos:{ client:projectForm.clientLogo||null, company:projectForm.companyLogo||null },
         // 프로젝트별 문서 메타 오버라이드 — 저장 후 재다운로드 시에도 동일하게 적용된다
-        docMeta:{ author:projectForm.author||"", reviewer:projectForm.reviewer||"",
-          approver:projectForm.approver||"", distribution:projectForm.distribution||"" } },
+        docMeta:DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=projectForm[k]||""; return o; }, {}) },
       pdp:pdpData, wbs:wbsData, deliverables:deliverablesData,
     };
     try {
@@ -818,7 +845,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     } catch(e) { console.error(e); }
     setEditingId(null);
     setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",startDate:"",endDate:"",pm:"",
-      author:"",reviewer:"",approver:"",distribution:"" });
+      ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=""; return o; }, {}) });
     setTimeout(()=>{ if (appSettings) applySettingsDefaults(appSettings); }, 0);   // 설정의 QA 기본정책·기본 로고 재적용
     setSelectedOSSP(null); setTailoring({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준",review_cycle:"격주",test_level:"통합",risk:"강화" });
     setSelectedSDLC(null); setSdlcRecommendation(null);
@@ -1133,6 +1160,84 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
   );
 }
 
+// ── 이번 프로젝트 문서 설정 ────────────────────────────────────────────
+// 설정(설정 → 조직·문서 기본값)이 조직 표준이고, 여기가 프로젝트 테일러링에 해당한다.
+// 비워두면 설정값이 그대로 쓰이므로, 실무상 다른 값이 필요한 항목만 채우면 된다.
+//   · 문서번호 접두어 — 사업마다 다름 → 기본 노출
+//   · 작성/검토/승인자, 배포구분 — 프로젝트마다 다름 → 기본 노출
+//   · 수행사명·부서 — 조직 상수 → 접어 둠(컨소시엄·공동수급 등 예외 시에만 사용)
+function ProjectDocSettings({ form, setForm, f }) {
+  const [openOrg, setOpenOrg] = useState(false);
+  const ph = (v, fallback) => (v ? `설정 기본값: ${v}` : fallback);
+  const effPrefix = (form.codePrefix || DOC_SETTINGS.codePrefix || "").trim();
+  const effOrg = [form.orgName || DOC_SETTINGS.orgName, form.dept || DOC_SETTINGS.dept].filter(Boolean).join(" · ");
+  const orgOverridden = !!(form.orgName || form.orgNameEn || form.dept);
+
+  return (
+    <div>
+      <div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>이번 프로젝트 문서 설정 (선택)</div>
+      <div style={{ fontSize:10, color:T.muted, marginBottom:10, lineHeight:1.6 }}>
+        산출물 문서의 표지·문서정보표·승인란에 기재됩니다. 비워두면 설정의 조직 기본값이 그대로 사용됩니다.
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:12 }}>
+        <Input label="문서번호 접두어" value={form.codePrefix||""} onChange={f("codePrefix")}
+          placeholder={ph(DOC_SETTINGS.codePrefix, "예: ITG-QA")} />
+        <Input label="작성자" value={form.author||""} onChange={f("author")}
+          placeholder={ph(DOC_SETTINGS.author, form.pm ? `미입력 시 PM(${form.pm})` : "예: 품질보증담당자")} />
+        <Input label="검토자" value={form.reviewer||""} onChange={f("reviewer")}
+          placeholder={ph(DOC_SETTINGS.reviewer, "예: PM")} />
+        <Input label="승인자" value={form.approver||""} onChange={f("approver")}
+          placeholder={ph(DOC_SETTINGS.approver, "예: 사업총괄")} />
+        <Select label="배포 구분" value={form.distribution||""} onChange={f("distribution")}
+          options={[{ value:"", label:`설정 기본값 사용${DOC_SETTINGS.distribution ? ` (${DOC_SETTINGS.distribution})` : ""}` },
+            ...DISTRIBUTION_OPTIONS.map(v=>({ value:v, label:v }))]} />
+      </div>
+
+      {/* 문서번호 미리보기 — 접두어 유무에 따라 실제 조립 결과가 달라지므로 즉시 보여준다 */}
+      <div style={{ marginTop:10, padding:"8px 12px", background:T.bg, borderRadius:8, fontSize:10.5, color:T.muted, lineHeight:1.7 }}>
+        문서번호 미리보기 —{" "}
+        <span style={{ color:T.text, fontFamily:"monospace" }}>{projectDocNo({ ...form }, "PDP")}</span>
+        {!effPrefix && <span style={{ marginLeft:8 }}>※ 접두어를 입력하면 고객사 코드 대신 접두어가 사용됩니다.</span>}
+      </div>
+
+      {/* 수행사 정보 — 조직 상수라 평소에는 접어 둔다 */}
+      <button onClick={()=>setOpenOrg(o=>!o)}
+        style={{ marginTop:10, display:"flex", alignItems:"center", gap:8, padding:"8px 12px", width:"100%",
+          background:"transparent", border:`1px solid ${T.border}`, borderRadius:9, cursor:"pointer",
+          color:T.muted, fontSize:11, fontFamily:"inherit", textAlign:"left" }}>
+        <span style={{ fontSize:10 }}>{openOrg ? "▾" : "▸"}</span>
+        <span>수행사 정보 재지정</span>
+        <span style={{ marginLeft:"auto", color: orgOverridden ? T.amber : T.muted }}>
+          {orgOverridden ? "이 프로젝트에서 변경됨" : (effOrg ? `설정값 사용 — ${effOrg}` : "설정에 미등록")}
+        </span>
+      </button>
+      {openOrg && (
+        <div style={{ marginTop:10, padding:14, border:`1px dashed ${T.border}`, borderRadius:10 }}>
+          <div style={{ fontSize:10, color:T.muted, marginBottom:10, lineHeight:1.6 }}>
+            공동수급·컨소시엄처럼 이 사업의 주관사가 평소와 다를 때만 입력하세요. 비워두면 설정값이 사용됩니다.
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:12 }}>
+            <Input label="수행사명 (국문)" value={form.orgName||""} onChange={f("orgName")}
+              placeholder={ph(DOC_SETTINGS.orgName, "우리 회사 상호")} />
+            <Input label="수행사명 (영문)" value={form.orgNameEn||""} onChange={f("orgNameEn")}
+              placeholder={ph(DOC_SETTINGS.orgNameEn, "영문 상호")} />
+            <Input label="담당 부서" value={form.dept||""} onChange={f("dept")}
+              placeholder={ph(DOC_SETTINGS.dept, "예: 품질보증팀 (QA)")} />
+          </div>
+          {orgOverridden && (
+            <button onClick={()=>setForm(p=>({ ...p, orgName:"", orgNameEn:"", dept:"" }))}
+              style={{ marginTop:12, background:"none", border:`1px solid ${T.border}`, borderRadius:7,
+                color:T.muted, cursor:"pointer", fontSize:11, padding:"5px 12px", fontFamily:"inherit" }}>
+              설정 기본값으로 되돌리기
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepInfo({ form, setForm }) {
   const f = k => v => setForm(p=>({...p,[k]:v}));
   // 로고 업로드: dataURL + 원본 크기(폭/높이) 저장 — docx 임베드 시 비율 유지에 사용
@@ -1167,25 +1272,9 @@ function StepInfo({ form, setForm }) {
         <Input label="PM *" value={form.pm} onChange={f("pm")} placeholder="예: 홍길동" />
         <Input label="시작일 *" type="date" value={form.startDate} onChange={f("startDate")} />
         <Input label="종료일 *" type="date" value={form.endDate} onChange={f("endDate")} />
-        {/* 문서 담당자 — 비워두면 설정(설정 → 조직·문서 기본값)의 값이 사용된다.
-            여기에 입력하면 이 프로젝트의 모든 산출물에서 설정값보다 우선 적용된다. */}
-        <div>
-          <div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>문서 담당자 (선택)</div>
-          <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
-            산출물 문서의 문서정보표·승인란에 기재됩니다. 비워두면 설정의 조직 기본값이 사용됩니다.
-          </div>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:12 }}>
-            <Input label="작성자" value={form.author||""} onChange={f("author")}
-              placeholder={DOC_SETTINGS.author ? `기본값: ${DOC_SETTINGS.author}` : (form.pm ? `미입력 시 PM(${form.pm})` : "예: 품질보증담당자")} />
-            <Input label="검토자" value={form.reviewer||""} onChange={f("reviewer")}
-              placeholder={DOC_SETTINGS.reviewer ? `기본값: ${DOC_SETTINGS.reviewer}` : "예: PM"} />
-            <Input label="승인자" value={form.approver||""} onChange={f("approver")}
-              placeholder={DOC_SETTINGS.approver ? `기본값: ${DOC_SETTINGS.approver}` : "예: 사업총괄"} />
-            <Select label="배포 구분" value={form.distribution||""} onChange={f("distribution")}
-              options={[{ value:"", label:`설정 기본값 사용${DOC_SETTINGS.distribution ? ` (${DOC_SETTINGS.distribution})` : ""}` },
-                ...DISTRIBUTION_OPTIONS.map(v=>({ value:v, label:v }))]} />
-          </div>
-        </div>
+        {/* 이번 프로젝트 문서 설정 — 비워둔 항목은 설정(설정 → 조직·문서 기본값)의 값이 사용된다.
+            접두어·담당자는 사업마다 달라 펼쳐 두고, 조직 상수(수행사명·부서)는 접어 둔다. */}
+        <ProjectDocSettings form={form} setForm={setForm} f={f} />
         <div>
           <div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>문서 로고</div>
           <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
@@ -3531,7 +3620,7 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
 function docxStdParts({ title, docCode, phase, meta }) {
   const logos = getDocLogos(meta);
   // 설정(설정 → 조직·문서 기본값) 주입 — 문서번호 접두어, 작성/검토/승인자, 조직명, 배포구분, 꼬리말
-  const code = docCodeWithPrefix(docCode);
+  const code = docCodeWithPrefix(docCode, meta);
   const ap = docApprovers(meta);
   // 로고 미디어는 문서 전체(본문·꼬리말)에서 공유 — 파트별로 관계(relId)만 따로 부여
   const media = [];
@@ -3564,7 +3653,7 @@ function docxStdParts({ title, docCode, phase, meta }) {
     (clientRun ? rightImgP(clientRun) : docxP("고객사로고", { bold: true, size: 24, align: "right", spacingAfter: 140 })) +
     (companyRun ? rightImgP(companyRun) : docxP("우리회사로고", { bold: true, size: 24, align: "right", spacingAfter: 140 })) +
     (ap.org ? docxP(ap.org, { size: 20, align: "right", spacingAfter: 80 }) : "") +
-    (DOC_SETTINGS.orgNameEn ? docxP(DOC_SETTINGS.orgNameEn, { italic: true, size: 18, align: "right", spacingAfter: 140 }) : "") +
+    (ap.orgNameEn ? docxP(ap.orgNameEn, { italic: true, size: 18, align: "right", spacingAfter: 140 }) : "") +
     pageBreak;
 
   // 2페이지: 문서 정보 표 + 사용권한 + 제.개정 이력
@@ -3705,7 +3794,7 @@ function makePdpDocx(meta, ctx, phase) {
   const appliedCount = list.filter(isApplied).length;
   const grouped = {};
   list.forEach(d => { (grouped[d.phase] = grouped[d.phase] || []).push(d); });
-  const docNo = docCodeWithPrefix(`PDP-${(meta.client || "").replace(/\s/g, "").slice(0, 4).toUpperCase() || "PRJ"}-${new Date().getFullYear()}`);
+  const docNo = projectDocNo(meta, "PDP");
   const today = new Date().toLocaleDateString("ko-KR");
   const ap = docApprovers(meta);   // 설정의 작성/검토/승인자·작성조직
 
@@ -3901,7 +3990,7 @@ function makeReqDocx(meta, ctx, phase, kind, doc) {
   const moduleItems = inTree ? items.filter(it => !isCommon(it) && under(String(it.wbsNo), docWbs)) : [];
   const commonItems = inTree ? items.filter(isCommon) : [];
   const docCode = kind === "spec" ? "RD1301" : kind === "def" ? "RD1202" : "RD1202·RD1301";
-  const docNo = docCodeWithPrefix(`${docCode}-${(meta.client || "").replace(/\s/g, "").slice(0, 4).toUpperCase() || "PRJ"}-${new Date().getFullYear()}`);
+  const docNo = projectDocNo(meta, docCode);
   const today = new Date().toLocaleDateString("ko-KR");
   const ap = docApprovers(meta);   // 설정의 작성/검토/승인자
   const title = kind === "def" ? "요구사항 정의서" : kind === "spec" ? "요구사항 명세서" : "요구사항 정의서·명세서";
@@ -7111,10 +7200,10 @@ function OrgTab({ flash, settings, onReload }) {
 
       <SettingsSection
         title="문서 기본값"
-        desc="산출물 생성 시 문서정보표·승인란에 기본으로 채워지는 값입니다. 프로젝트별 실제 담당자가 다르면 개별 문서에서 수정하세요."
+        desc="산출물 생성 시 문서정보표·승인란에 기본으로 채워지는 값입니다. 문서번호 접두어와 담당자는 사업마다 다른 경우가 많으므로, 새 프로젝트 1단계 「이번 프로젝트 문서 설정」에서 프로젝트별로 지정할 수 있습니다. 여기 값은 지정하지 않았을 때 사용됩니다."
       >
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 14 }}>
-          <Input label="문서번호 접두어" value={doc.codePrefix || ""} onChange={v => setDoc(p => ({ ...p, codePrefix: v }))} placeholder="예: ITG-QA" />
+          <Input label="문서번호 접두어 (기본값)" value={doc.codePrefix || ""} onChange={v => setDoc(p => ({ ...p, codePrefix: v }))} placeholder="예: ITG-QA" />
           <Input label="기본 작성자" value={doc.author || ""} onChange={v => setDoc(p => ({ ...p, author: v }))} placeholder="예: 품질보증담당자" />
           <Input label="기본 검토자" value={doc.reviewer || ""} onChange={v => setDoc(p => ({ ...p, reviewer: v }))} placeholder="예: PM" />
           <Input label="기본 승인자" value={doc.approver || ""} onChange={v => setDoc(p => ({ ...p, approver: v }))} placeholder="예: 사업총괄" />
