@@ -486,6 +486,8 @@ export default function ProGenesis() {
   const [genError, setGenError] = useState(null);
   const [genProgress, setGenProgress] = useState(null);   // 산출물 생성 진행 상황: { percent, label }
   const [editingId, setEditingId] = useState(null);   // 완료된 프로젝트 수정 모드: 수정 대상 프로젝트 id
+  const [savingProject, setSavingProject] = useState(false);   // 완료 버튼 비활성화용
+  const savingRef = useRef(false);                             // 연타 즉시 차단용 (state보다 빠름)
 
   const nav = (p) => { setPage(p); setGenError(null); setMenuOpen(false); };
 
@@ -824,6 +826,11 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   }
 
   async function finishProject() {
+    // 중복 저장 방지: 응답을 기다리는 동안 "완료" 버튼을 다시 눌러도 POST가 재발행되지 않도록
+    // ref로 즉시 잠근다. (state는 다음 렌더까지 반영이 지연되어 연타를 막지 못한다)
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSavingProject(true);
     const newProject = {
       name:projectForm.name, client:projectForm.client, type:projectForm.type,
       start_date:projectForm.startDate, end_date:projectForm.endDate, pm:projectForm.pm,
@@ -837,12 +844,29 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     };
     try {
       const res = await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(newProject) });
+      if (!res.ok) {
+        const err = await res.json().catch(()=>({}));
+        alert("프로젝트 저장에 실패했습니다: " + (err.error || `HTTP ${res.status}`) + "\n작성 내용은 그대로 유지됩니다.");
+        savingRef.current = false; setSavingProject(false);
+        return;   // 위저드 상태를 비우지 않고 그대로 두어 재시도할 수 있게 한다
+      }
       // 수정 모드: 새 버전 저장이 성공한 경우에만 기존 프로젝트 제거 (실패 시 데이터 유실 방지)
-      if (res.ok && editingId) {
-        await fetch(`/api/projects?id=${editingId}`, { method:'DELETE' });
+      // 삭제가 실패하면 구버전이 남아 목록에 중복으로 보이므로 조용히 넘기지 않고 알린다.
+      if (editingId) {
+        const del = await fetch(`/api/projects?id=${editingId}`, { method:'DELETE' });
+        if (!del.ok) {
+          const derr = await del.json().catch(()=>({}));
+          alert("새 버전은 저장되었으나 이전 버전 삭제에 실패했습니다: " + (derr.error || `HTTP ${del.status}`) +
+            "\n목록에 같은 이름이 두 건 보일 수 있습니다. 이전 버전을 직접 삭제해 주세요.");
+        }
       }
       await fetchProjects();
-    } catch(e) { console.error(e); }
+    } catch(e) {
+      console.error(e);
+      alert("저장 중 오류가 발생했습니다: " + e.message + "\n작성 내용은 그대로 유지됩니다.");
+      savingRef.current = false; setSavingProject(false);
+      return;
+    }
     setEditingId(null);
     setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",startDate:"",endDate:"",pm:"",
       ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=""; return o; }, {}) });
@@ -852,6 +876,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     setSdlcFactors({ req_clarity:"보통", req_volatility:"보통", delivery:"단계적", risk:"보통", regulation:"보통", team:"집중" });
     setPdpData(null); setWbsData(null); setWbsSetup({ pbsText: "", selected: {} }); setDeliverablesData(null); setRequirements(null);
     clearDraft();   // 완료된 프로젝트의 임시저장본 제거
+    savingRef.current = false; setSavingProject(false);
     nav("dashboard");
   }
 
@@ -862,7 +887,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   }
 
   const pages = {
-    dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={nav} setCurrentProject={setCurrentProject} canCreate={role !== "viewer"}
+    dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={nav} setCurrentProject={setCurrentProject} canCreate={role !== "viewer"} onDelete={deleteProject}
       draft={loadDraft()} onContinueDraft={()=>{ restoreDraft(); nav("new_project"); }} onDiscardDraft={()=>{ clearDraft(); setPage("dashboard"); }} />,
     new_project: <NewProjectWizard step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
@@ -874,7 +899,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       sdlcFactors={sdlcFactors} setSdlcFactors={setSdlcFactors}
       selectedSDLC={selectedSDLC} setSelectedSDLC={setSelectedSDLC}
       sdlcRecommendation={sdlcRecommendation} recommending={recommending} onRecommendSDLC={recommendSDLC}
-      editing={!!editingId}
+      editing={!!editingId} saving={savingProject}
       onSaveDraft={saveDraft} loadDraft={loadDraft} onRestoreDraft={restoreDraft} onClearDraft={clearDraft} />,
     project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} onEdit={editProject} />,
     ossp: <OSSPPage nav={nav} customOSSP={customOSSP} builtinOSSP={builtinOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
@@ -989,7 +1014,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   );
 }
 
-function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinueDraft, onDiscardDraft, canCreate = true }) {
+function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinueDraft, onDiscardDraft, canCreate = true, onDelete }) {
   const hasDraft = draft && (draft.projectForm?.name || draft.selectedSDLC || draft.selectedOSSP);
   const stats = [
     { label:"전체 프로젝트", value:projects.length, color:T.accent },
@@ -1042,12 +1067,35 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
                 </div>
               </div>
             )}
+            {/* 같은 이름·고객사가 2건 이상이면 정리하도록 안내 (과거 중복 저장분) */}
+            {(() => {
+              const cnt = {};
+              projects.forEach(p => { const k = `${p.name}|${p.client}`; cnt[k] = (cnt[k]||0)+1; });
+              const dupN = Object.values(cnt).filter(c => c > 1).reduce((s,c)=>s+(c-1), 0);
+              return dupN > 0 ? (
+                <div style={{ padding:"10px 14px", background:T.amber+"14", border:`1px solid ${T.amber}44`,
+                  borderRadius:10, fontSize:11.5, color:T.text, lineHeight:1.7, marginBottom:4 }}>
+                  이름과 고객사가 같은 프로젝트가 <b>{dupN}건</b> 중복되어 있습니다.
+                  각 항목 우측의 ✕ 버튼으로 불필요한 건을 정리하세요.
+                </div>
+              ) : null;
+            })()}
             {projects.map(p=>(
               <div key={p.id} onClick={()=>{ setCurrentProject(p); nav("project_detail"); }}
                 style={{ padding:"12px 14px", background:T.bg, borderRadius:10, border:`1px solid ${T.border}`, cursor:"pointer" }}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
-                  <div style={{ fontWeight:600, fontSize:14 }}>{p.name}</div>
-                  <Badge color={T.accent}>{p.status}</Badge>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6, gap:8 }}>
+                  <div style={{ fontWeight:600, fontSize:14, minWidth:0 }}>{p.name}</div>
+                  <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+                    <Badge color={T.accent}>{p.status}</Badge>
+                    {/* 목록에서 바로 삭제 — 중복 항목 정리용. 카드 클릭(상세 이동)과 겹치지 않도록 전파를 막는다 */}
+                    {canCreate && onDelete && (
+                      <button title="이 프로젝트 삭제"
+                        onClick={e=>{ e.stopPropagation();
+                          if (confirm(`"${p.name}" (${p.client||"-"} · ${p.createdAt})을(를) 삭제합니다.\n되돌릴 수 없습니다. 계속할까요?`)) onDelete(p.id); }}
+                        style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted,
+                          cursor:"pointer", fontSize:11, lineHeight:1, padding:"4px 7px", fontFamily:"inherit" }}>✕</button>
+                    )}
+                  </div>
                 </div>
                 <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>{p.client} · {p.ossp?.label} · {p.createdAt}</div>
                 <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
@@ -1073,7 +1121,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, requirements, setRequirements, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, requirements, setRequirements, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, saving, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
   const steps = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   const canNext = [
     form.name&&form.client&&form.startDate&&form.endDate&&form.pm,  // 0 기본정보
@@ -1154,7 +1202,9 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       </Card>
       <div style={{ display:"flex", justifyContent:"space-between" }}>
         <Btn variant="ghost" onClick={()=>step>0?setStep(s=>s-1):nav("dashboard")}>← 이전</Btn>
-        {step<steps.length-1 ? <Btn disabled={!canNext[step]} onClick={()=>setStep(s=>s+1)}>다음 →</Btn> : <Btn onClick={onFinish}>{editing ? "✓ 수정 저장" : "✓ 완료"}</Btn>}
+        {step<steps.length-1
+          ? <Btn disabled={!canNext[step]} onClick={()=>setStep(s=>s+1)}>다음 →</Btn>
+          : <Btn onClick={onFinish} disabled={saving}>{saving ? "저장 중…" : (editing ? "✓ 수정 저장" : "✓ 완료")}</Btn>}
       </div>
     </div>
   );
