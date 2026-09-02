@@ -139,6 +139,112 @@ const TAILORING_RULES = [
   { id:"risk", label:"위험 관리", options:["기본","강화","최고"] },
 ];
 
+
+// ── 세션·인증 공용 유틸 ──────────────────────────────────────────────
+// 로그인 시 서버가 발급하는 토큰은 HMAC 서명된 무상태 토큰(payload.signature)이다.
+// 클라이언트는 payload를 화면 표시(이름·역할)용으로만 디코딩하며, 실제 권한 판정은
+// 항상 서버(api/_auth.js requireRole)가 수행한다.
+const AUTH_KEY = "progenesis_auth";
+
+function b64urlDecode(s) {
+  let x = String(s || "").replace(/-/g, "+").replace(/_/g, "/");
+  while (x.length % 4) x += "=";
+  const bin = atob(x);
+  const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+// 저장된 토큰 → 세션 정보.
+// 중요: 토큰을 해석하지 못하더라도 절대 로그아웃시키지 않는다.
+//   - 구버전 고정 토큰("progenesis-session")이나 만료 토큰을 가진 사용자도 앱을 계속 쓰게 하고,
+//     관리자 API가 필요한 순간에만 화면 안에서 재인증(ReauthCard)을 요구한다.
+//   - 서버는 만료 후에도 유예기간(60일) 안이면 refresh로 세션을 연장해 준다.
+function decodeSession(token) {
+  const t = String(token || "");
+  if (!t) return null;                       // 토큰 자체가 없을 때만 로그인 화면
+  try {
+    const p = JSON.parse(b64urlDecode(t.split(".")[0]));
+    if (p && p.role) {
+      const expired = !!(p.exp && Date.now() > p.exp);
+      return { ...p, expired, needsReauth: expired };
+    }
+  } catch { /* 아래 레거시 처리로 진행 */ }
+  // 구버전 토큰: 서명이 없어 서버 권한 판정이 불가하므로 '재인증 필요' 상태로 앱만 유지
+  return { legacy: true, role: "legacy", login_id: "", name: "이전 세션", needsReauth: true };
+}
+
+function getToken() { try { return localStorage.getItem(AUTH_KEY) || ""; } catch { return ""; } }
+
+// 인증 헤더를 붙여 호출하고 JSON을 반환. 실패 시 서버 메시지를 담은 Error를 throw.
+async function apiFetch(url, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  const t = getToken();
+  if (t) headers["Authorization"] = `Bearer ${t}`;
+  if (opts.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+  const res = await fetch(url, { ...opts, headers });
+  const text = await res.text();
+  let data = null;
+  if (text) { try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 300) }; } }
+  if (!res.ok) {
+    const e = new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
+    e.status = res.status; e.data = data;
+    throw e;
+  }
+  return data;
+}
+
+// AI 호출 기본값 — 설정(설정 → AI 연동)에서 저장한 값으로 앱 기동 시 덮어쓴다.
+// 기본 매개변수는 호출 시점에 평가되므로 이 객체를 갱신하면 이후 모든 호출에 반영된다.
+const AI_DEFAULTS = { model: "claude-haiku-4-5-20251001", maxTokens: 8000 };
+
+// 문서 생성 공용 설정 — 설정(설정 → 조직·문서 기본값)에서 저장한 값을 앱 기동 시 주입한다.
+// docxStdParts / getDocLogos / makePdpDocx / makeReqDocx 등 문서 생성 함수가 모두
+// 이 단일 지점을 참조하므로, 호출부마다 meta를 다시 엮을 필요가 없다.
+const DOC_SETTINGS = {
+  orgName: "", orgNameEn: "", dept: "", docFooter: "",
+  clientLogo: null, companyLogo: null,
+  codePrefix: "", author: "", reviewer: "", approver: "", distribution: "",
+};
+
+function applyDocSettings(s) {
+  const o = s?.organization || {}, d = s?.doc_defaults || {};
+  Object.assign(DOC_SETTINGS, {
+    orgName: o.orgName || "", orgNameEn: o.orgNameEn || "", dept: o.dept || "",
+    docFooter: o.docFooter || "", clientLogo: o.clientLogo || null, companyLogo: o.companyLogo || null,
+    codePrefix: d.codePrefix || "", author: d.author || "", reviewer: d.reviewer || "",
+    approver: d.approver || "", distribution: d.distribution || "",
+  });
+}
+
+// 문서번호에 조직 접두어 부여 (이미 접두어가 붙어 있으면 중복 부여하지 않음 — 멱등)
+function docCodeWithPrefix(code) {
+  const c = String(code || "").trim();
+  const p = String(DOC_SETTINGS.codePrefix || "").trim();
+  if (!c || c === "-") return p || "-";
+  if (!p || c === p || c.startsWith(p + "-")) return c;
+  return `${p}-${c}`;
+}
+
+// 문서 작성/검토/승인자 결정: 프로젝트별 지정값 → 조직 기본값 → PM 순
+function docApprovers(meta) {
+  return {
+    author: meta?.author || DOC_SETTINGS.author || meta?.pm || "",
+    reviewer: meta?.reviewer || DOC_SETTINGS.reviewer || "",
+    approver: meta?.approver || DOC_SETTINGS.approver || "",
+    org: [DOC_SETTINGS.orgName, DOC_SETTINGS.dept].filter(Boolean).join(" · "),
+    distribution: meta?.distribution || DOC_SETTINGS.distribution || "",
+  };
+}
+
+const ROLE_LABELS = { admin: "관리자", pm: "PM", qa: "품질보증담당자", viewer: "조회 전용", legacy: "재인증 필요" };
+const ROLE_DESC = {
+  admin: "설정·사용자·API 키를 포함한 전체 관리 권한",
+  pm: "프로젝트 착수·WBS·산출물 생성 및 편집",
+  qa: "품질보증 활동 수행 및 산출물 생성·검토",
+  viewer: "프로젝트·라이브러리 조회만 가능",
+  legacy: "이전 버전 세션 — 설정 기능 사용 시 재로그인이 필요합니다",
+};
+
 function LoginGate({ onSuccess }) {
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
@@ -154,7 +260,7 @@ function LoginGate({ onSuccess }) {
         body:JSON.stringify({ id, pw }),
       });
       const data = await res.json().catch(()=>({}));
-      if (res.ok && data.ok) { onSuccess(data.token); }
+      if (res.ok && data.ok) { onSuccess(data.token, data.user); }
       else { setErr(data.error || "로그인에 실패했습니다."); }
     } catch(e){ setErr(e.message); }
     setBusy(false);
@@ -191,7 +297,7 @@ function LoginGate({ onSuccess }) {
 }
 
 // AI JSON 호출 (모듈 공용): /api/chat 프록시 → JSON 파싱·잘림 복구 — 컴포넌트 밖에서도 사용
-async function callClaudeJson(prompt, maxTokens=8000, model="claude-haiku-4-5-20251001") {
+async function callClaudeJson(prompt, maxTokens=AI_DEFAULTS.maxTokens, model=AI_DEFAULTS.model) {
   const res = await fetch("/api/chat", {
     method:"POST", headers:{ "Content-Type":"application/json" },
     body:JSON.stringify({ model, max_tokens:maxTokens,
@@ -271,11 +377,53 @@ async function callClaudeJson(prompt, maxTokens=8000, model="claude-haiku-4-5-20
   }
 
 export default function ProGenesis() {
-  const AUTH_KEY = "progenesis_auth";
-  const [authed, setAuthed] = useState(() => {
-    try { return !!localStorage.getItem(AUTH_KEY); } catch { return false; }
-  });
-  const logout = () => { try { localStorage.removeItem(AUTH_KEY); } catch {} setAuthed(false); };
+  // 세션: 저장된 토큰을 디코딩해 복원. 서명·만료가 깨진 구버전 토큰은 null이 되어
+  // 자동으로 로그인 화면이 표시된다(강제 재로그인).
+  const [session, setSession] = useState(() => decodeSession(getToken()));
+  const authed = !!session;
+  const role = session?.role || "viewer";
+  const isAdmin = role === "admin";
+
+  const logout = () => { try { localStorage.removeItem(AUTH_KEY); } catch {} setSession(null); setAppSettings(null); setPage("dashboard"); };
+
+  // 앱 전역 설정 (조직·문서 기본값, QA 기본정책, AI 모델). 로그인 후 1회 로드.
+  const [appSettings, setAppSettings] = useState(null);
+  const [settingsErr, setSettingsErr] = useState(null);
+
+  async function fetchSettings({ applyDefaults = false } = {}) {
+    if (!getToken()) return null;
+    try {
+      const s = await apiFetch("/api/settings");
+      setAppSettings(s); setSettingsErr(null);
+      if (s?.ai?.model) AI_DEFAULTS.model = s.ai.model;
+      if (s?.ai?.maxTokens) AI_DEFAULTS.maxTokens = Number(s.ai.maxTokens) || AI_DEFAULTS.maxTokens;
+      applyDocSettings(s);                       // 조직·문서 기본값을 문서 생성기에 주입
+      if (applyDefaults) applySettingsDefaults(s);
+      return s;
+    } catch (e) {
+      // 401이어도 로그아웃시키지 않는다. 세션만 '재인증 필요'로 표시하고 앱 사용은 유지.
+      // 428(설정 테이블 미생성)은 설정 화면에서 설치 SQL을 안내한다.
+      if (e.status === 401) setSession(p => (p && p.needsReauth ? p : { ...(p || {}), needsReauth: true }));
+      setSettingsErr(e);
+      return null;
+    }
+  }
+
+  // QA 기본 정책·기본 로고를 신규 프로젝트 초기값에 반영 (진행 중 입력은 건드리지 않음)
+  function applySettingsDefaults(s) {
+    const q = s?.qa_defaults, o = s?.organization;
+    if (q) {
+      setTailoring(t => ({ ...t, scale: q.scale || t.scale, method: q.method || t.method,
+        process: { ...(t.process || {}), level: q.processLevel || t.process?.level || "L3" } }));
+      if (q.sdlcFactors && Object.keys(q.sdlcFactors).length) setSdlcFactors(f => ({ ...f, ...q.sdlcFactors }));
+      if (Array.isArray(q.holidays) && q.holidays.length) setWbsSetup(w => (w.holidays?.length ? w : { ...w, holidays: q.holidays }));
+    }
+    if (o) {
+      setProjectForm(p => ({ ...p,
+        clientLogo: p.clientLogo || o.clientLogo || null,
+        companyLogo: p.companyLogo || o.companyLogo || null }));
+    }
+  }
 
   const [page, setPage] = useState("dashboard");
   const [projects, setProjects] = useState([]);
@@ -305,6 +453,26 @@ export default function ProGenesis() {
   const nav = (p) => { setPage(p); setGenError(null); setMenuOpen(false); };
 
   useEffect(() => { fetchProjects(); fetchOSSP(); }, []);
+  // 로그인 직후·세션 복원 시 전역 설정 로드 → AI 모델·기본 정책 적용
+  useEffect(() => { if (session) fetchSettings({ applyDefaults: true }); }, [session?.uid, session?.needsReauth]);
+
+  // 앱 기동 시 세션 자동 연장 — 만료됐어도 유예기간 안이면 서버가 재발급해 준다.
+  // 실패해도 절대 로그아웃시키지 않고, 필요한 순간에만 화면 안에서 재인증을 요구한다.
+  useEffect(() => {
+    const t = getToken();
+    if (!t || !t.includes(".")) return;   // 구버전 토큰은 연장 대상이 아님 (재인증 카드로 처리)
+    (async () => {
+      try {
+        const r = await fetch("/api/login", { method:"POST", headers:{ "Content-Type":"application/json" },
+          body: JSON.stringify({ action:"refresh", token:t }) });
+        const d = await r.json().catch(()=>({}));
+        if (r.ok && d.token) { try { localStorage.setItem(AUTH_KEY, d.token); } catch {} setSession(decodeSession(d.token)); }
+      } catch { /* 네트워크 오류 시 기존 세션 유지 */ }
+    })();
+  }, []);
+
+  // 화면 안에서 재로그인 (전체 로그아웃 없이 세션만 교체)
+  const reauth = (token) => { try { localStorage.setItem(AUTH_KEY, token || ""); } catch {} setSession(decodeSession(token)); setSettingsErr(null); };
 
   async function fetchOSSP() {
     try {
@@ -362,7 +530,7 @@ export default function ProGenesis() {
     setLoadingProjects(false);
   }
 
-  async function callClaude(prompt, maxTokens=8000, model="claude-haiku-4-5-20251001") {
+  async function callClaude(prompt, maxTokens=AI_DEFAULTS.maxTokens, model=AI_DEFAULTS.model) {
     return callClaudeJson(prompt, maxTokens, model);
   }
   
@@ -636,6 +804,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     } catch(e) { console.error(e); }
     setEditingId(null);
     setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",startDate:"",endDate:"",pm:"" });
+    setTimeout(()=>{ if (appSettings) applySettingsDefaults(appSettings); }, 0);   // 설정의 QA 기본정책·기본 로고 재적용
     setSelectedOSSP(null); setTailoring({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준",review_cycle:"격주",test_level:"통합",risk:"강화" });
     setSelectedSDLC(null); setSdlcRecommendation(null);
     setSdlcFactors({ req_clarity:"보통", req_volatility:"보통", delivery:"단계적", risk:"보통", regulation:"보통", team:"집중" });
@@ -651,7 +820,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   }
 
   const pages = {
-    dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={nav} setCurrentProject={setCurrentProject}
+    dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={nav} setCurrentProject={setCurrentProject} canCreate={role !== "viewer"}
       draft={loadDraft()} onContinueDraft={()=>{ restoreDraft(); nav("new_project"); }} onDiscardDraft={()=>{ clearDraft(); setPage("dashboard"); }} />,
     new_project: <NewProjectWizard step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
@@ -673,19 +842,23 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     best_practice: <LibraryPage nav={nav} kind="best_practice"
       title="Best Practice 산출물" subtitle="모범 산출물 사례 라이브러리"
       categories={["요구정의","분석","설계","구축","운영전환","공통/기타"]} />,
+    settings: <SettingsPage nav={nav} session={session} settings={appSettings} settingsErr={settingsErr}
+      onReload={fetchSettings} onApplyDefaults={applySettingsDefaults} onLogout={logout} onReauth={reauth} />,
   };
 
+  // 조회 전용(viewer) 계정에는 생성 기능을 노출하지 않음
   const navItems = [
     {id:"dashboard",icon:"⊞",label:"대시보드"},
-    {id:"new_project",icon:"+",label:"새 프로젝트"},
+    ...(role === "viewer" ? [] : [{id:"new_project",icon:"+",label:"새 프로젝트"}]),
     {id:"ossp",icon:"◈",label:"OSSP 라이브러리"},
     {id:"regulation",icon:"§",label:"규제 (Regulation)"},
     {id:"best_practice",icon:"★",label:"Best Practice 산출물"},
+    {id:"settings",icon:"⚙",label:"설정"},
   ];
 
   // 로그인 전이면 로그인 화면만 표시
   if (!authed) {
-    return <LoginGate onSuccess={(token)=>{ try { localStorage.setItem(AUTH_KEY, token||"1"); } catch {} setAuthed(true); }} />;
+    return <LoginGate onSuccess={(token)=>{ try { localStorage.setItem(AUTH_KEY, token||""); } catch {} setSession(decodeSession(token)); }} />;
   }
 
   return (
@@ -717,8 +890,9 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
               <span>{item.icon}</span> {item.label}
             </button>
           ))}
-          <div style={{ padding:"10px 12px", borderTop:`1px solid ${T.border}`, marginTop:4, fontSize:12, color:T.muted }}>
-            전체 프로젝트 <span style={{ color:T.accent, fontWeight:700 }}>{projects.length}건</span>
+          <div style={{ padding:"10px 12px", borderTop:`1px solid ${T.border}`, marginTop:4, fontSize:12, color:T.muted, display:"flex", justifyContent:"space-between", gap:8 }}>
+            <span>전체 프로젝트 <span style={{ color:T.accent, fontWeight:700 }}>{projects.length}건</span></span>
+            <span>{session?.name || session?.login_id} · {ROLE_LABELS[role] || role}</span>
           </div>
           <button onClick={logout} style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 12px", borderRadius:10, background:"transparent", color:T.muted, border:"none", cursor:"pointer", fontSize:14, fontFamily:"inherit", width:"100%" }}>
             <span>⏻</span> 로그아웃
@@ -745,6 +919,16 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
           <div style={{ padding:"16px 20px", borderTop:`1px solid ${T.border}` }}>
             <div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>전체 프로젝트</div>
             <div style={{ fontSize:24, fontWeight:700 }}>{projects.length}<span style={{ fontSize:13, color:T.muted, fontWeight:400 }}> 건</span></div>
+            {/* 로그인 계정 — 이름·역할 표시 (권한 판정은 서버가 수행) */}
+            <div style={{ marginTop:14, paddingTop:12, borderTop:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:8 }}>
+              <div style={{ width:26, height:26, borderRadius:"50%", background:T.accentDim, color:T.accent, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, flexShrink:0 }}>
+                {String(session?.name || session?.login_id || "?").trim().charAt(0).toUpperCase()}
+              </div>
+              <div style={{ minWidth:0 }}>
+                <div style={{ fontSize:12, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{session?.name || session?.login_id}</div>
+                <div style={{ fontSize:9.5, color:T.muted }}>{ROLE_LABELS[role] || role}</div>
+              </div>
+            </div>
             <button onClick={logout} style={{ marginTop:12, display:"flex", alignItems:"center", gap:6, padding:"7px 10px", borderRadius:8, background:"transparent", color:T.muted, border:`1px solid ${T.border}`, cursor:"pointer", fontSize:12, fontFamily:"inherit", width:"100%" }}>
               <span>⏻</span> 로그아웃
             </button>
@@ -763,7 +947,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   );
 }
 
-function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinueDraft, onDiscardDraft }) {
+function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinueDraft, onDiscardDraft, canCreate = true }) {
   const hasDraft = draft && (draft.projectForm?.name || draft.selectedSDLC || draft.selectedOSSP);
   const stats = [
     { label:"전체 프로젝트", value:projects.length, color:T.accent },
@@ -784,7 +968,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
       <Card style={{ padding:18, marginBottom:16 }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
           <h2 style={{ fontSize:14, fontWeight:600 }}>프로젝트 목록</h2>
-          <Btn onClick={()=>nav("new_project")} style={{ fontSize:12, padding:"6px 12px" }}>+ 새 프로젝트</Btn>
+          {canCreate && <Btn onClick={()=>nav("new_project")} style={{ fontSize:12, padding:"6px 12px" }}>+ 새 프로젝트</Btn>}
         </div>
         {loading ? (
           <div style={{ textAlign:"center", padding:"32px 0" }}><Spinner text="프로젝트 불러오는 중…" /></div>
@@ -792,7 +976,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
           <div style={{ textAlign:"center", padding:"32px 0", color:T.muted }}>
             <div style={{ fontSize:28, marginBottom:8 }}>◈</div>
             <div style={{ fontSize:13, marginBottom:14 }}>아직 등록된 프로젝트가 없습니다.</div>
-            <Btn onClick={()=>nav("new_project")}>첫 프로젝트 시작하기</Btn>
+            {canCreate && <Btn onClick={()=>nav("new_project")}>첫 프로젝트 시작하기</Btn>}
           </div>
         ) : (
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
@@ -2571,8 +2755,10 @@ function docxImageRun(relId, cx, cy, id) {
   return `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="${id}" name="Logo${id}"/><wp:cNvGraphicFramePr/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${id}" name="Logo${id}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
 }
 // 서명 줄: 상단 가로선 + "작성자:      일자:" (첨부 양식의 서명란)
-function docxSignLine(label) {
-  return `<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="6" w:space="1" w:color="000000"/></w:pBdr><w:tabs><w:tab w:val="left" w:pos="4800"/></w:tabs><w:spacing w:before="240" w:after="300"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr><w:t xml:space="preserve">${xesc(label)}: </w:t></w:r><w:r><w:tab/></w:r><w:r><w:rPr><w:b/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr><w:t xml:space="preserve">일자: </w:t></w:r></w:p>`;
+function docxSignLine(label, name = "") {
+  // name: 설정(문서 기본값)의 작성/검토/승인자 — 지정 시 라벨 옆에 미리 채워 넣는다
+  const nm = String(name || "").trim();
+  return `<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="6" w:space="1" w:color="000000"/></w:pBdr><w:tabs><w:tab w:val="left" w:pos="4800"/></w:tabs><w:spacing w:before="240" w:after="300"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr><w:t xml:space="preserve">${xesc(label)}: </w:t></w:r>${nm ? `<w:r><w:rPr><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr><w:t xml:space="preserve">${xesc(nm)}</w:t></w:r>` : ""}<w:r><w:tab/></w:r><w:r><w:rPr><w:b/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr><w:t xml:space="preserve">일자: </w:t></w:r></w:p>`;
 }
 // 2페이지 상단 문서 정보 표: 좌측 로고(세로 병합) + 제목(가로 병합) + 프로젝트/단계/시스템/문서번호/작성자/작성일자
 function docxInfoHeaderTable({ logoXml, title, rows }) {
@@ -2589,7 +2775,11 @@ function docxInfoHeaderTable({ logoXml, title, rows }) {
 // 로고 소스 통일: 위저드는 form.clientLogo/companyLogo, 저장된 프로젝트는 tailoring.logos
 function getDocLogos(meta) {
   const l = meta?.tailoring?.logos || {};
-  return { client: meta?.clientLogo || l.client || null, company: meta?.companyLogo || l.company || null };
+  // 프로젝트 지정 로고 → 저장된 프로젝트의 tailoring.logos → 설정의 조직 기본 로고 순
+  return {
+    client: meta?.clientLogo || l.client || DOC_SETTINGS.clientLogo || null,
+    company: meta?.companyLogo || l.company || DOC_SETTINGS.companyLogo || null,
+  };
 }
 // ── OSSP 템플릿 실파일(docx)에 프로젝트 로고 주입 ─────────────────────────
 // 다운로드한 템플릿 ZIP을 브라우저 내장 inflate(DecompressionStream)로 해체하고,
@@ -3297,6 +3487,9 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
 // 생성되는 모든 워드파일이 공통 사용 — 로고는 표지·문서정보표·꼬리말에 임베드 (머리말에는 로고 미적용)
 function docxStdParts({ title, docCode, phase, meta }) {
   const logos = getDocLogos(meta);
+  // 설정(설정 → 조직·문서 기본값) 주입 — 문서번호 접두어, 작성/검토/승인자, 조직명, 배포구분, 꼬리말
+  const code = docCodeWithPrefix(docCode);
+  const ap = docApprovers(meta);
   // 로고 미디어는 문서 전체(본문·꼬리말)에서 공유 — 파트별로 관계(relId)만 따로 부여
   const media = [];
   const regLogo = (logo, base) => {
@@ -3322,11 +3515,13 @@ function docxStdParts({ title, docCode, phase, meta }) {
     docxP("", { spacingAfter: 2600 }) +
     docxP(title, { bold: true, size: 44, align: "right", spacingAfter: 500 }) +
     docxP(meta.name || "{프로젝트 명}", { bold: true, italic: true, size: 32, align: "right", spacingAfter: 420 }) +
-    docxP(`문서번호 : ${docCode || "-"}`, { size: 24, align: "right", spacingAfter: 420 }) +
+    docxP(`문서번호 : ${code}`, { size: 24, align: "right", spacingAfter: 420 }) +
     docxP("Version 0.1", { bold: true, italic: true, size: 28, align: "right", spacingAfter: 260 }) +
     docxP(today, { size: 20, align: "right", spacingAfter: 600 }) +
     (clientRun ? rightImgP(clientRun) : docxP("고객사로고", { bold: true, size: 24, align: "right", spacingAfter: 140 })) +
     (companyRun ? rightImgP(companyRun) : docxP("우리회사로고", { bold: true, size: 24, align: "right", spacingAfter: 140 })) +
+    (ap.org ? docxP(ap.org, { size: 20, align: "right", spacingAfter: 80 }) : "") +
+    (DOC_SETTINGS.orgNameEn ? docxP(DOC_SETTINGS.orgNameEn, { italic: true, size: 18, align: "right", spacingAfter: 140 }) : "") +
     pageBreak;
 
   // 2페이지: 문서 정보 표 + 사용권한 + 제.개정 이력
@@ -3335,18 +3530,20 @@ function docxStdParts({ title, docCode, phase, meta }) {
     title,
     rows: [
       ["프로젝트", meta.name || "", "단계", phase || ""],
-      ["시스템", meta.name || "", "문서번호", docCode || "-"],
-      ["작성자", meta.pm || "", "작성일자", today],
+      ["시스템", meta.name || "", "문서번호", code],
+      ["작성자", ap.author, "작성일자", today],
+      ...((ap.reviewer || ap.approver) ? [["검토자", ap.reviewer, "승인자", ap.approver]] : []),
+      ...((ap.org || ap.distribution) ? [["작성조직", ap.org, "배포구분", ap.distribution]] : []),
     ],
   });
   const usage =
     docxP("사 용 권 한", { bold: true, size: 32, align: "center", spacingAfter: 320 }) +
     docxP("본 문서에 대한 서명은 당사 내부에서 본 문서에 대하여 수행 및 유지관리의 책임이 있음을 인정하는 것임.", { size: 22, spacingAfter: 260 }) +
     docxP("본 문서는 작성, 검토, 승인하여 승인된 원본을 보관한다.", { italic: true, size: 20, align: "center", spacingAfter: 260 }) +
-    docxSignLine("작성자") +
-    docxSignLine("검토자") +
+    docxSignLine("작성자", ap.author) +
+    docxSignLine("검토자", ap.reviewer) +
     docxP("본인은 서명으로써 본 문서가 당사의 업무활동 범위 내에서 사용될 것을 인가함.", { size: 22, spacingAfter: 260 }) +
-    docxSignLine("승인자");
+    docxSignLine("승인자", ap.approver);
   const history =
     docxP("제.개정 이력", { bold: true, size: 32, align: "center", spacingAfter: 260 }) +
     docxTable([["버전", "변경일자", "제.개정 내용", "작성자"], ...Array.from({ length: 10 }, () => [" ", " ", " ", " "])], -1);
@@ -3356,7 +3553,11 @@ function docxStdParts({ title, docCode, phase, meta }) {
   const tabDefs = '<w:tabs><w:tab w:val="center" w:pos="4513"/><w:tab w:val="right" w:pos="9026"/></w:tabs>';
   const smallTxt = t => `<w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/><w:color w:val="808080"/></w:rPr><w:t xml:space="preserve">${xesc(t)}</w:t></w:r>`;
   const pageFld = '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>';
-  const ftrXml = `<w:p><w:pPr>${tabDefs}<w:pBdr><w:top w:val="single" w:sz="4" w:space="1" w:color="999999"/></w:pBdr><w:spacing w:before="0" w:after="0"/></w:pPr>${mkRun(cl, "rIdF1", 1, 216000) || smallTxt("고객사로고")}<w:r><w:tab/></w:r>${pageFld}<w:r><w:tab/></w:r>${mkRun(co, "rIdF2", 2, 216000) || smallTxt("우리회사로고")}</w:p>`;
+  const ftrLine = `<w:p><w:pPr>${tabDefs}<w:pBdr><w:top w:val="single" w:sz="4" w:space="1" w:color="999999"/></w:pBdr><w:spacing w:before="0" w:after="0"/></w:pPr>${mkRun(cl, "rIdF1", 1, 216000) || smallTxt("고객사로고")}<w:r><w:tab/></w:r>${pageFld}<w:r><w:tab/></w:r>${mkRun(co, "rIdF2", 2, 216000) || smallTxt("우리회사로고")}</w:p>`;
+  // 설정의 문서 꼬리말(보안·저작권 문구)을 쪽번호 줄 아래에 중앙 정렬로 추가
+  const ftrNote = DOC_SETTINGS.docFooter
+    ? `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="0" w:after="0"/></w:pPr>${smallTxt(DOC_SETTINGS.docFooter)}</w:p>` : "";
+  const ftrXml = ftrLine + ftrNote;
 
   return {
     front: cover + infoTable + usage + history + pageBreak,
@@ -3461,8 +3662,9 @@ function makePdpDocx(meta, ctx, phase) {
   const appliedCount = list.filter(isApplied).length;
   const grouped = {};
   list.forEach(d => { (grouped[d.phase] = grouped[d.phase] || []).push(d); });
-  const docNo = `PDP-${(meta.client || "").replace(/\s/g, "").slice(0, 4).toUpperCase() || "PRJ"}-${new Date().getFullYear()}`;
+  const docNo = docCodeWithPrefix(`PDP-${(meta.client || "").replace(/\s/g, "").slice(0, 4).toUpperCase() || "PRJ"}-${new Date().getFullYear()}`);
   const today = new Date().toLocaleDateString("ko-KR");
+  const ap = docApprovers(meta);   // 설정의 작성/검토/승인자·작성조직
 
   const procState = tailoring.process || {};
   const procLevel = procState.level || "L3";
@@ -3513,6 +3715,8 @@ function makePdpDocx(meta, ctx, phase) {
       ["문서번호", docNo], ["버전", "V1.0"],
       ["고객사", meta.client || "-"], ["작성일", today],
       ["기준 OSSP", ossp?.label || "-"], ["SDLC", sdlc?.label || "-"],
+      ["작성자", ap.author || "-"], ["검토·승인", [ap.reviewer, ap.approver].filter(Boolean).join(" / ") || "-"],
+      ...(ap.org || ap.distribution ? [["작성조직", ap.org || "-"], ["배포구분", ap.distribution || "-"]] : []),
     ], 1) +
     docxP("1. 프로젝트 개요", { bold: true, size: 26, spacingAfter: 160 }) +
     docxP(pdp.overview?.purpose || "(미작성 — PDP 단계에서 생성)") +
@@ -3654,8 +3858,9 @@ function makeReqDocx(meta, ctx, phase, kind, doc) {
   const moduleItems = inTree ? items.filter(it => !isCommon(it) && under(String(it.wbsNo), docWbs)) : [];
   const commonItems = inTree ? items.filter(isCommon) : [];
   const docCode = kind === "spec" ? "RD1301" : kind === "def" ? "RD1202" : "RD1202·RD1301";
-  const docNo = `${docCode}-${(meta.client || "").replace(/\s/g, "").slice(0, 4).toUpperCase() || "PRJ"}-${new Date().getFullYear()}`;
+  const docNo = docCodeWithPrefix(`${docCode}-${(meta.client || "").replace(/\s/g, "").slice(0, 4).toUpperCase() || "PRJ"}-${new Date().getFullYear()}`);
   const today = new Date().toLocaleDateString("ko-KR");
+  const ap = docApprovers(meta);   // 설정의 작성/검토/승인자
   const title = kind === "def" ? "요구사항 정의서" : kind === "spec" ? "요구사항 명세서" : "요구사항 정의서·명세서";
   const cnt = t => items.filter(i => i.type === t).length;
   const { front, pkgOpts } = docxStdParts({ title, docCode: docNo, phase: phase || "요구정의", meta });
@@ -3665,6 +3870,7 @@ function makeReqDocx(meta, ctx, phase, kind, doc) {
     docxTable([
       ["문서번호", docNo], ["버전", "V1.0"],
       ["고객사", meta.client || "-"], ["작성일", today],
+      ["작성자", ap.author || "-"], ["검토·승인", [ap.reviewer, ap.approver].filter(Boolean).join(" / ") || "-"],
       ["요구사항 합계", inTree
         ? `모듈 ${moduleItems.length}건 + 공통 ${commonItems.length}건 (전체 ${items.length}건 중)`
         : `${items.length}건 (기능 ${cnt("기능")} · 비기능 ${cnt("비기능")} · 인터페이스 ${cnt("인터페이스")})`],
@@ -6319,6 +6525,806 @@ function OSSPPage({ nav, customOSSP=[], builtinOSSP=[], onAdd, onDelete }) {
         <div style={{ fontSize:12, fontWeight:600, color:T.muted, marginTop:8 }}>기본 제공</div>
         {(builtinOSSP.length > 0 ? builtinOSSP : OSSP_OPTIONS).map(o=>renderCard(o, "builtin"))}
       </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 설정 (Settings)
+// ──────────────────────────────────────────────────────────────────────
+// 탭 구성
+//   1. 사용자 관리      : 계정 등록(ID/PW)·역할 부여·활성화·비밀번호 초기화·삭제
+//   2. AI 연동          : Claude API 키 등록/삭제/검증, 기본 모델·최대 토큰
+//   3. 조직·문서 기본값 : 조직명, 기본 로고, 문서번호 접두어, 작성/검토/승인자, 배포구분
+//   4. QA 기본 정책     : 기본 규모·설계방식·프로세스 적용등급·SDLC 요인·공휴일
+//   5. 내 계정          : 세션 정보, 비밀번호 변경
+//   6. 시스템 진단·감사 : 환경변수/테이블 상태 점검, 설정 변경 감사 로그
+//
+// 권한: 1~4·6 탭은 관리자(admin) 전용. 화면 노출뿐 아니라 서버(api/_auth.js
+//       requireRole)에서도 재검증하므로 클라이언트 우회로는 변경할 수 없다.
+// ══════════════════════════════════════════════════════════════════════
+
+const SETTINGS_TABS = [
+  { id: "users",   icon: "◍", label: "사용자 관리",      admin: true  },
+  { id: "ai",      icon: "✦", label: "AI 연동",          admin: true  },
+  { id: "org",     icon: "▣", label: "조직·문서 기본값", admin: true  },
+  { id: "qa",      icon: "◎", label: "QA 기본 정책",     admin: true  },
+  { id: "account", icon: "⚿", label: "내 계정",          admin: false },
+  { id: "system",  icon: "⚕", label: "시스템 진단·감사", admin: true  },
+];
+
+// 검증된 모델 프리셋 — 목록에 없는 모델도 직접 입력 후 "연결 검증"으로 확인 가능
+const AI_MODEL_PRESETS = [
+  { id: "claude-haiku-4-5-20251001",  label: "Haiku 4.5",  note: "빠르고 저렴 · 대량 청크 호출에 적합 (권장)" },
+  { id: "claude-sonnet-4-5-20250929", label: "Sonnet 4.5", note: "균형형 · 요구사항 명세 등 서술 품질 중시" },
+];
+
+function SettingsSection({ title, desc, children, right }) {
+  return (
+    <Card style={{ padding: 20, marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: desc ? 4 : 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>{title}</div>
+        {right}
+      </div>
+      {desc && <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.6, marginBottom: 14 }}>{desc}</div>}
+      {children}
+    </Card>
+  );
+}
+
+function Toast({ msg }) {
+  if (!msg) return null;
+  const color = msg.type === "error" ? T.red : msg.type === "warn" ? T.amber : T.green;
+  return (
+    <div style={{ padding: "10px 14px", borderRadius: 10, background: color + "18", border: `1px solid ${color}55`,
+      color, fontSize: 12, marginBottom: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+      {msg.text}
+    </div>
+  );
+}
+
+// 설정 테이블 미생성 시 안내 — Supabase SQL Editor에 붙여넣을 DDL 제공
+function SetupRequiredBanner({ sql }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Card style={{ padding: 20, marginBottom: 16, borderColor: T.amber + "66" }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: T.amber, marginBottom: 8 }}>초기 설치가 필요합니다</div>
+      <div style={{ fontSize: 12, color: T.text, lineHeight: 1.7, marginBottom: 12 }}>
+        설정 기능이 사용하는 테이블(app_users · app_settings · app_audit_logs)이 아직 없습니다.<br />
+        Supabase 대시보드 → SQL Editor에서 아래 SQL을 <b>1회</b> 실행한 뒤 이 화면을 새로고침하세요.
+      </div>
+      <pre style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: 14,
+        fontSize: 10.5, lineHeight: 1.6, color: T.muted, overflowX: "auto", fontFamily: "monospace", marginBottom: 10 }}>{sql}</pre>
+      <Btn variant="outline" style={{ fontSize: 12, padding: "6px 14px" }}
+        onClick={() => { navigator.clipboard?.writeText(sql); setCopied(true); setTimeout(() => setCopied(false), 1800); }}>
+        {copied ? "✓ 복사됨" : "SQL 복사"}
+      </Btn>
+    </Card>
+  );
+}
+
+
+// 화면 안에서 다시 로그인 — 전체 로그아웃 없이 세션만 교체한다.
+// 사용 시점: (1) 이전 버전의 서명 없는 토큰을 가진 사용자, (2) 유예기간까지 지난 만료 세션.
+// 어느 경우에도 사용자를 로그인 화면으로 튕겨내지 않고, 설정 기능이 필요한 순간에만 요구한다.
+function ReauthCard({ session, onReauth }) {
+  const [id, setId] = useState(session?.login_id || "");
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function submit() {
+    if (!id || !pw) { setErr("아이디와 비밀번호를 입력하세요."); return; }
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch("/api/login", { method:"POST", headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ id, pw }) });
+      const d = await res.json().catch(()=>({}));
+      if (res.ok && d.ok && d.token) onReauth(d.token);
+      else setErr(d.error || "로그인에 실패했습니다.");
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  return (
+    <Card style={{ padding: 22, borderColor: T.amber + "66", maxWidth: 460 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: T.amber, marginBottom: 8 }}>재로그인이 필요합니다</div>
+      <div style={{ fontSize: 12, color: T.text, lineHeight: 1.7, marginBottom: 16 }}>
+        {session?.legacy
+          ? "이전 버전에서 발급된 세션이라 설정 기능의 권한을 확인할 수 없습니다."
+          : "세션 유효기간이 지났습니다."}<br />
+        아래에 다시 로그인하면 <b>작업 중인 내용을 잃지 않고</b> 이어서 사용할 수 있습니다.
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <Input label="아이디" value={id} onChange={setId} placeholder="아이디" />
+        <Input label="비밀번호" type="password" value={pw} onChange={setPw} placeholder="비밀번호" />
+        {err && <div style={{ color: T.red, fontSize: 12 }}>{err}</div>}
+        <div><Btn onClick={submit} disabled={busy} style={{ fontSize: 12, padding: "8px 20px" }}>{busy ? "확인 중…" : "다시 로그인"}</Btn></div>
+      </div>
+    </Card>
+  );
+}
+
+function SettingsPage({ nav, session, settings, settingsErr, onReload, onApplyDefaults, onLogout, onReauth }) {
+  const isAdmin = session?.role === "admin";
+  const tabs = SETTINGS_TABS.filter(t => isAdmin || !t.admin);
+  const [tab, setTab] = useState(isAdmin ? "users" : "account");
+  const [msg, setMsg] = useState(null);
+
+  const flash = (type, text) => { setMsg({ type, text }); setTimeout(() => setMsg(m => (m && m.text === text ? null : m)), 6000); };
+  const setupSql = settingsErr?.data?.code === "SETUP_REQUIRED" ? settingsErr.data.sql : null;
+
+  return (
+    <div className="main-content" style={{ padding: "20px 18px", maxWidth: 1000 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <button onClick={() => nav("dashboard")} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 20 }}>←</button>
+        <h1 style={{ fontSize: 20, fontWeight: 700, letterSpacing: -0.4 }}>설정</h1>
+      </div>
+      <div style={{ fontSize: 12, color: T.muted, marginBottom: 18, marginLeft: 30 }}>
+        사용자 계정, AI 연동, 조직 표준 기본값 및 QA 기본 정책을 관리합니다.
+      </div>
+
+      {/* 재인증 필요 세션: 앱은 그대로 쓰되 설정 기능만 재로그인 후 열어 준다 */}
+      {session?.needsReauth ? <ReauthCard session={session} onReauth={onReauth} /> : (<>
+
+      {setupSql && <SetupRequiredBanner sql={setupSql} />}
+      {settingsErr && !setupSql && settingsErr.status !== 401 && (
+        <Toast msg={{ type: "error", text: `설정을 불러오지 못했습니다: ${settingsErr.message}` }} />
+      )}
+
+      {/* 탭 */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18, borderBottom: `1px solid ${T.border}`, paddingBottom: 12 }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => { setTab(t.id); setMsg(null); }}
+            style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 14px", borderRadius: 10,
+              background: tab === t.id ? T.accentGlow : "transparent", color: tab === t.id ? T.accent : T.muted,
+              border: `1px solid ${tab === t.id ? T.accentDim : "transparent"}`, cursor: "pointer",
+              fontSize: 12.5, fontWeight: tab === t.id ? 600 : 400, fontFamily: "inherit" }}>
+            <span style={{ fontSize: 13 }}>{t.icon}</span> {t.label}
+          </button>
+        ))}
+      </div>
+
+      <Toast msg={msg} />
+
+      {tab === "users"   && <UsersTab flash={flash} session={session} />}
+      {tab === "ai"      && <AiTab flash={flash} settings={settings} onReload={onReload} />}
+      {tab === "org"     && <OrgTab flash={flash} settings={settings} onReload={onReload} />}
+      {tab === "qa"      && <QaTab flash={flash} settings={settings} onReload={onReload} onApplyDefaults={onApplyDefaults} />}
+      {tab === "account" && <AccountTab flash={flash} session={session} onLogout={onLogout} />}
+      {tab === "system"  && <SystemTab flash={flash} />}
+
+      </>)}
+    </div>
+  );
+}
+
+// ── 1. 사용자 관리 ────────────────────────────────────────────────────
+function UsersTab({ flash, session }) {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const blank = { login_id: "", pw: "", pw2: "", name: "", email: "", role: "qa" };
+  const [f, setF] = useState(blank);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try { setUsers(await apiFetch("/api/users")); }
+    catch (e) { flash("error", e.message); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  async function create() {
+    if (f.pw !== f.pw2) { flash("error", "비밀번호 확인이 일치하지 않습니다."); return; }
+    setBusy(true);
+    try {
+      await apiFetch("/api/users", { method: "POST", body: JSON.stringify({
+        login_id: f.login_id, pw: f.pw, name: f.name, email: f.email, role: f.role }) });
+      flash("ok", `사용자 "${f.login_id}"을(를) 등록했습니다.`);
+      setF(blank); setShowAdd(false); await load();
+    } catch (e) { flash("error", e.message); }
+    setBusy(false);
+  }
+
+  async function patch(id, body, okMsg) {
+    try { await apiFetch("/api/users", { method: "PATCH", body: JSON.stringify({ id, ...body }) });
+      flash("ok", okMsg); await load(); }
+    catch (e) { flash("error", e.message); }
+  }
+
+  async function resetPw(u) {
+    const np = prompt(`"${u.login_id}" 계정의 새 비밀번호를 입력하세요.\n(8자 이상, 영문+숫자 포함)`);
+    if (!np) return;
+    await patch(u.id, { newPw: np }, `"${u.login_id}"의 비밀번호를 초기화했습니다. 사용자에게 안전한 경로로 전달하세요.`);
+  }
+
+  async function remove(u) {
+    if (!confirm(`"${u.login_id}" 계정을 삭제합니다. 되돌릴 수 없습니다. 계속할까요?`)) return;
+    try { await apiFetch(`/api/users?id=${encodeURIComponent(u.id)}`, { method: "DELETE" });
+      flash("ok", `"${u.login_id}" 계정을 삭제했습니다.`); await load(); }
+    catch (e) { flash("error", e.message); }
+  }
+
+  const th = { textAlign: "left", padding: "9px 10px", fontSize: 10.5, color: T.muted, fontWeight: 600,
+    textTransform: "uppercase", letterSpacing: 0.6, borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap" };
+  const td = { padding: "10px", fontSize: 12, borderBottom: `1px solid ${T.border}`, verticalAlign: "middle" };
+
+  return (
+    <div>
+      <SettingsSection
+        title="사용자 계정"
+        desc="ProGenesis에 로그인할 계정을 등록합니다. 비밀번호는 PBKDF2-SHA256 해시로만 저장되며 평문은 어디에도 보관되지 않습니다. 역할에 따라 설정 접근 권한이 달라집니다."
+        right={<Btn variant={showAdd ? "ghost" : "primary"} onClick={() => { setShowAdd(!showAdd); setF(blank); }}
+          style={{ fontSize: 12, padding: "6px 14px" }}>{showAdd ? "취소" : "+ 사용자 등록"}</Btn>}
+      >
+        {showAdd && (
+          <div style={{ background: T.bg, border: `1px solid ${T.accentDim}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12 }}>
+              <Input label="아이디 *" value={f.login_id} onChange={v => setF(s => ({ ...s, login_id: v }))} placeholder="영문·숫자 3~40자" />
+              <Input label="이름" value={f.name} onChange={v => setF(s => ({ ...s, name: v }))} placeholder="예: 홍길동" />
+              <Input label="비밀번호 *" type="password" value={f.pw} onChange={v => setF(s => ({ ...s, pw: v }))} placeholder="8자 이상, 영문+숫자" />
+              <Input label="비밀번호 확인 *" type="password" value={f.pw2} onChange={v => setF(s => ({ ...s, pw2: v }))} placeholder="다시 입력" />
+              <Input label="이메일" value={f.email} onChange={v => setF(s => ({ ...s, email: v }))} placeholder="예: hong@company.co.kr" />
+              <Select label="역할" value={f.role} onChange={v => setF(s => ({ ...s, role: v }))}
+                options={Object.keys(ROLE_LABELS).map(r => ({ value: r, label: ROLE_LABELS[r] }))} />
+            </div>
+            <div style={{ fontSize: 10.5, color: T.muted, marginTop: 10, lineHeight: 1.6 }}>
+              {ROLE_LABELS[f.role]} — {ROLE_DESC[f.role]}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+              <Btn onClick={create} disabled={busy || !f.login_id || !f.pw} style={{ fontSize: 12, padding: "7px 18px" }}>
+                {busy ? "등록 중…" : "등록"}
+              </Btn>
+            </div>
+          </div>
+        )}
+
+        {loading ? <Spinner text="사용자 목록 불러오는 중…" /> : users.length === 0 ? (
+          <div style={{ padding: "24px 0", textAlign: "center", fontSize: 12, color: T.muted, lineHeight: 1.8 }}>
+            등록된 사용자가 없습니다.<br />
+            현재는 환경변수(APP_LOGIN_ID / APP_LOGIN_PW) 기반 부트스트랩 관리자로 접속 중입니다.<br />
+            첫 관리자 계정을 등록하는 것을 권장합니다.
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+              <thead><tr>
+                <th style={th}>아이디</th><th style={th}>이름</th><th style={th}>이메일</th>
+                <th style={th}>역할</th><th style={th}>상태</th><th style={th}>최근 로그인</th><th style={th}>작업</th>
+              </tr></thead>
+              <tbody>
+                {users.map(u => {
+                  const editing = editId === u.id;
+                  return (
+                    <tr key={u.id}>
+                      <td style={{ ...td, fontWeight: 600 }}>{u.login_id}{session?.uid === u.id && <span style={{ color: T.accent, fontSize: 10, marginLeft: 6 }}>(나)</span>}</td>
+                      <td style={td}>{u.name || "—"}</td>
+                      <td style={{ ...td, color: T.muted }}>{u.email || "—"}</td>
+                      <td style={td}>
+                        {editing ? (
+                          <select value={u.role} onChange={e => patch(u.id, { role: e.target.value }, "역할을 변경했습니다.")}
+                            style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "4px 8px", color: T.text, fontSize: 11, fontFamily: "inherit" }}>
+                            {Object.keys(ROLE_LABELS).map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                          </select>
+                        ) : <Badge color={u.role === "admin" ? T.amber : T.accent}>{ROLE_LABELS[u.role] || u.role}</Badge>}
+                      </td>
+                      <td style={td}>
+                        <button onClick={() => patch(u.id, { is_active: !u.is_active }, u.is_active ? "계정을 비활성화했습니다." : "계정을 활성화했습니다.")}
+                          style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit" }}>
+                          <Badge color={u.is_active ? T.green : T.muted}>{u.is_active ? "활성" : "비활성"}</Badge>
+                        </button>
+                      </td>
+                      <td style={{ ...td, color: T.muted, fontSize: 11, whiteSpace: "nowrap" }}>
+                        {u.last_login_at ? new Date(u.last_login_at).toLocaleString("ko-KR") : "—"}
+                      </td>
+                      <td style={{ ...td, whiteSpace: "nowrap" }}>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button onClick={() => setEditId(editing ? null : u.id)} title="역할 변경"
+                            style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 7, color: editing ? T.accent : T.muted, cursor: "pointer", fontSize: 10.5, padding: "4px 8px", fontFamily: "inherit" }}>
+                            {editing ? "완료" : "역할"}
+                          </button>
+                          <button onClick={() => resetPw(u)} title="비밀번호 초기화"
+                            style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 7, color: T.muted, cursor: "pointer", fontSize: 10.5, padding: "4px 8px", fontFamily: "inherit" }}>
+                            PW 초기화
+                          </button>
+                          <button onClick={() => remove(u)} title="삭제"
+                            style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 7, color: T.red, cursor: "pointer", fontSize: 10.5, padding: "4px 8px", fontFamily: "inherit" }}>
+                            삭제
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SettingsSection>
+
+      <SettingsSection title="역할별 권한" desc="권한은 서버(API)에서 최종 판정되므로 화면 조작으로 우회할 수 없습니다.">
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {Object.keys(ROLE_LABELS).map(r => (
+            <div key={r} style={{ display: "flex", gap: 12, alignItems: "center", padding: "8px 12px", background: T.bg, borderRadius: 9 }}>
+              <div style={{ width: 84, flexShrink: 0 }}><Badge color={r === "admin" ? T.amber : T.accent}>{ROLE_LABELS[r]}</Badge></div>
+              <div style={{ fontSize: 11.5, color: T.muted }}>{ROLE_DESC[r]}</div>
+            </div>
+          ))}
+        </div>
+      </SettingsSection>
+    </div>
+  );
+}
+
+// ── 2. AI 연동 ────────────────────────────────────────────────────────
+function AiTab({ flash, settings, onReload }) {
+  const ai = settings?.ai || {};
+  const [key, setKey] = useState("");
+  const [model, setModel] = useState(ai.model || AI_DEFAULTS.model);
+  const [maxTokens, setMaxTokens] = useState(String(ai.maxTokens || AI_DEFAULTS.maxTokens));
+  const [busy, setBusy] = useState(false);
+  const [verify, setVerify] = useState(null);
+
+  useEffect(() => {
+    if (!settings) return;
+    setModel(settings.ai?.model || AI_DEFAULTS.model);
+    setMaxTokens(String(settings.ai?.maxTokens || AI_DEFAULTS.maxTokens));
+  }, [settings]);
+
+  async function save({ clearKey = false } = {}) {
+    setBusy(true); setVerify(null);
+    try {
+      await apiFetch("/api/settings", { method: "PUT", body: JSON.stringify({
+        key: "ai",
+        value: { apiKey: clearKey ? null : (key.trim() || undefined), model: model.trim(), maxTokens: Number(maxTokens) },
+      }) });
+      setKey("");
+      await onReload();
+      flash("ok", clearKey ? "저장된 API 키를 삭제했습니다. 이후 환경변수(ANTHROPIC_API_KEY)를 사용합니다." : "AI 연동 설정을 저장했습니다.");
+    } catch (e) { flash("error", e.message); }
+    setBusy(false);
+  }
+
+  async function doVerify() {
+    setBusy(true); setVerify(null);
+    try {
+      const r = await apiFetch("/api/settings", { method: "POST", body: JSON.stringify({
+        action: "verify_key", apiKey: key.trim() || undefined, model: model.trim() }) });
+      setVerify(r);
+    } catch (e) { setVerify({ ok: false, message: e.message }); }
+    setBusy(false);
+  }
+
+  const srcLabel = { db: "설정 화면에 저장된 키", env: "Vercel 환경변수 (ANTHROPIC_API_KEY)", none: "미설정" }[ai.keySource || "none"];
+  const srcColor = ai.keySource === "db" ? T.green : ai.keySource === "env" ? T.amber : T.red;
+
+  return (
+    <div>
+      <SettingsSection
+        title="Claude API 키"
+        desc="AI 요구사항 작성·PBS 추천 등 모든 AI 기능이 이 키를 사용합니다. 키는 서버(Supabase)에만 저장되며 화면에는 마스킹된 형태로만 표시됩니다. 브라우저로는 전문이 전달되지 않습니다."
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", background: T.bg, borderRadius: 10, marginBottom: 16, flexWrap: "wrap" }}>
+          <Badge color={srcColor}>{ai.hasKey ? "연결됨" : "미설정"}</Badge>
+          <div style={{ fontSize: 12 }}>
+            <span style={{ fontFamily: "monospace", color: ai.hasKey ? T.text : T.muted }}>{ai.keyMasked || "키 없음"}</span>
+            <span style={{ color: T.muted, marginLeft: 10, fontSize: 11 }}>출처: {srcLabel}</span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Input label="새 API 키" type="password" value={key} onChange={setKey} placeholder="sk-ant-... (비워두면 기존 키 유지)" />
+          <div style={{ fontSize: 10.5, color: T.muted, lineHeight: 1.6, marginTop: -4 }}>
+            키는 console.anthropic.com → API Keys 에서 발급합니다. 저장 후에는 다시 조회할 수 없으므로 별도로 안전하게 보관하세요.
+          </div>
+        </div>
+
+        {verify && (
+          <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10,
+            background: (verify.ok ? T.green : T.red) + "18", border: `1px solid ${(verify.ok ? T.green : T.red)}55`,
+            color: verify.ok ? T.green : T.red, fontSize: 12, lineHeight: 1.6 }}>
+            {verify.ok ? "✓ " : "✕ "}{verify.message}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+          <Btn onClick={() => save()} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "처리 중…" : "저장"}</Btn>
+          <Btn variant="outline" onClick={doVerify} disabled={busy} style={{ fontSize: 12, padding: "7px 16px" }}>연결 검증</Btn>
+          {ai.keySource === "db" && (
+            <Btn variant="ghost" onClick={() => { if (confirm("저장된 API 키를 삭제합니다. 이후에는 환경변수 ANTHROPIC_API_KEY가 사용됩니다. 계속할까요?")) save({ clearKey: true }); }}
+              disabled={busy} style={{ fontSize: 12, padding: "7px 16px", color: T.red, borderColor: T.red + "55" }}>저장된 키 삭제</Btn>
+          )}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title="기본 모델 및 생성 한도"
+        desc="AI 호출 시 모델을 별도로 지정하지 않은 기능에 적용되는 기본값입니다. 최대 토큰이 너무 크면 Vercel 함수 제한 시간(약 10초)을 초과할 수 있으므로 청크 호출 구조에 맞춰 조정하세요."
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
+          <Input label="모델 ID" value={model} onChange={setModel} placeholder="claude-haiku-4-5-20251001" />
+          <Input label="최대 토큰 (max_tokens)" value={maxTokens} onChange={setMaxTokens} placeholder="8000" />
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          {AI_MODEL_PRESETS.map(p => (
+            <button key={p.id} onClick={() => setModel(p.id)} title={p.note}
+              style={{ background: model === p.id ? T.accentGlow : "transparent", border: `1px solid ${model === p.id ? T.accentDim : T.border}`,
+                borderRadius: 9, padding: "7px 12px", color: model === p.id ? T.accent : T.muted, cursor: "pointer", fontSize: 11, fontFamily: "inherit", textAlign: "left" }}>
+              <div style={{ fontWeight: 600 }}>{p.label}</div>
+              <div style={{ fontSize: 9.5, opacity: 0.8, marginTop: 2 }}>{p.note}</div>
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize: 10.5, color: T.muted, marginTop: 10, lineHeight: 1.6 }}>
+          모델 ID는 시간이 지나면 폐기(retire)될 수 있습니다. 변경 후 반드시 위의 <b>연결 검증</b>으로 실제 호출이 되는지 확인하세요.
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+          <Btn onClick={() => save()} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "저장 중…" : "저장"}</Btn>
+        </div>
+      </SettingsSection>
+    </div>
+  );
+}
+
+// ── 3. 조직·문서 기본값 ───────────────────────────────────────────────
+function OrgTab({ flash, settings, onReload }) {
+  const [org, setOrg] = useState(settings?.organization || {});
+  const [doc, setDoc] = useState(settings?.doc_defaults || {});
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!settings) return;
+    setOrg(settings.organization || {});
+    setDoc(settings.doc_defaults || {});
+  }, [settings]);
+
+  // 로고 업로드 — dataURL + 원본 크기 저장 (docx/xlsx 임베드 시 비율 유지에 사용)
+  const readLogo = k => e => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 300 * 1024) { flash("error", "기본 로고는 300KB 이하로 올려주세요."); return; }
+    const rd = new FileReader();
+    rd.onload = () => {
+      const dataUrl = rd.result;
+      const img = new Image();
+      img.onload = () => setOrg(p => ({ ...p, [k]: { dataUrl, w: img.naturalWidth || 300, h: img.naturalHeight || 100 } }));
+      img.onerror = () => flash("error", "이미지를 읽을 수 없습니다. PNG 또는 JPG를 사용하세요.");
+      img.src = dataUrl;
+    };
+    rd.readAsDataURL(file);
+  };
+
+  async function save() {
+    setBusy(true);
+    try {
+      await apiFetch("/api/settings", { method: "PUT", body: JSON.stringify({ key: "organization", value: org }) });
+      await apiFetch("/api/settings", { method: "PUT", body: JSON.stringify({ key: "doc_defaults", value: doc }) });
+      await onReload();   // 내부에서 applyDocSettings 호출 → 이후 생성하는 문서에 즉시 반영
+      flash("ok", "조직·문서 기본값을 저장했습니다. 지금부터 생성하는 모든 산출물(표지·문서정보표·서명란·꼬리말)에 반영됩니다.");
+    } catch (e) { flash("error", e.message); }
+    setBusy(false);
+  }
+
+  return (
+    <div>
+      <SettingsSection title="조직 정보" desc="PDP·산출물 문서의 표지와 문서정보표에 사용되는 조직 식별 정보입니다.">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
+          <Input label="조직명 (국문)" value={org.orgName || ""} onChange={v => setOrg(p => ({ ...p, orgName: v }))} placeholder="예: (주)아이티센글로벌" />
+          <Input label="조직명 (영문)" value={org.orgNameEn || ""} onChange={v => setOrg(p => ({ ...p, orgNameEn: v }))} placeholder="예: ITCEN GLOBAL" />
+          <Input label="담당 부서" value={org.dept || ""} onChange={v => setOrg(p => ({ ...p, dept: v }))} placeholder="예: 품질보증팀 (QA)" />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title="기본 문서 로고"
+        desc="새 프로젝트를 시작할 때 자동으로 채워지는 로고입니다. 프로젝트별로 다른 로고가 필요하면 위저드 1단계에서 개별 변경할 수 있습니다. (PNG/JPG · 300KB 이하)"
+      >
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {[["clientLogo", "고객사 기본 로고"], ["companyLogo", "우리회사 로고"]].map(([k, label]) => (
+            <div key={k} style={{ flex: 1, minWidth: 230, border: `1px dashed ${T.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>{label}</div>
+              {org[k]?.dataUrl ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <img src={org[k].dataUrl} alt={label} style={{ height: 34, maxWidth: 170, objectFit: "contain", background: "#fff", borderRadius: 6, padding: "2px 6px" }} />
+                  <button onClick={() => setOrg(p => ({ ...p, [k]: null }))}
+                    style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, color: T.red, cursor: "pointer", fontSize: 11, padding: "4px 10px", fontFamily: "inherit" }}>제거</button>
+                </div>
+              ) : (
+                <label style={{ display: "inline-block", cursor: "pointer", fontSize: 12, color: T.accent, border: `1px solid ${T.accent}`, borderRadius: 8, padding: "6px 12px" }}>
+                  이미지 선택
+                  <input type="file" accept="image/png,image/jpeg" onChange={readLogo(k)} style={{ display: "none" }} />
+                </label>
+              )}
+            </div>
+          ))}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title="문서 기본값"
+        desc="산출물 생성 시 문서정보표·승인란에 기본으로 채워지는 값입니다. 프로젝트별 실제 담당자가 다르면 개별 문서에서 수정하세요."
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 14 }}>
+          <Input label="문서번호 접두어" value={doc.codePrefix || ""} onChange={v => setDoc(p => ({ ...p, codePrefix: v }))} placeholder="예: ITG-QA" />
+          <Input label="기본 작성자" value={doc.author || ""} onChange={v => setDoc(p => ({ ...p, author: v }))} placeholder="예: 품질보증담당자" />
+          <Input label="기본 검토자" value={doc.reviewer || ""} onChange={v => setDoc(p => ({ ...p, reviewer: v }))} placeholder="예: PM" />
+          <Input label="기본 승인자" value={doc.approver || ""} onChange={v => setDoc(p => ({ ...p, approver: v }))} placeholder="예: 사업총괄" />
+          <Select label="배포 구분" value={doc.distribution || "사내 한정"} onChange={v => setDoc(p => ({ ...p, distribution: v }))}
+            options={["사내 한정", "고객사 공유", "대외비", "공개"].map(v => ({ value: v, label: v }))} />
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 12, color: T.muted, fontWeight: 600, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 6 }}>문서 꼬리말</div>
+          <textarea value={org.docFooter || ""} onChange={e => setOrg(p => ({ ...p, docFooter: e.target.value }))}
+            placeholder="예: 본 문서는 (주)아이티센글로벌의 자산이며 무단 복제·배포를 금합니다."
+            style={{ width: "100%", minHeight: 64, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 14px", color: T.text, fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+          <Btn onClick={save} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "저장 중…" : "저장"}</Btn>
+        </div>
+      </SettingsSection>
+    </div>
+  );
+}
+
+// ── 4. QA 기본 정책 ───────────────────────────────────────────────────
+function QaTab({ flash, settings, onReload, onApplyDefaults }) {
+  const D = settings?.qa_defaults || {};
+  const [q, setQ] = useState(D);
+  const [holidayText, setHolidayText] = useState((D.holidays || []).join("\n"));
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!settings) return;
+    const d = settings.qa_defaults || {};
+    setQ(d);
+    setHolidayText((d.holidays || []).join("\n"));
+  }, [settings]);
+
+  const setFactor = (id, v) => setQ(p => ({ ...p, sdlcFactors: { ...(p.sdlcFactors || {}), [id]: v } }));
+
+  async function save() {
+    // 공휴일: YYYY-MM-DD 형식만 채택하고 중복 제거·정렬
+    const holidays = Array.from(new Set(
+      holidayText.split(/[\n,\s]+/).map(s => s.trim()).filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s))
+    )).sort();
+    const bad = holidayText.split(/[\n,\s]+/).map(s => s.trim()).filter(s => s && !/^\d{4}-\d{2}-\d{2}$/.test(s));
+    setBusy(true);
+    try {
+      const value = { ...q, holidays };
+      await apiFetch("/api/settings", { method: "PUT", body: JSON.stringify({ key: "qa_defaults", value }) });
+      setHolidayText(holidays.join("\n"));
+      const s = await onReload();
+      if (s && onApplyDefaults) onApplyDefaults(s);
+      flash(bad.length ? "warn" : "ok",
+        `QA 기본 정책을 저장했습니다. 공휴일 ${holidays.length}일 등록.` +
+        (bad.length ? `\n형식이 올바르지 않아 제외된 항목 ${bad.length}건: ${bad.slice(0, 5).join(", ")}` : ""));
+    } catch (e) { flash("error", e.message); }
+    setBusy(false);
+  }
+
+  return (
+    <div>
+      <SettingsSection
+        title="테일러링 기본값"
+        desc="새 프로젝트를 시작할 때 자동 선택되는 값입니다. PMBOK® 8판 테일러링 원칙에 따라 프로젝트별로 언제든 위저드에서 변경할 수 있으며, 여기서 정하는 값은 조직의 통상적 기준선(baseline)에 해당합니다."
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 14 }}>
+          <Select label="기본 프로젝트 규모" value={q.scale || "중형"} onChange={v => setQ(p => ({ ...p, scale: v }))}
+            options={["(초)대형", "중형", "소형"].map(v => ({ value: v, label: v }))} />
+          <Select label="기본 설계 방식" value={q.method || "UML"} onChange={v => setQ(p => ({ ...p, method: v }))}
+            options={[{ value: "UML", label: "UML (객체지향)" }, { value: "IE", label: "IE (정보공학)" }]} />
+          <Select label="프로세스 적용 등급" value={q.processLevel || "L3"} onChange={v => setQ(p => ({ ...p, processLevel: v }))}
+            options={[
+              { value: "L3", label: "L3 — 정의된 프로세스 (CMMI L3)" },
+              { value: "L4", label: "L4 — 정량적 관리" },
+              { value: "L5", label: "L5 — 최적화" },
+            ]} />
+        </div>
+        <div style={{ fontSize: 10.5, color: T.muted, marginTop: 12, lineHeight: 1.6 }}>
+          전사 기준: 10MM 이상 SI-AD·OS-AD 프로젝트는 최소 L3 적용. 사업본부 별도 기준이 있으면 그에 따릅니다.
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title="개발접근법 선정 요인 기본값"
+        desc="SDLC 추천(규칙 기반) 화면에 미리 채워지는 초기값입니다. 조직에서 주로 수행하는 사업 유형의 통상적 특성을 설정해 두면 착수 단계 입력 시간이 줄어듭니다."
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 14 }}>
+          {SDLC_FACTORS.map(fa => (
+            <Select key={fa.id} label={fa.label} value={(q.sdlcFactors || {})[fa.id] || fa.options[1]}
+              onChange={v => setFactor(fa.id, v)} options={fa.options.map(o => ({ value: o, label: o }))} />
+          ))}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title="기본 공휴일 (근무일 캘린더)"
+        desc="WBS 일정 산정 시 근무일에서 제외할 날짜입니다. 주말은 자동 제외되므로 법정공휴일·회사 지정 휴일만 입력하세요. YYYY-MM-DD 형식으로 한 줄에 하나씩 입력합니다."
+      >
+        <textarea value={holidayText} onChange={e => setHolidayText(e.target.value)}
+          placeholder={"2026-01-01\n2026-03-01\n2026-05-05"}
+          style={{ width: "100%", minHeight: 130, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10,
+            padding: "10px 14px", color: T.text, fontSize: 13, fontFamily: "monospace", outline: "none", resize: "vertical", lineHeight: 1.7 }} />
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+          <Btn onClick={save} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "저장 중…" : "저장 후 즉시 적용"}</Btn>
+        </div>
+      </SettingsSection>
+    </div>
+  );
+}
+
+// ── 5. 내 계정 ────────────────────────────────────────────────────────
+function AccountTab({ flash, session, onLogout }) {
+  const [cur, setCur] = useState("");
+  const [np, setNp] = useState("");
+  const [np2, setNp2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const isEnvAccount = session?.source === "env" || session?.uid === "env";
+
+  async function change() {
+    if (np !== np2) { flash("error", "새 비밀번호 확인이 일치하지 않습니다."); return; }
+    setBusy(true);
+    try {
+      await apiFetch("/api/users", { method: "PATCH", body: JSON.stringify({ action: "change_own_pw", currentPw: cur, newPw: np }) });
+      setCur(""); setNp(""); setNp2("");
+      flash("ok", "비밀번호를 변경했습니다.");
+    } catch (e) { flash("error", e.message); }
+    setBusy(false);
+  }
+
+  const row = (k, v) => (
+    <div style={{ display: "flex", gap: 12, padding: "9px 0", borderBottom: `1px solid ${T.border}` }}>
+      <div style={{ width: 120, fontSize: 11.5, color: T.muted, flexShrink: 0 }}>{k}</div>
+      <div style={{ fontSize: 12.5 }}>{v}</div>
+    </div>
+  );
+
+  return (
+    <div>
+      <SettingsSection title="계정 정보">
+        {row("아이디", session?.login_id || "—")}
+        {row("이름", session?.name || "—")}
+        {row("역할", <span><Badge color={session?.role === "admin" ? T.amber : T.accent}>{ROLE_LABELS[session?.role] || session?.role}</Badge>
+          <span style={{ color: T.muted, marginLeft: 8, fontSize: 11 }}>{ROLE_DESC[session?.role] || ""}</span></span>)}
+        {row("계정 출처", isEnvAccount ? "환경변수 부트스트랩 관리자" : "등록 사용자 (app_users)")}
+        {row("세션 만료", session?.exp ? new Date(session.exp).toLocaleString("ko-KR") : "—")}
+        <div style={{ marginTop: 16 }}>
+          <Btn variant="ghost" onClick={onLogout} style={{ fontSize: 12, padding: "7px 16px" }}>⏻ 로그아웃</Btn>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title="비밀번호 변경"
+        desc={isEnvAccount
+          ? "환경변수 기반 부트스트랩 계정은 화면에서 비밀번호를 변경할 수 없습니다. Vercel 환경변수 APP_LOGIN_PW를 수정하거나, 사용자 관리에서 정식 관리자 계정을 등록해 사용하세요."
+          : "8자 이상, 영문과 숫자를 각각 1자 이상 포함해야 합니다."}
+      >
+        {!isEnvAccount && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 14 }}>
+              <Input label="현재 비밀번호" type="password" value={cur} onChange={setCur} placeholder="현재 비밀번호" />
+              <Input label="새 비밀번호" type="password" value={np} onChange={setNp} placeholder="8자 이상, 영문+숫자" />
+              <Input label="새 비밀번호 확인" type="password" value={np2} onChange={setNp2} placeholder="다시 입력" />
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+              <Btn onClick={change} disabled={busy || !cur || !np} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "변경 중…" : "비밀번호 변경"}</Btn>
+            </div>
+          </>
+        )}
+      </SettingsSection>
+    </div>
+  );
+}
+
+// ── 6. 시스템 진단 · 감사 로그 ────────────────────────────────────────
+function SystemTab({ flash }) {
+  const [diag, setDiag] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  async function runDiag() {
+    setBusy(true);
+    try { setDiag(await apiFetch("/api/settings?action=diag")); }
+    catch (e) { flash("error", e.message); }
+    setBusy(false);
+  }
+  async function loadLogs() {
+    try { setLogs(await apiFetch("/api/settings?action=audit&limit=100")); }
+    catch (e) { flash("error", e.message); }
+  }
+  useEffect(() => { runDiag(); loadLogs(); }, []);
+
+  const dot = (ok, warnOnly = false) => (
+    <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%",
+      background: ok ? T.green : (warnOnly ? T.amber : T.red), marginRight: 8, flexShrink: 0 }} />
+  );
+
+  const ENV_HELP = {
+    SUPABASE_URL: "필수 — 데이터베이스 연결",
+    SUPABASE_ANON_KEY: "필수 — 읽기 전용 키",
+    SUPABASE_SERVICE_KEY: "권장 — 설정·사용자 테이블 쓰기 및 세션 서명",
+    ANTHROPIC_API_KEY: "선택 — 설정 화면에서 키를 등록하면 불필요",
+    APP_LOGIN_ID: "권장 — 부트스트랩 관리자 로그인",
+    APP_SESSION_SECRET: "선택 — 미설정 시 SUPABASE_SERVICE_KEY로 대체",
+  };
+  const OPTIONAL_ENV = ["ANTHROPIC_API_KEY", "APP_SESSION_SECRET"];
+
+  const th = { textAlign: "left", padding: "9px 10px", fontSize: 10.5, color: T.muted, fontWeight: 600,
+    textTransform: "uppercase", letterSpacing: 0.6, borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap" };
+  const td = { padding: "9px 10px", fontSize: 11.5, borderBottom: `1px solid ${T.border}`, verticalAlign: "top" };
+
+  return (
+    <div>
+      <SettingsSection
+        title="연결 상태 진단"
+        desc="환경변수와 데이터베이스 테이블 준비 상태를 점검합니다. 배포 직후나 오류 발생 시 원인 파악에 사용하세요."
+        right={<Btn variant="outline" onClick={runDiag} disabled={busy} style={{ fontSize: 12, padding: "6px 14px" }}>{busy ? "점검 중…" : "다시 점검"}</Btn>}
+      >
+        {!diag ? <Spinner text="점검 중…" /> : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 20 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.muted, marginBottom: 10, letterSpacing: 0.6 }}>환경변수</div>
+              {Object.entries(diag.env).map(([k, v]) => (
+                <div key={k} style={{ display: "flex", alignItems: "center", padding: "6px 0", fontSize: 11.5 }}>
+                  {dot(v, OPTIONAL_ENV.includes(k))}
+                  <div style={{ minWidth: 0 }}>
+                    <span style={{ fontFamily: "monospace", color: v ? T.text : T.muted }}>{k}</span>
+                    <span style={{ color: T.muted, fontSize: 10, marginLeft: 8 }}>{v ? "설정됨" : "없음"} · {ENV_HELP[k]}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.muted, marginBottom: 10, letterSpacing: 0.6 }}>데이터베이스 테이블</div>
+              {Object.entries(diag.tables).map(([k, v]) => (
+                <div key={k} style={{ display: "flex", alignItems: "center", padding: "6px 0", fontSize: 11.5 }}>
+                  {dot(v === "ok")}
+                  <span style={{ fontFamily: "monospace", color: v === "ok" ? T.text : T.muted }}>{k}</span>
+                  <span style={{ color: T.muted, fontSize: 10, marginLeft: 8 }}>
+                    {v === "ok" ? "정상" : v === "missing" ? "미생성 — 설치 SQL 실행 필요" : "조회 오류"}
+                  </span>
+                </div>
+              ))}
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 11.5, color: T.muted, lineHeight: 1.9 }}>
+                등록 사용자 <b style={{ color: T.text }}>{diag.userCount}</b>명 (활성 관리자 <b style={{ color: diag.adminCount ? T.text : T.amber }}>{diag.adminCount}</b>명)<br />
+                AI 키 출처 <b style={{ color: T.text }}>{{ db: "설정 저장값", env: "환경변수", none: "미설정" }[diag.aiKeySource]}</b><br />
+                런타임 <b style={{ color: T.text }}>Node {diag.node}</b> · 점검 {new Date(diag.checkedAt).toLocaleString("ko-KR")}
+              </div>
+            </div>
+          </div>
+        )}
+      </SettingsSection>
+
+      <SettingsSection
+        title="감사 로그"
+        desc="설정 변경 및 사용자 계정 조작 이력입니다. 최근 100건까지 표시하며 CMMI 형상·변경 관리 증적으로 활용할 수 있습니다."
+        right={<Btn variant="ghost" onClick={loadLogs} style={{ fontSize: 12, padding: "6px 14px" }}>새로고침</Btn>}
+      >
+        {logs.length === 0 ? (
+          <div style={{ padding: "20px 0", textAlign: "center", fontSize: 12, color: T.muted }}>기록된 변경 이력이 없습니다.</div>
+        ) : (
+          <div style={{ overflowX: "auto", maxHeight: 460, overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+              <thead><tr><th style={th}>시각</th><th style={th}>수행자</th><th style={th}>동작</th><th style={th}>대상</th><th style={th}>내용</th></tr></thead>
+              <tbody>
+                {logs.map(l => (
+                  <tr key={l.id}>
+                    <td style={{ ...td, whiteSpace: "nowrap", color: T.muted }}>{new Date(l.created_at).toLocaleString("ko-KR")}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{l.actor || "—"}</td>
+                    <td style={td}><span style={{ fontFamily: "monospace", fontSize: 10.5, color: T.accent }}>{l.action}</span></td>
+                    <td style={td}>{l.target || "—"}</td>
+                    <td style={{ ...td, color: T.muted }}>{l.detail || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SettingsSection>
     </div>
   );
 }
