@@ -221,6 +221,85 @@ const AI_DEFAULTS = { model: "claude-haiku-4-5-20251001", maxTokens: 8000 };
 // PBS 추천의 AI 미사용 모드 설정 저장 키 (localStorage)
 const PBS_NOAI_KEY = "spiderqa_pbs_noai";
 
+// ══ 프로젝트 수행 팀원 ══════════════════════════════════════════════
+// 작업자 입력 정책은 MS Project·Smartsheet의 지배적 관행을 따른다.
+//   · 작업자 란은 자유 입력 허용 (등록 인원 선택은 콤보박스로 편의 제공)
+//   · 쉼표(,)로 복수 작업자 지정 — MS Project의 Resource Names 필드와 동일
+//   · 미등록 인원을 입력하면 팀원 명단에 자동 등록 (MS Project 기본 동작)
+//     자동 등록분은 "자동" 배지로 표시해 STEP 1에서 검토·정정할 수 있게 한다.
+// 이유: 작업자는 로그인 계정이 아니라 문서에 기재되는 이름이므로, 계정 기반
+//       도구(Jira·Asana)식 제한은 부적합하다. 착수 시점에 명단이 미확정인
+//       경우가 많은 SI 프로젝트 특성상 입력 차단은 작업을 막는 부작용이 크다.
+const TEAM_ROLE_OPTIONS = ["PM", "PL", "품질보증담당자(QA)", "형상관리담당자(CM)",
+  "분석/설계", "개발", "테스트", "아키텍트", "DBA", "인프라", "기술지원", "고객담당", "기타"];
+
+function newMemberId() { return "m" + Math.random().toString(36).slice(2, 9); }
+// 이름 비교용 정규화 — 공백 차이("홍 길동" vs "홍길동")를 동일인으로 본다
+const memberKey = n => String(n || "").replace(/\s/g, "");
+// 이름이 입력된 팀원만 추출 (편집 중 빈 행 제외)
+function teamNames(members) {
+  const out = [], seen = new Set();
+  (members || []).forEach(m => {
+    const n = String(m?.name || "").trim();
+    if (!n || seen.has(memberKey(n))) return;
+    seen.add(memberKey(n)); out.push(n);
+  });
+  return out;
+}
+// 저장·전달용 정규화 — 빈 이름 행 제거, 동명이인 중복 병합
+function normalizeMembers(list) {
+  const out = [], seen = new Set();
+  (list || []).forEach(m => {
+    const name = String(m?.name || "").trim();
+    if (!name || seen.has(memberKey(name))) return;
+    seen.add(memberKey(name));
+    out.push({ id: m?.id || newMemberId(), name, role: String(m?.role || "").trim(), org: String(m?.org || "").trim(), auto: !!m?.auto });
+  });
+  return out;
+}
+// 작업자 문자열 ↔ 배열 (쉼표 구분, MS Project Resource Names 규칙)
+function parseAssignees(v) { return String(v || "").split(",").map(x => x.trim()).filter(Boolean); }
+function joinAssignees(a) { return a.join(", "); }
+// 작업자 문자열에서 팀원 명단에 없는 이름만 추출
+function unknownAssignees(v, members) {
+  const known = new Set(teamNames(members).map(memberKey));
+  const seen = new Set(); const out = [];
+  parseAssignees(v).forEach(n => { const k = memberKey(n); if (!known.has(k) && !seen.has(k)) { seen.add(k); out.push(n); } });
+  return out;
+}
+
+// 작업자 입력 셀 — [자유 입력란] + [팀원 선택 콤보박스]
+// 콤보박스에서 고르면 쉼표로 이어붙이고, 이미 지정된 팀원은 목록에서 제외한다.
+// 네이티브 <select>를 쓰는 이유: 표 컨테이너가 overflow:auto 라 커스텀 팝업은 잘리기 때문.
+function AssigneeCell({ value, onChange, onCommit, members, inputStyle }) {
+  const names = teamNames(members);
+  const cur = parseAssignees(value);
+  const curKeys = new Set(cur.map(memberKey));
+  const remaining = names.filter(n => !curKeys.has(memberKey(n)));
+  const unknown = unknownAssignees(value, members);
+  const warn = unknown.length > 0;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+      <input value={value || ""}
+        onChange={e => onChange(e.target.value)}
+        onBlur={() => onCommit?.()}
+        placeholder={names.length ? "선택 또는 입력" : "예: 홍길동, 김철수"}
+        title={warn ? `팀원 미등록: ${unknown.join(", ")} — 입력란을 벗어나면 팀원 명단에 자동 등록됩니다.`
+                    : "쉼표(,)로 여러 명을 지정할 수 있습니다."}
+        style={warn ? { ...inputStyle, borderBottom: `1px solid ${T.amber}`, color: T.amber } : inputStyle} />
+      <select value="" onChange={e => { const n = e.target.value; if (n) onChange(joinAssignees([...cur, n])); }}
+        title={names.length ? "등록된 팀원에서 선택 (선택 시 쉼표로 추가)" : "STEP 1에서 팀원을 먼저 등록하세요"}
+        disabled={remaining.length === 0}
+        style={{ width: 20, flexShrink: 0, background: "transparent", color: remaining.length ? T.accent : T.border,
+          border: "none", fontSize: 10, fontFamily: "inherit", cursor: remaining.length ? "pointer" : "default",
+          outline: "none", padding: 0, colorScheme: "dark" }}>
+        <option value=""></option>
+        {remaining.map(n => <option key={n} value={n}>{n}</option>)}
+      </select>
+    </div>
+  );
+}
+
 // 문서 생성 공용 설정 — 설정(설정 → 조직·문서 기본값)에서 저장한 값을 앱 기동 시 주입한다.
 // docxStdParts / getDocLogos / makePdpDocx / makeReqDocx 등 문서 생성 함수가 모두
 // 이 단일 지점을 참조하므로, 호출부마다 meta를 다시 엮을 필요가 없다.
@@ -498,6 +577,7 @@ export default function SpiderQaAgent() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
   const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", startDate:"", endDate:"", pm:"",
+    members:[],   // 프로젝트 수행 팀원 [{id,name,role,org,auto}] — WBS 작업자 콤보박스의 원천
     ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=""; return o; }, {}), clientLogo:null, companyLogo:null });
   const [selectedOSSP, setSelectedOSSP] = useState(null);
   const [customOSSP, setCustomOSSP] = useState([]);
@@ -850,6 +930,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     setEditingId(p.id);
     const dm = p.tailoring?.docMeta || {};
     setProjectForm({ name:p.name||"", client:p.client||"", type:p.type||"신규개발", startDate:p.startDate||"", endDate:p.endDate||"", pm:p.pm||"",
+      members: normalizeMembers(p.tailoring?.members),
       ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=dm[k]||""; return o; }, {}),
       clientLogo:p.tailoring?.logos?.client||null, companyLogo:p.tailoring?.logos?.company||null });
     setSelectedOSSP(p.ossp||null);
@@ -882,6 +963,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       status:"진행중", ossp:selectedOSSP,
       // sdlc 전용 컬럼 없이 tailoring(JSON)에 함께 보존 → DB 스키마 변경 불필요
       tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors, requirements: requirements||null,
+        // 수행 팀원 명단 — 전용 컬럼 없이 tailoring(JSON)에 보존
+        members: normalizeMembers(projectForm.members),
         logos:{ client:projectForm.clientLogo||null, company:projectForm.companyLogo||null },
         // 프로젝트별 문서 메타 오버라이드 — 저장 후 재다운로드 시에도 동일하게 적용된다
         docMeta:DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=projectForm[k]||""; return o; }, {}) },
@@ -1242,7 +1325,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===2 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} sdlc={selectedSDLC} />}
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
-        {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} genProgress={genProgress} onRecommendPBS={onRecommendPBS} pbsNoAi={pbsNoAi} onTogglePbsNoAi={onTogglePbsNoAi} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} />}
+        {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} genProgress={genProgress} onRecommendPBS={onRecommendPBS} pbsNoAi={pbsNoAi} onTogglePbsNoAi={onTogglePbsNoAi} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} form={form} setForm={setForm} />}
         {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genProgress={genProgress} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} requirements={requirements} setRequirements={setRequirements} pdpCtx={{ ossp:selectedOSSP, sdlc:selectedSDLC, tailoring, pdp:pdpData, requirements }} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} tailoring={tailoring} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
@@ -1334,6 +1417,88 @@ function ProjectDocSettings({ form, setForm, f }) {
   );
 }
 
+// 프로젝트 수행 팀원 등록 — WBS 작업자 콤보박스의 원천 명단
+function TeamMembersEditor({ form, setForm }) {
+  const members = form.members || [];
+  const setMembers = updater => setForm(p => ({ ...p, members: typeof updater === "function" ? updater(p.members || []) : updater }));
+  const upd = (id, k, v) => setMembers(ms => ms.map(m => m.id === id ? { ...m, [k]: v, ...(k === "name" ? { auto: false } : {}) } : m));
+  const del = id => setMembers(ms => ms.filter(m => m.id !== id));
+  const add = (name = "") => setMembers(ms => [...ms, { id: newMemberId(), name, role: "", org: "", auto: false }]);
+  // PM을 팀원으로 편입 — 기본정보에 입력한 PM 이름을 그대로 사용
+  const pmName = String(form.pm || "").trim();
+  const pmRegistered = pmName && teamNames(members).some(n => memberKey(n) === memberKey(pmName));
+  const autoCount = members.filter(m => m.auto && String(m.name || "").trim()).length;
+
+  const cellInp = { width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`,
+    borderRadius: 6, color: T.text, fontSize: 11.5, fontFamily: "inherit", outline: "none", padding: "6px 8px" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
+        <div style={{ fontSize: 12, fontWeight: 600 }}>
+          프로젝트 수행 팀원 <span style={{ color: T.muted, fontWeight: 400 }}>(선택) · {teamNames(members).length}명</span>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {pmName && !pmRegistered && (
+            <button onClick={() => setMembers(ms => [...ms, { id: newMemberId(), name: pmName, role: "PM", org: "", auto: false }])}
+              style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 7, color: T.accent,
+                cursor: "pointer", fontSize: 11, padding: "4px 10px", fontFamily: "inherit" }}>+ PM 추가</button>
+          )}
+          <button onClick={() => add()}
+            style={{ background: "none", border: `1px solid ${T.accent}`, borderRadius: 7, color: T.accent,
+              cursor: "pointer", fontSize: 11, padding: "4px 10px", fontFamily: "inherit" }}>+ 팀원 추가</button>
+        </div>
+      </div>
+      <div style={{ fontSize: 10, color: T.muted, marginBottom: 8, lineHeight: 1.6 }}>
+        여기 등록한 인원이 WBS 일정 계획의 <b style={{ color: T.text }}>작업자</b> 콤보박스와 엑셀 워크북의 드롭다운에 나타납니다.
+        작업자 란에서 미등록 인원을 직접 입력하면 이 명단에 자동 등록되며 <b style={{ color: T.amber }}>자동</b> 배지로 표시됩니다.
+      </div>
+      {members.length === 0 ? (
+        <div style={{ fontSize: 11, color: T.muted, padding: "14px 12px", background: T.bg,
+          border: `1px dashed ${T.border}`, borderRadius: 10 }}>
+          등록된 팀원이 없습니다. 지금 등록하지 않아도 WBS 단계에서 작업자를 직접 입력할 수 있습니다.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, fontSize: 10, color: T.muted, paddingRight: 30 }}>
+            <div style={{ flex: 2, minWidth: 90 }}>이름 *</div>
+            <div style={{ flex: 2, minWidth: 90 }}>역할</div>
+            <div style={{ flex: 2, minWidth: 90 }}>소속</div>
+          </div>
+          {members.map(m => (
+            <div key={m.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <div style={{ flex: 2, minWidth: 90, position: "relative" }}>
+                <input value={m.name || ""} onChange={e => upd(m.id, "name", e.target.value)} placeholder="예: 홍길동"
+                  style={m.auto ? { ...cellInp, borderColor: T.amber + "88", paddingRight: 40 } : cellInp} />
+                {m.auto && <span title="WBS 작업자 란에서 자동 등록된 인원입니다. 이름·역할을 확인해 주세요."
+                  style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", fontSize: 9,
+                    color: T.amber, border: `1px solid ${T.amber}66`, borderRadius: 4, padding: "1px 4px" }}>자동</span>}
+              </div>
+              <div style={{ flex: 2, minWidth: 90 }}>
+                <input value={m.role || ""} onChange={e => upd(m.id, "role", e.target.value)} list="spq-team-roles"
+                  placeholder="예: 개발" style={cellInp} />
+              </div>
+              <div style={{ flex: 2, minWidth: 90 }}>
+                <input value={m.org || ""} onChange={e => upd(m.id, "org", e.target.value)}
+                  placeholder="예: DX사업본부" style={cellInp} />
+              </div>
+              <button onClick={() => del(m.id)} title="이 팀원 삭제"
+                style={{ width: 24, flexShrink: 0, background: "none", border: "none", color: T.red,
+                  cursor: "pointer", fontSize: 14, fontFamily: "inherit", padding: 0 }}>×</button>
+            </div>
+          ))}
+          <datalist id="spq-team-roles">{TEAM_ROLE_OPTIONS.map(r => <option key={r} value={r} />)}</datalist>
+          {autoCount > 0 && (
+            <div style={{ fontSize: 10, color: T.amber }}>
+              ⚠ 자동 등록 {autoCount}명 — 오타로 등록된 이름이 없는지 확인하세요.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepInfo({ form, setForm }) {
   const f = k => v => setForm(p=>({...p,[k]:v}));
   // 로고 업로드: dataURL + 원본 크기(폭/높이) 저장 — docx 임베드 시 비율 유지에 사용
@@ -1366,6 +1531,7 @@ function StepInfo({ form, setForm }) {
         </div>
         <Select label="프로젝트 유형" value={form.type} onChange={f("type")} options={["신규개발","고도화","유지보수","컨설팅"].map(v=>({value:v,label:v}))} />
         <Input label="PM *" value={form.pm} onChange={f("pm")} placeholder="예: 홍길동" />
+        <TeamMembersEditor form={form} setForm={setForm} />
         <Input label="시작일 *" type="date" value={form.startDate} onChange={f("startDate")} />
         <Input label="종료일 *" type="date" value={form.endDate} onChange={f("endDate")} />
         {/* 이번 프로젝트 문서 설정 — 비워둔 항목은 설정(설정 → 조직·문서 기본값)의 값이 사용된다.
@@ -2457,7 +2623,18 @@ function HolidayCalendar({ holidays, onToggle }) {
   );
 }
 
-function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRecommendPBS, pbsNoAi, onTogglePbsNoAi, wbsSetup, setWbsSetup, tailoring, ossp }) {
+function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRecommendPBS, pbsNoAi, onTogglePbsNoAi, wbsSetup, setWbsSetup, tailoring, ossp, form, setForm }) {
+  // 수행 팀원 — 작업자 콤보박스 원천. 미등록 입력은 MS Project 방식으로 명단에 자동 편입한다.
+  const members = form?.members || [];
+  const [autoAdded, setAutoAdded] = useState([]);   // 직전 자동 등록 알림 (검토 유도)
+  function commitAssignees(text) {
+    const unknown = unknownAssignees(text, members);
+    if (!unknown.length || !setForm) return;
+    setForm(p => ({ ...p, members: [...(p.members || []),
+      ...unknown.filter(n => !teamNames(p.members).some(x => memberKey(x) === memberKey(n)))
+        .map(n => ({ id: newMemberId(), name: n, role: "", org: "", auto: true })) ] }));
+    setAutoAdded(unknown);
+  }
   const guide = getGuideForOSSP(ossp);
   const scale = tailoring?.scale || "중형";
   const method = tailoring?.method || "UML";
@@ -2875,7 +3052,9 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
                             <input value={s.deliverable || ""} onChange={e => updateRow(t.id, s.id, { deliverable: e.target.value })} style={edInput} />
                           </td>
                           <td style={cell}>
-                            <input value={s.assignee || ""} onChange={e => updateRow(t.id, s.id, { assignee: e.target.value })} style={edInput} />
+                            <AssigneeCell value={s.assignee || ""} members={members} inputStyle={edInput}
+                              onChange={v => updateRow(t.id, s.id, { assignee: v })}
+                              onCommit={() => commitAssignees(s.assignee || "")} />
                           </td>
                           <td style={cell}>
                             <input value={s.pred || ""} onChange={e => updateRow(t.id, s.id, { pred: e.target.value })}
@@ -2911,8 +3090,20 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
               ⚠ 선행 입력 오류 {issueCount}건 — 해당 행은 일정 자동 계산에서 제외됩니다. ({Object.entries(predIssues).slice(0, 5).map(([c, m]) => `${c} → ${m}`).join(" / ")}{issueCount > 5 ? ` 외 ${issueCount - 5}건` : ""})
             </div>
           )}
+          {autoAdded.length > 0 && (
+            <div style={{ fontSize: 10.5, color: T.amber, background: T.amber + "11", border: `1px solid ${T.amber}44`,
+              borderRadius: 8, padding: "7px 11px", marginTop: 6, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <span>⚠ 미등록 인원 {autoAdded.length}명({autoAdded.join(", ")})을 팀원 명단에 자동 등록했습니다. STEP 1에서 이름·역할을 확인하세요.</span>
+              <button onClick={() => setAutoAdded([])} title="알림 닫기"
+                style={{ background: "none", border: "none", color: T.amber, cursor: "pointer", fontSize: 13, padding: 0, flexShrink: 0 }}>×</button>
+            </div>
+          )}
           <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>
             ※ 매트릭스를 수정한 뒤 "WBS 생성"을 다시 누르면 구조가 재생성됩니다 (입력한 일정은 초기화). 일정·작업자·사유는 프로젝트 저장 시 함께 보존됩니다.
+          </div>
+          <div style={{ fontSize: 10, color: T.muted, marginTop: 3 }}>
+            ※ 작업자는 <b style={{ color: T.text }}>쉼표(,)</b>로 여러 명을 지정할 수 있습니다 (예: 장성문, 홍길동). 오른쪽 화살표로 등록된 팀원을 선택하거나 직접 입력하세요
+            {teamNames(members).length === 0 && " — 팀원을 등록하려면 STEP 1(기본정보)로 이동하세요"}.
           </div>
         </div>
       )}
@@ -4548,6 +4739,9 @@ function makeWbsGanttXlsx(wbs, meta) {
   const tasks = wbs?.tasks || [];
   const holidays = (wbs?.holidays || []).slice().sort();
   const today = new Date().toLocaleDateString("ko-KR");
+  // 수행 팀원 — 위저드에서는 meta.members, 저장된 프로젝트에서는 meta.tailoring.members
+  const team = normalizeMembers(meta?.members || meta?.tailoring?.members);
+  const TEAM_MAX = 60;   // TeamList = 팀원!$A$2:$A$61 (빈 칸은 엑셀에서 직접 추가 가능)
 
   // ── 행 평탄화: 요약(레벨1) + 하위(레벨2~5), 자식 행 범위 기록 ──
   const flat = [];   // { kind:'sum'|'sub', ... }
@@ -4749,7 +4943,21 @@ function makeWbsGanttXlsx(wbs, meta) {
     `<cfRule type="expression" dxfId="5" priority="6"><formula>AND(ChartUnit="일",WEEKDAY(${K}$${HEAD_ROW},2)&gt;=6)</formula></cfRule>` +
     `</conditionalFormatting>`;
 
-  const dv = `<dataValidations count="1"><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" promptTitle="차트 단위" prompt="일 또는 주를 선택하면 간트 축이 바뀝니다" sqref="B3"><formula1>"일,주"</formula1></dataValidation></dataValidations>`;
+  // 데이터 유효성 검사
+  //  · B3: 차트 단위(일/주) — 목록 외 입력 차단
+  //  · D열(작업자): 등록 팀원 드롭다운. showErrorMessage="0" 으로 목록 외 입력도 그대로 허용한다.
+  //    (MS Project의 Resource Names·Smartsheet의 비제한 Contact 열과 동일한 정책. 쉼표로 복수 지정 가능)
+  const dvList = [
+    `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" promptTitle="차트 단위" prompt="일 또는 주를 선택하면 간트 축이 바뀝니다" sqref="B3"><formula1>"일,주"</formula1></dataValidation>`,
+  ];
+  if (team.length) {
+    dvList.push(
+      `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="0" ` +
+      `promptTitle="작업자" prompt="목록에서 선택하거나 직접 입력하세요. 여러 명은 쉼표(,)로 구분합니다. 예: ${xesc(team.slice(0, 2).map(m => m.name).join(", "))}" ` +
+      `sqref="D${DATA_START}:D${lastRow}"><formula1>TeamList</formula1></dataValidation>`
+    );
+  }
+  const dv = `<dataValidations count="${dvList.length}">${dvList.join("")}</dataValidations>`;
 
   const wbsSheet = XMLH +
     `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
@@ -4763,7 +4971,7 @@ function makeWbsGanttXlsx(wbs, meta) {
     `<col min="1" max="1" width="9" customWidth="1"/>` +
     `<col min="2" max="2" width="36" customWidth="1"/>` +
     `<col min="3" max="3" width="20" customWidth="1"/>` +
-    `<col min="4" max="4" width="9" customWidth="1"/>` +
+    `<col min="4" max="4" width="16" customWidth="1"/>` +   // 작업자 — 쉼표로 2명 이상 표기 가능하도록 확보
     `<col min="5" max="5" width="10" customWidth="1"/>` +
     `<col min="6" max="7" width="11.5" customWidth="1"/>` +
     `<col min="8" max="8" width="8" customWidth="1"/>` +
@@ -4788,6 +4996,24 @@ function makeWbsGanttXlsx(wbs, meta) {
     `<sheetViews><sheetView workbookViewId="0"/></sheetViews>` +
     `<cols><col min="1" max="1" width="15" customWidth="1"/><col min="2" max="2" width="30" customWidth="1"/></cols>` +
     `<sheetData>${holRows.join("")}</sheetData>` +
+    `</worksheet>`;
+
+  // ═══ 팀원 시트 ═══ (작업자 드롭다운의 원천 = TeamList)
+  const teamRows = [`<row r="1">${cStr(1, 0, "이름", S.holHead)}${cStr(1, 1, "역할", S.holHead)}${cStr(1, 2, "소속", S.holHead)}</row>`];
+  for (let i = 0; i < TEAM_MAX; i++) {
+    const r = i + 2;
+    const m = team[i];
+    teamRows.push(`<row r="${r}">` +
+      (m ? cStr(r, 0, m.name, S.txt) : cEmpty(r, 0, S.txt)) +
+      (m ? cStr(r, 1, m.role || "", S.txt) : cEmpty(r, 1, S.txt)) +
+      (m ? cStr(r, 2, m.org || "", S.txt) : cEmpty(r, 2, S.txt)) +
+      `</row>`);
+  }
+  const teamSheet = XMLH +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+    `<sheetViews><sheetView workbookViewId="0"/></sheetViews>` +
+    `<cols><col min="1" max="1" width="16" customWidth="1"/><col min="2" max="2" width="22" customWidth="1"/><col min="3" max="3" width="24" customWidth="1"/></cols>` +
+    `<sheetData>${teamRows.join("")}</sheetData>` +
     `</worksheet>`;
 
   // ═══ 사용법 시트 ═══
@@ -4818,9 +5044,14 @@ function makeWbsGanttXlsx(wbs, meta) {
     ["5. 진척률과 상태", true],
     ["   · 진척률(I)을 입력하면 막대 위에 진한 색으로 진척 구간이 표시됩니다 (0%~100%).", false],
     ["   · 상태(J)는 오늘 날짜 기준으로 예정/진행/지연/완료가 자동 표시됩니다.", false],
-    ["6. 공휴일 관리", true],
+    ["6. 작업자 (D열)", true],
+    ["   · 셀을 선택하면 '팀원' 시트에 등록된 인원이 드롭다운으로 나타납니다.", false],
+    ["   · 목록에 없는 이름도 그대로 입력할 수 있습니다 (입력이 차단되지 않습니다).", false],
+    ["   · 여러 명을 지정하려면 쉼표(,)로 구분하세요. 예: 장성문, 홍길동", false],
+    ["   · '팀원' 시트 A열(2행~61행)에 이름을 추가하면 드롭다운 목록에 즉시 반영됩니다.", false],
+    ["7. 공휴일 관리", true],
     ["   · '공휴일' 시트 A열(2행~61행)에 날짜를 추가/삭제하면 일정 계산과 간트 음영에 즉시 반영됩니다.", false],
-    ["7. 행 그룹(개요)", true],
+    ["8. 행 그룹(개요)", true],
     ["   · 좌측 개요 버튼(1/2/3…)으로 단계별 하위 작업을 접거나 펼 수 있습니다.", false],
     ["", false],
     [`※ 본 워크북은 ${APP_NAME}가 표준 엑셀 기능(수식·조건부 서식)만으로 자동 생성한 문서입니다 (매크로 없음).`, false],
@@ -4906,24 +5137,27 @@ function makeWbsGanttXlsx(wbs, meta) {
     `<sheets>` +
     `<sheet name="WBS" sheetId="1" r:id="rId1"/>` +
     `<sheet name="공휴일" sheetId="2" r:id="rId2"/>` +
-    `<sheet name="사용법" sheetId="3" r:id="rId3"/>` +
+    `<sheet name="팀원" sheetId="3" r:id="rId3"/>` +
+    `<sheet name="사용법" sheetId="4" r:id="rId4"/>` +
     `</sheets>` +
     `<definedNames>` +
     `<definedName name="ChartUnit">WBS!$B$3</definedName>` +
     `<definedName name="HolidayList">공휴일!$A$2:$A$${HOL_MAX + 1}</definedName>` +
+    `<definedName name="TeamList">팀원!$A$2:$A$${TEAM_MAX + 1}</definedName>` +
     `</definedNames>` +
     `<calcPr calcId="191029" fullCalcOnLoad="1"/>` +
     `</workbook>`;
 
   return zipBytes([
-    { path: "[Content_Types].xml", content: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
+    { path: "[Content_Types].xml", content: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet4.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
     { path: "_rels/.rels", content: XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
     { path: "xl/workbook.xml", content: wbXml },
-    { path: "xl/_rels/workbook.xml.rels", content: XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' },
+    { path: "xl/_rels/workbook.xml.rels", content: XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet4.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' },
     { path: "xl/styles.xml", content: stylesXml },
     { path: "xl/worksheets/sheet1.xml", content: wbsSheet },
     { path: "xl/worksheets/sheet2.xml", content: holSheet },
-    { path: "xl/worksheets/sheet3.xml", content: usageSheet },
+    { path: "xl/worksheets/sheet3.xml", content: teamSheet },
+    { path: "xl/worksheets/sheet4.xml", content: usageSheet },
   ]);
 }
 
