@@ -81,7 +81,11 @@ const TAILORING_RULES = [
   { id:"risk", label:"위험 관리", options:["기본","강화","최고"] },
 ];
 
-export default function ProGenesis() {
+const APP_NAME = "SPIDer QA Agent";
+const APP_TAGLINE = "v2.1 · AI Platform";
+const APP_MARK = "S";
+
+export default function SpiderQaAgentAdmin() {
   const [page, setPage] = useState("dashboard");
   const [projects, setProjects] = useState([]);
   const [currentProject, setCurrentProject] = useState(null);
@@ -227,8 +231,8 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
       {/* 모바일 헤더 */}
       <div className="mobile-header" style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 18px", background:T.surface, borderBottom:`1px solid ${T.border}`, position:"sticky", top:0, zIndex:100 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-          <div style={{ width:30, height:30, background:`linear-gradient(135deg,${T.accent},#7C3AED)`, borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, fontWeight:800, color:"#fff" }}>P</div>
-          <div style={{ fontSize:14, fontWeight:700 }}>ProGenesis</div>
+          <div style={{ width:30, height:30, background:`linear-gradient(135deg,${T.accent},#7C3AED)`, borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, fontWeight:800, color:"#fff" }}>{APP_MARK}</div>
+          <div style={{ fontSize:14, fontWeight:700 }}>{APP_NAME}</div>
         </div>
         <button onClick={()=>setMenuOpen(!menuOpen)} style={{ background:"none", border:"none", color:T.text, fontSize:22, cursor:"pointer", padding:"4px 8px" }}>
           {menuOpen ? "✕" : "☰"}
@@ -254,8 +258,8 @@ WBS JSON(5~7 phase, 각 3~5 subtask): {"tasks":[{"id":"string","wbsCode":"string
         <aside className="sidebar" style={{ display:"none", width:220, background:T.surface, borderRight:`1px solid ${T.border}`, flexDirection:"column", padding:"24px 0", flexShrink:0 }}>
           <div style={{ padding:"0 20px 24px", borderBottom:`1px solid ${T.border}` }}>
             <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-              <div style={{ width:34, height:34, background:`linear-gradient(135deg,${T.accent},#7C3AED)`, borderRadius:9, display:"flex", alignItems:"center", justifyContent:"center", fontSize:17, fontWeight:800, color:"#fff" }}>P</div>
-              <div><div style={{ fontSize:15, fontWeight:700, letterSpacing:-0.3 }}>ProGenesis</div><div style={{ fontSize:10, color:T.muted }}>v2.1 · AI Platform</div></div>
+              <div style={{ width:34, height:34, background:`linear-gradient(135deg,${T.accent},#7C3AED)`, borderRadius:9, display:"flex", alignItems:"center", justifyContent:"center", fontSize:17, fontWeight:800, color:"#fff" }}>{APP_MARK}</div>
+              <div><div style={{ fontSize:15, fontWeight:700, letterSpacing:-0.3 }}>{APP_NAME}</div><div style={{ fontSize:10, color:T.muted }}>{APP_TAGLINE}</div></div>
             </div>
           </div>
           <nav style={{ padding:"14px 10px", flex:1, display:"flex", flexDirection:"column", gap:2 }}>
