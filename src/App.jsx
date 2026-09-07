@@ -4443,6 +4443,23 @@ async function injectRequirementsIntoRtmXlsx(bytes, req) {
 // 정의서(RD1202)=xlsx 템플릿, 명세서(RD1301)=docx 템플릿. 작성가이드·작성예 시트/표는 그대로 유지.
 
 // XML 텍스트 노드(<t>·<w:t>) 내부만 대상으로 placeholder 치환 — 태그·속성은 건드리지 않음
+// xlsx 공유문자열(<si>)의 run 분할 대응 치환.
+// Excel은 서식이 다르거나 편집 이력이 있으면 한 셀의 텍스트를 여러 <r><t>로 쪼갠다.
+//   예) <si><r><t>문서 번호 : </t></r><r><t>ie.f.RD</t></r><r><t>1202</t></r></si>
+// 이 경우 <t> 단위 치환으로는 "ie.f.RD1202"·"{프로젝트 명}"을 찾을 수 없으므로,
+// <si> 전체 텍스트를 합쳐 판단하고, 치환이 일어난 항목만 첫 run의 서식을 유지한 단일 run으로 재구성한다.
+function xlsxSiReplaceAll(xml, pairs, extraPairsFor) {
+  return xml.replace(/<si>[\s\S]*?<\/si>/g, si => {
+    const txt = [...si.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map(m => m[1]).join("");
+    if (!txt) return si;
+    const all = extraPairsFor ? [...pairs, ...extraPairsFor(txt)] : pairs;
+    let out = txt, hit = false;
+    all.forEach(([f, t]) => { if (out.includes(f)) { out = out.split(f).join(t); hit = true; } });
+    if (!hit) return si;
+    const rPr = /<rPr>[\s\S]*?<\/rPr>/.exec(si)?.[0] || "";
+    return `<si><r>${rPr}<t xml:space="preserve">${out}</t></r></si>`;
+  });
+}
 function xmlTextReplaceAll(xml, pairs) {
   return xml.replace(/(<(?:w:t|t)\b[^>]*>)([^<]*)(<\/(?:w:t|t)>)/g, (m, a, txt, b) => {
     let t = txt;
@@ -4452,11 +4469,13 @@ function xmlTextReplaceAll(xml, pairs) {
 }
 // docx 문단 단위 placeholder 치환 — placeholder가 여러 run(<w:r>)으로 쪼개져 있어도 문단 전체 텍스트를 합쳐 치환.
 // 치환이 발생한 문단만 첫 run의 서식(pPr·rPr)을 유지한 단일 run으로 재구성한다.
-function docxReplacePlaceholders(xml, pairs) {
+function docxReplacePlaceholders(xml, pairs, extraPairsFor) {
   return xml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, p => {
     const txt = [...p.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map(m => m[1]).join("");
+    // 문서코드는 run 분할로 "ie.f.RD"+"1301"처럼 쪼개질 수 있어, 합쳐진 문단 텍스트에서 다시 찾는다
+    const all = extraPairsFor ? [...pairs, ...extraPairsFor(txt)] : pairs;
     let replaced = txt, hit = false;
-    pairs.forEach(([f, t]) => { if (replaced.includes(f)) { replaced = replaced.split(f).join(t); hit = true; } });
+    all.forEach(([f, t]) => { if (replaced.includes(f)) { replaced = replaced.split(f).join(t); hit = true; } });
     if (!hit) return p;
     const pPr = /<w:pPr>[\s\S]*?<\/w:pPr>/.exec(p)?.[0] || "";
     const rPr = /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(p)?.[0] || "";
@@ -4584,14 +4603,24 @@ function templateDocNo(meta, doc) {
 // 접두어가 점(.)으로 연결된 형태만 대상으로 삼는다. 본문에서 "RD1202" 단독으로 언급된
 // 부분까지 바꾸면 설명 문장이 깨지므로, 문서번호 표기로만 쓰이는 형태에 한정한다.
 const TPL_DOC_CODE_RE = /(?:[A-Za-z][A-Za-z0-9]{0,7}\.){1,3}(RD\d{4}|[A-Z]{2,3}\d{2,4})/g;
+function docCodePairsFromText(text, meta) {
+  const seen = new Map();
+  const re = new RegExp(TPL_DOC_CODE_RE.source, "g");
+  let m;
+  while ((m = re.exec(String(text || "")))) {
+    if (!seen.has(m[0])) seen.set(m[0], docCodeWithPrefix(m[1], meta));
+  }
+  return [...seen.entries()];
+}
 function templateDocCodePairs(xml, meta) {
-  // 태그·속성이 아니라 텍스트 노드만 훑는다
+  // 태그·속성이 아니라 텍스트 노드만 훑는다. run 분할을 감안해 파트 전체 텍스트를 이어붙인다.
   const text = [...xml.matchAll(/<(?:w:t|t)(?:\s[^>]*)?>([\s\S]*?)<\/(?:w:t|t)>/g)].map(m => m[1]).join("\n");
   const seen = new Map();
   const re = new RegExp(TPL_DOC_CODE_RE.source, "g");
   let m;
   while ((m = re.exec(text))) {
-    if (!seen.has(m[0])) seen.set(m[0], projectDocNo(meta, m[1]));
+    // 도구가 자체 생성하는 산출물과 같은 표기를 쓴다 (예: SPID-PS2103 ↔ SPID-RD1202)
+    if (!seen.has(m[0])) seen.set(m[0], docCodeWithPrefix(m[1], meta));
   }
   return [...seen.entries()];
 }
@@ -4609,9 +4638,13 @@ function applyTemplateMeta(files, meta, doc) {
     if (!isDocx && !isXlsx) return;
     const xml = typeof f.content === "string" ? f.content : td.decode(f.content);
     // 파트별로 실제 등장하는 OSSP 문서코드를 찾아 프로젝트 문서번호 치환 쌍을 추가
-    const all = [...pairs, ...templateDocCodePairs(xml, meta)];
-    // docx는 run 분할 대응이 필요하므로 문단 단위 치환, xlsx는 텍스트 노드 단위로 충분
-    const out = isDocx ? docxReplacePlaceholders(xml, all) : xmlTextReplaceAll(xml, all);
+    // run 분할 대응: docx는 문단 단위, xlsx 공유문자열은 <si> 단위로 텍스트를 합쳐 치환한다.
+    // 문서코드 쌍은 합쳐진 텍스트에서 그때그때 찾아야 "ie.f.RD"+"1301" 분할을 잡을 수 있다.
+    const codesFor = t => docCodePairsFromText(t, meta);
+    const out = isDocx ? docxReplacePlaceholders(xml, pairs, codesFor)
+      : f.path === "xl/sharedStrings.xml"
+        ? xlsxSiReplaceAll(xml, pairs, codesFor)
+        : xmlTextReplaceAll(xml, [...pairs, ...templateDocCodePairs(xml, meta)]);
     if (out !== xml) { f.content = out; changed = true; }
   });
   return changed;
