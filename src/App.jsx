@@ -4574,9 +4574,26 @@ function resetXlsxRevisionHistory(files, meta) {
 // 코드를 못 찾으면 빈 문자열 → {문서번호} 토큰은 치환하지 않고 템플릿 원본 표기를 유지한다.
 function templateDocNo(meta, doc) {
   // 파일명이 "9.2.1.1_RD1301_요구사항 명세서" 형태라 \b는 밑줄 경계를 잡지 못한다 → 문자 클래스로 경계 지정
-  const m = /(?:^|[^A-Za-z0-9])(RD\d{4}|[A-Z]{2}\d{3,4})(?![0-9])/.exec(String(doc?.name || "") + " " + String(doc?.code || ""));
+  const m = /(?:^|[^A-Za-z0-9])(RD\d{4}|[A-Z]{2,3}\d{2,4})(?![0-9])/.exec(String(doc?.name || "") + " " + String(doc?.code || ""));
   if (m) return projectDocNo(meta, m[1]);
   return "";
+}
+
+// 템플릿 원본에 박혀 있는 OSSP 문서코드를 프로젝트 문서번호로 교체한다.
+//   예) ie.f.RD1202  →  SPID-001-RD1202-2026
+// 접두어가 점(.)으로 연결된 형태만 대상으로 삼는다. 본문에서 "RD1202" 단독으로 언급된
+// 부분까지 바꾸면 설명 문장이 깨지므로, 문서번호 표기로만 쓰이는 형태에 한정한다.
+const TPL_DOC_CODE_RE = /(?:[A-Za-z][A-Za-z0-9]{0,7}\.){1,3}(RD\d{4}|[A-Z]{2,3}\d{2,4})/g;
+function templateDocCodePairs(xml, meta) {
+  // 태그·속성이 아니라 텍스트 노드만 훑는다
+  const text = [...xml.matchAll(/<(?:w:t|t)(?:\s[^>]*)?>([\s\S]*?)<\/(?:w:t|t)>/g)].map(m => m[1]).join("\n");
+  const seen = new Map();
+  const re = new RegExp(TPL_DOC_CODE_RE.source, "g");
+  let m;
+  while ((m = re.exec(text))) {
+    if (!seen.has(m[0])) seen.set(m[0], projectDocNo(meta, m[1]));
+  }
+  return [...seen.entries()];
 }
 
 // 템플릿(docx/xlsx) 파트 배열에 문서정보 placeholder를 일괄 치환한다.
@@ -4591,8 +4608,10 @@ function applyTemplateMeta(files, meta, doc) {
     const isXlsx = f.path === "xl/sharedStrings.xml" || /^xl\/worksheets\/sheet\d+\.xml$/.test(f.path);
     if (!isDocx && !isXlsx) return;
     const xml = typeof f.content === "string" ? f.content : td.decode(f.content);
+    // 파트별로 실제 등장하는 OSSP 문서코드를 찾아 프로젝트 문서번호 치환 쌍을 추가
+    const all = [...pairs, ...templateDocCodePairs(xml, meta)];
     // docx는 run 분할 대응이 필요하므로 문단 단위 치환, xlsx는 텍스트 노드 단위로 충분
-    const out = isDocx ? docxReplacePlaceholders(xml, pairs) : xmlTextReplaceAll(xml, pairs);
+    const out = isDocx ? docxReplacePlaceholders(xml, all) : xmlTextReplaceAll(xml, all);
     if (out !== xml) { f.content = out; changed = true; }
   });
   return changed;
