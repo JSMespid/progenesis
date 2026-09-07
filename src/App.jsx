@@ -221,6 +221,25 @@ const AI_DEFAULTS = { model: "claude-haiku-4-5-20251001", maxTokens: 8000 };
 // PBS 추천의 AI 미사용 모드 설정 저장 키 (localStorage)
 const PBS_NOAI_KEY = "spiderqa_pbs_noai";
 
+// ══ 한국어 조사 처리 ════════════════════════════════════════════════
+// OSSP명·가이드명처럼 값이 바뀌는 자리 뒤의 조사를 받침 유무로 자동 선택한다.
+// 예) "정보공학기반 개발 방법론"을 / "애자일 프로세스"를
+function hasJongseong(word) {
+  // 닫는 괄호·따옴표·구두점은 건너뛰고 실제 마지막 글자로 판정
+  //  예) 조직 표준 프로세스(OSSP) → P, "작성 가이드" → 드
+  const s = String(word || "").trim().replace(/[)\]}>」』"'\s.,!?]+$/, "");
+  const c = s.slice(-1);
+  if (!c) return false;
+  const code = c.charCodeAt(0);
+  if (code >= 0xAC00 && code <= 0xD7A3) return (code - 0xAC00) % 28 !== 0;   // 한글 음절: 종성 유무
+  if (/[0-9]/.test(c)) return "013678".includes(c);      // 영·일·삼·육·칠·팔에 받침
+  if (/[a-zA-Z]/.test(c)) return "lmnrLMNR".includes(c); // 엘·엠·엔·알에 받침
+  return false;   // 그 외 기호는 받침 없음으로 간주
+}
+const josaEul = w => hasJongseong(w) ? "을" : "를";   // 목적격
+const josaI   = w => hasJongseong(w) ? "이" : "가";   // 주격
+const josaEun = w => hasJongseong(w) ? "은" : "는";   // 보조사
+
 // ══ 프로젝트 수행 팀원 ══════════════════════════════════════════════
 // 작업자 입력 정책은 MS Project·Smartsheet의 지배적 관행을 따른다.
 //   · 작업자 란은 자유 입력 허용 (등록 인원 선택은 콤보박스로 편의 제공)
@@ -728,10 +747,11 @@ export default function SpiderQaAgent() {
       const designTxt = guide.hasDesignMethod ? `, 설계방식 ${tailoring.method||"UML"}` : "";
       const period = (projectForm.startDate && projectForm.endDate) ? `${projectForm.startDate}~${projectForm.endDate}` : "";
       const strictReg = sdlcFactors?.regulation === "엄격";
+      const osspLabel = selectedOSSP?.label || "조직 표준 프로세스(OSSP)";
       const result = {
         overview: {
-          purpose: `본 문서는 ${projectForm.client ? projectForm.client + " " : ""}"${projectForm.name}" 프로젝트(유형: ${projectForm.type})에 적용할 프로젝트 정의 프로세스(PDP)를 수립하기 위해, ${selectedOSSP?.label || "조직 표준 프로세스(OSSP)"}를 「${guide.title}」 기준으로 테일러링한 결과를 정의하는 것을 목적으로 한다. PMBOK® 8판의 테일러링 원칙에 따라 프로젝트 규모(${scaleLabel})${designTxt} 등 프로젝트 특성을 반영하였다.`,
-          scope: `적용 범위는 ${period ? "사업 기간(" + period + ") 중 " : ""}${selectedSDLC?.label || "선정 SDLC"} 기반 ${phaseCount}개 단계의 확정 산출물 ${applied.length}종과, 프로세스 테일러링 가이드 V2.0에 따른 관리 프로세스(적용 등급 ${level}, 적용대상 ${procApplicable2.length}건)의 이행 활동 전체로 한다. 단계별 확정 산출물: ${tailoringSummary}`,
+          purpose: `본 문서는 ${projectForm.client ? projectForm.client + " " : ""}"${projectForm.name}" 프로젝트(유형: ${projectForm.type})에 적용할 프로젝트 정의 프로세스(PDP)를 수립하기 위해, ${osspLabel}${josaEul(osspLabel)} 「${guide.title}」 기준으로 테일러링한 결과를 정의하는 것을 목적으로 한다. PMBOK® 8판의 테일러링 원칙에 따라 프로젝트 규모(${scaleLabel})${designTxt} 등 프로젝트 특성을 반영하였다.`,
+          scope: `적용 범위는 ${period ? "사업 기간(" + period + ") 중 " : ""}${selectedSDLC?.label || "선정 SDLC"} 기반 ${phaseCount}개 단계의 확정 산출물 ${applied.length}종과, 「${guide.title}」에 따른 관리 프로세스(적용 등급 ${level}, 적용대상 ${procApplicable2.length}건)의 이행 활동 전체로 한다. 단계별 확정 산출물: ${tailoringSummary}`,
           objectives: [
             `테일러링 확정 산출물 ${applied.length}종의 단계별 작성·검토·승인 이행`,
             `필수(M) 산출물의 예외 없는 100% 작성 및 베이스라인 관리`,
@@ -4443,17 +4463,139 @@ function docxReplacePlaceholders(xml, pairs) {
     return `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${replaced}</w:t></w:r></w:p>`;
   });
 }
-// 표지·사용권한 등 공통 placeholder 치환 쌍 — {프로젝트명}·{시스템 명}·{작성자 명}·날짜·버전
-function reqTplPlaceholderPairs(meta) {
+// 표지·문서정보표 등 공통 placeholder 치환 쌍
+//
+// ── 결재란(서명란)은 채우지 않는다 ─────────────────────────────────
+// "작성자: ___ 일자: ___", "검토자:", "승인자:" 로 이어지는 서명 블록은 실제 검토·승인
+// 행위의 증적이므로 자동 기입하지 않는다. 자필 서명·날인으로 남겨 둔다.
+// 아래 사전이 채우는 것은 문서 식별 정보(표지·머리글 문서정보표)에 한정된다.
+//
+// 값 우선순위는 docMetaValue()를 따른다: 위저드 입력 → 저장된 프로젝트 → 조직 설정 기본값.
+function reqTplPlaceholderPairs(meta, docNo) {
   const esc = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const today = new Date().toISOString().slice(0, 10);
-  return [
-    ["{프로젝트명}", esc(meta.name || "")], ["{프로젝트 명}", esc(meta.name || "")],
-    ["{시스템명}", esc(meta.name || "")], ["{시스템 명}", esc(meta.name || "")],
-    ["{작성자명}", esc(meta.pm || "")], ["{작성자 명}", esc(meta.pm || "")],
-    ["{YYYY-MM-DD}", today], ["YYYY-MM-DD", today],
+  const todayKo = new Date().toLocaleDateString("ko-KR");
+  const name = esc(meta?.name || "");
+  const client = esc(meta?.client || "");
+  const author = esc(docMetaValue(meta, "author") || meta?.pm || "");
+  const reviewer = esc(docMetaValue(meta, "reviewer") || "");
+  const approver = esc(docMetaValue(meta, "approver") || "");
+  const org = esc(docMetaValue(meta, "orgName") || "");
+  const dept = esc(docMetaValue(meta, "dept") || "");
+  const distribution = esc(docMetaValue(meta, "distribution") || "");
+  const pm = esc(meta?.pm || "");
+  const no = esc(docNo || "");
+
+  // {○○명}·{○○ 명} 두 표기를 모두 등록 (템플릿마다 "명" 앞 공백 유무가 다름).
+  // 공백 변형은 "명"으로 끝나는 라벨에만 적용한다 — 그 외에는 {배포구 분} 같은 잘못된 토큰이 생긴다.
+  const tok = (labels, value) => labels.flatMap(l =>
+    /명$/.test(l) ? [[`{${l}}`, value], [`{${l.slice(0, -1)} 명}`, value]] : [[`{${l}}`, value]]);
+  const pairs = [
+    ...tok(["프로젝트명"], name), ...tok(["시스템명"], name), ...tok(["과제명"], name),
+    ...tok(["고객사명", "발주처명"], client),
+    ...tok(["작성자명"], author), ...tok(["PM명", "관리자명"], pm),
+    ...tok(["검토자명"], reviewer), ...tok(["승인자명"], approver),
+    ...tok(["조직명", "수행사명", "회사명"], org), ...tok(["부서명"], dept),
+    ...tok(["배포구분"], distribution),
+    ["{프로젝트}", name], ["{시스템}", name], ["{고객사}", client], ["{발주처}", client],
+    ["{작성자}", author], ["{검토자}", reviewer], ["{승인자}", approver],
+    ["{작성일}", today], ["{작성일자}", today], ["{YYYY-MM-DD}", today], ["YYYY-MM-DD", today],
+    ["{YYYY.MM.DD}", todayKo], ["{버전}", "1.0"],
     ["Version X.X", "Version 1.0"], ["X.X", "1.0"],
   ];
+  if (no) pairs.push(["{문서번호}", no], ["{문서 번호}", no]);
+  // 빈 값으로 치환하면 라벨만 남아 오히려 나빠지므로 값이 있는 항목만 적용하고, 중복 토큰은 제거
+  const seen = new Set();
+  return pairs.filter(([k, v]) => {
+    if (String(v).trim() === "" || seen.has(k)) return false;
+    seen.add(k); return true;
+  });
+}
+
+// 개정이력 시트의 예시행 정리 — 템플릿에 박혀 있는 더미 작성자·날짜를 프로젝트 값으로 교체한다.
+//   예) 1.0 / 최초작성 / 홍길동 / 2025/09/01  →  V0.1 / 최초작성 / (작성자) / (오늘)
+// 오탐을 막기 위해 (1) 시트명이 개정이력 계열이고 (2) 셀 값이 알려진 예시값과 정확히 일치할 때만 바꾼다.
+const REV_DUMMY_NAMES = ["홍길동", "김철수", "이순신"];
+function resetXlsxRevisionHistory(files, meta) {
+  const td = new TextDecoder();
+  const byPath = {}; files.forEach(f => { byPath[f.path] = f; });
+  const getX = p => { const f = byPath[p]; return f ? (typeof f.content === "string" ? f.content : td.decode(f.content)) : null; };
+  const wbXml = getX("xl/workbook.xml"); if (!wbXml) return false;
+  const relXml = getX("xl/_rels/workbook.xml.rels") || "";
+  const relMap = {};
+  [...relXml.matchAll(/<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g)]
+    .forEach(m => { relMap[m[1]] = m[2].replace(/^\/?xl\//, "").replace(/^\.\//, ""); });
+  // 개정이력 계열 시트만 대상
+  const targets = [...wbXml.matchAll(/<sheet\b[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"/g)]
+    .filter(m => /개정\s*이력|개정이력|revision/i.test(m[1]))
+    .map(m => "xl/" + (relMap[m[2]] || "")).filter(p => byPath[p]);
+  if (!targets.length) return false;
+
+  const author = docMetaValue(meta, "author") || meta?.pm || "";
+  const today = new Date().toISOString().slice(0, 10);
+  // sharedStrings 인덱스 → 새 값 (셀이 t="s"로 공유문자열을 참조하는 경우가 많음)
+  const ssXml = getX("xl/sharedStrings.xml");
+  const pairs = [];
+  REV_DUMMY_NAMES.forEach(n => { if (author) pairs.push([n, author]); });
+  pairs.push([/^20\d{2}[-/.]\d{2}[-/.]\d{2}$/, today]);   // 예시 날짜 → 오늘
+
+  let changed = false;
+  const swap = txt => {
+    const t = String(txt).trim();
+    for (const [from, to] of pairs) {
+      if (from instanceof RegExp ? from.test(t) : t === from) return to;
+    }
+    return null;
+  };
+  // 공유문자열은 다른 시트와 공유되므로 건드리지 않고, 대상 시트의 셀만 인라인 문자열로 덮어쓴다
+  const sst = ssXml ? [...ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)]
+    .map(m => [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("")) : [];
+  targets.forEach(path => {
+    const f = byPath[path];
+    const xml = typeof f.content === "string" ? f.content : td.decode(f.content);
+    const out = xml.replace(/<c\b([^>]*)>([\s\S]*?)<\/c>/g, (m, attrs, inner) => {
+      let cur = null;
+      if (/t="s"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); if (v) cur = sst[Number(v[1])]; }
+      else if (/t="inlineStr"/.test(attrs)) { cur = [...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join(""); }
+      if (cur == null) return m;
+      const next = swap(cur);
+      if (next == null) return m;
+      changed = true;
+      const cleanAttrs = attrs.replace(/\st="[^"]*"/g, "");
+      const esc = String(next).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      return `<c${cleanAttrs} t="inlineStr"><is><t xml:space="preserve">${esc}</t></is></c>`;
+    });
+    if (out !== xml) f.content = out;
+  });
+  return changed;
+}
+
+// 산출물 이름에서 OSSP 문서코드(RD1202 등)를 추출해 프로젝트 문서번호를 만든다.
+// 코드를 못 찾으면 빈 문자열 → {문서번호} 토큰은 치환하지 않고 템플릿 원본 표기를 유지한다.
+function templateDocNo(meta, doc) {
+  // 파일명이 "9.2.1.1_RD1301_요구사항 명세서" 형태라 \b는 밑줄 경계를 잡지 못한다 → 문자 클래스로 경계 지정
+  const m = /(?:^|[^A-Za-z0-9])(RD\d{4}|[A-Z]{2}\d{3,4})(?![0-9])/.exec(String(doc?.name || "") + " " + String(doc?.code || ""));
+  if (m) return projectDocNo(meta, m[1]);
+  return "";
+}
+
+// 템플릿(docx/xlsx) 파트 배열에 문서정보 placeholder를 일괄 치환한다.
+// 반환값: 실제로 바뀐 파트가 있으면 true.
+function applyTemplateMeta(files, meta, doc) {
+  const pairs = reqTplPlaceholderPairs(meta, templateDocNo(meta, doc));
+  if (!pairs.length) return false;
+  const td = new TextDecoder();
+  let changed = false;
+  files.forEach(f => {
+    const isDocx = /^word\/(document|header\d+|footer\d+)\.xml$/.test(f.path);
+    const isXlsx = f.path === "xl/sharedStrings.xml" || /^xl\/worksheets\/sheet\d+\.xml$/.test(f.path);
+    if (!isDocx && !isXlsx) return;
+    const xml = typeof f.content === "string" ? f.content : td.decode(f.content);
+    // docx는 run 분할 대응이 필요하므로 문단 단위 치환, xlsx는 텍스트 노드 단위로 충분
+    const out = isDocx ? docxReplacePlaceholders(xml, pairs) : xmlTextReplaceAll(xml, pairs);
+    if (out !== xml) { f.content = out; changed = true; }
+  });
+  return changed;
 }
 
 // 정의서(RD1202) xlsx 템플릿 채움: 표지·사용권한 placeholder 치환 + '템플릿' 시트에 요구사항 기입
@@ -4465,14 +4607,9 @@ async function injectRequirementsIntoDefXlsx(bytes, meta, req) {
   const td = new TextDecoder();
   const byPath = {}; files.forEach(f => { byPath[f.path] = f; });
   const getX = p => { const f = byPath[p]; return f ? (typeof f.content === "string" ? f.content : td.decode(f.content)) : null; };
-  // 1) placeholder 치환 (sharedStrings + 모든 시트의 텍스트 노드)
-  const pairs = reqTplPlaceholderPairs(meta);
-  files.forEach(f => {
-    if (f.path === "xl/sharedStrings.xml" || /^xl\/worksheets\/sheet\d+\.xml$/.test(f.path)) {
-      const xml = typeof f.content === "string" ? f.content : td.decode(f.content);
-      f.content = xmlTextReplaceAll(xml, pairs);
-    }
-  });
+  // 1) 문서정보 placeholder 치환 (sharedStrings + 모든 시트) + 개정이력 예시행 정리
+  applyTemplateMeta(files, meta, null);
+  try { resetXlsxRevisionHistory(files, meta); } catch (_) { /* 정리 실패 시 원본 유지 */ }
   // 2) '템플릿' 시트 탐색 (workbook.xml → rels)
   const wbXml = getX("xl/workbook.xml");
   if (!wbXml) return null;
@@ -4557,17 +4694,10 @@ async function injectRequirementsIntoSpecDocx(bytes, meta, req, doc) {
   const td = new TextDecoder();
   const f = files.find(x => x.path === "word/document.xml");
   if (!f) return null;
-  // 머리글·꼬리말 파트의 placeholder도 치환 ({프로젝트 명}·{시스템 명}·{작성자 명}·YYYY-MM-DD 등이 머리글 표에 존재)
-  const pairs = reqTplPlaceholderPairs(meta);
-  files.forEach(x => {
-    if (/^word\/(header|footer)\d+\.xml$/.test(x.path)) {
-      const hx = typeof x.content === "string" ? x.content : td.decode(x.content);
-      x.content = docxReplacePlaceholders(hx, pairs);
-    }
-  });
+  // 1) 표지·머리글·꼬리말·본문의 문서정보 placeholder 치환 (run 분할 대응)
+  //    요구사항 블록 표를 못 찾더라도 이 치환 결과는 버리지 않는다 (아래 metaFilled 참조)
+  const metaFilled = applyTemplateMeta(files, meta, doc);
   let xml = typeof f.content === "string" ? f.content : td.decode(f.content);
-  // 1) 표지·본문 placeholder 치환 (run 분할 대응 문단 단위)
-  xml = docxReplacePlaceholders(xml, pairs);
   // 2) 빈 명세 블록 표 탐지: '요구사항 ID' 라벨 다음 셀이 비어 있고 '요구사항 명세' 라벨을 가진 표
   //    문서 흐름상 [기능, 비기능, 인터페이스] 순으로 나타난다
   const tcRe = /<w:tc(?:\s[^>]*)?>[\s\S]*?<\/w:tc>/g;
@@ -4650,7 +4780,8 @@ async function injectRequirementsIntoSpecDocx(bytes, meta, req, doc) {
     const i = texts.indexOf("요구사항ID");
     return i > -1 && texts[i + 1] !== undefined && texts[i + 1] === "";
   });
-  if (!blanks.length) return null;
+  // 요구사항 명세 블록 표를 못 찾아도, placeholder 치환분은 살려서 반환한다.
+  if (!blanks.length) { f.content = xml; return metaFilled ? zipBytes(files) : null; }
   const typeOrder = ["기능", "비기능", "인터페이스"];
   let filledAny = false;
   blanks.slice(0, 3).forEach((tbl, bi) => {
@@ -4660,8 +4791,8 @@ async function injectRequirementsIntoSpecDocx(bytes, meta, req, doc) {
     xml = xml.replace(tbl, filled);
     filledAny = true;
   });
-  if (!filledAny) return null;
   f.content = xml;
+  if (!filledAny && !metaFilled) return null;   // 채운 것이 전혀 없을 때만 폴백
   return zipBytes(files);
 }
 
@@ -5325,16 +5456,29 @@ async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
         const bytes = await fetchTemplateBytes(tpl);
         if (bytes) {
           const ext = (String(tpl.file_name).split(".").pop() || "bin").toLowerCase();
+          // 모든 OSSP 템플릿 공통: 표지·머리글의 문서정보 placeholder를 프로젝트 값으로 치환
+          // (결재란은 대상이 아님 — reqTplPlaceholderPairs 주석 참조)
+          let cur = bytes;
+          if (ext === "docx" || ext === "xlsx") {
+            try {
+              const files = await unzipBytes(cur);
+              if (applyTemplateMeta(files, meta, doc)) cur = zipBytes(files);
+            } catch (_) { /* 치환 실패 시 원본 유지 */ }
+          }
           // 템플릿이 docx면 프로젝트 로고(고객사·우리회사) 주입 시도 — 실패 시 원본 그대로
           if (ext === "docx") {
             try {
-              const injected = await injectLogosIntoTemplateDocx(bytes, meta);
+              const injected = await injectLogosIntoTemplateDocx(cur, meta);
               if (injected) return { ext, bytes: injected };
             } catch (_) { /* 주입 실패 시 원본 유지 */ }
+            return { ext, bytes: cur };
           }
-          // 템플릿이 xlsx면: (1) 요구사항 추적 매트릭스에 확정 요구사항 채움 → (2) 로고 텍스트박스 치환
+          // 템플릿이 xlsx면: (1) 개정이력 예시행 정리 → (2) 요구사항 추적 매트릭스 채움 → (3) 로고 치환
           if (ext === "xlsx") {
-            let cur = bytes;
+            try {
+              const files = await unzipBytes(cur);
+              if (resetXlsxRevisionHistory(files, meta)) cur = zipBytes(files);
+            } catch (_) { /* 개정이력 정리 실패 시 원본 유지 */ }
             try {
               const nn = normDocName(doc.name);
               if (nn.includes("추적매트릭스") || (nn.includes("요구사항") && nn.includes("추적"))) {
@@ -5347,7 +5491,7 @@ async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
               return { ext, bytes: injected || cur };
             } catch (_) { return { ext, bytes: cur }; }
           }
-          return { ext, bytes };
+          return { ext, bytes: cur };
         }
       }
     } catch (_) { /* 템플릿 조회·다운로드 실패 시 스켈레톤 폴백 */ }
@@ -5587,7 +5731,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
   }
 
   async function remove(g) {
-    if (!window.confirm(`작성 가이드 "${g.name}"를 삭제할까요?\n(전역 라이브러리이므로 모든 프로젝트에서 제거됩니다)`)) return;
+    if (!window.confirm(`작성 가이드 "${g.name}"${josaEul(g.name)} 삭제할까요?\n(전역 라이브러리이므로 모든 프로젝트에서 제거됩니다)`)) return;
     try {
       const r = await fetch(`/api/writing-guides?id=${g.id}`, { method:"DELETE" });
       if (!r.ok) throw new Error(`삭제 실패 (status ${r.status})`);
