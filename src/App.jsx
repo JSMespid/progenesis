@@ -144,7 +144,28 @@ const TAILORING_RULES = [
 // 로그인 시 서버가 발급하는 토큰은 HMAC 서명된 무상태 토큰(payload.signature)이다.
 // 클라이언트는 payload를 화면 표시(이름·역할)용으로만 디코딩하며, 실제 권한 판정은
 // 항상 서버(api/_auth.js requireRole)가 수행한다.
-const AUTH_KEY = "progenesis_auth";
+// ── 제품 브랜드 ───────────────────────────────────────────────────────
+// 화면·산출물에 노출되는 도구 이름은 반드시 이 상수만 사용한다 (문자열 하드코딩 금지).
+const APP_NAME = "SPIDer QA Agent";
+const APP_TAGLINE = "v2.1 · AI Platform";
+const APP_MARK = "S";                       // 로고 이니셜
+
+// localStorage 키 — 브랜드 변경에 따라 접두어를 spiderqa_ 로 통일
+const AUTH_KEY = "spiderqa_auth";
+const DRAFT_KEY = "spiderqa_wizard_draft";
+
+// 구버전 키에서 1회 이관 — 이름 변경으로 로그인 세션·임시저장 초안이 사라지지 않도록 한다.
+// (배포 후 1개 릴리스 주기가 지나면 이 블록과 아래 상수는 삭제해도 무방)
+const _LEGACY_KEYS = [["progenesis_auth", AUTH_KEY], ["progenesis_wizard_draft", DRAFT_KEY], ["progenesis_pbs_noai", "spiderqa_pbs_noai"]];
+(function migrateLocalKeys() {
+  try {
+    for (const [oldK, newK] of _LEGACY_KEYS) {
+      const v = localStorage.getItem(oldK);
+      if (v !== null && localStorage.getItem(newK) === null) localStorage.setItem(newK, v);
+      if (v !== null) localStorage.removeItem(oldK);
+    }
+  } catch { /* 스토리지 접근 불가 환경 — 무시 */ }
+})();
 
 function b64urlDecode(s) {
   let x = String(s || "").replace(/-/g, "+").replace(/_/g, "/");
@@ -156,7 +177,7 @@ function b64urlDecode(s) {
 
 // 저장된 토큰 → 세션 정보.
 // 중요: 토큰을 해석하지 못하더라도 절대 로그아웃시키지 않는다.
-//   - 구버전 고정 토큰("progenesis-session")이나 만료 토큰을 가진 사용자도 앱을 계속 쓰게 하고,
+//   - 구버전 고정 토큰이나 만료 토큰을 가진 사용자도 앱을 계속 쓰게 하고,
 //     관리자 API가 필요한 순간에만 화면 안에서 재인증(ReauthCard)을 요구한다.
 //   - 서버는 만료 후에도 유예기간(60일) 안이면 refresh로 세션을 연장해 준다.
 function decodeSession(token) {
@@ -196,6 +217,9 @@ async function apiFetch(url, opts = {}) {
 // AI 호출 기본값 — 설정(설정 → AI 연동)에서 저장한 값으로 앱 기동 시 덮어쓴다.
 // 기본 매개변수는 호출 시점에 평가되므로 이 객체를 갱신하면 이후 모든 호출에 반영된다.
 const AI_DEFAULTS = { model: "claude-haiku-4-5-20251001", maxTokens: 8000 };
+
+// PBS 추천의 AI 미사용 모드 설정 저장 키 (localStorage)
+const PBS_NOAI_KEY = "spiderqa_pbs_noai";
 
 // 문서 생성 공용 설정 — 설정(설정 → 조직·문서 기본값)에서 저장한 값을 앱 기동 시 주입한다.
 // docxStdParts / getDocLogos / makePdpDocx / makeReqDocx 등 문서 생성 함수가 모두
@@ -308,10 +332,10 @@ function LoginGate({ onSuccess }) {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap'); *{box-sizing:border-box;margin:0;padding:0} @keyframes spin{to{transform:rotate(360deg)}}`}</style>
       <div style={{ width:"100%", maxWidth:360, background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, padding:32 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
-          <div style={{ width:40, height:40, borderRadius:10, background:T.accent, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, fontSize:18, color:"#fff" }}>P</div>
+          <div style={{ width:40, height:40, borderRadius:10, background:T.accent, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, fontSize:18, color:"#fff" }}>{APP_MARK}</div>
           <div>
-            <div style={{ fontSize:18, fontWeight:700 }}>ProGenesis</div>
-            <div style={{ fontSize:11, color:T.muted }}>v2.1 · AI Platform</div>
+            <div style={{ fontSize:18, fontWeight:700 }}>{APP_NAME}</div>
+            <div style={{ fontSize:11, color:T.muted }}>{APP_TAGLINE}</div>
           </div>
         </div>
         <div style={{ fontSize:13, fontWeight:600, marginBottom:14 }}>로그인</div>
@@ -334,8 +358,12 @@ function LoginGate({ onSuccess }) {
 
 // AI JSON 호출 (모듈 공용): /api/chat 프록시 → JSON 파싱·잘림 복구 — 컴포넌트 밖에서도 사용
 async function callClaudeJson(prompt, maxTokens=AI_DEFAULTS.maxTokens, model=AI_DEFAULTS.model) {
+  // /api/chat 는 조직의 Claude API 키를 소비하므로 서버에서 세션 토큰을 검증한다 → 인증 헤더 필수
+  const _tk = getToken();
   const res = await fetch("/api/chat", {
-    method:"POST", headers:{ "Content-Type":"application/json" },
+    method:"POST",
+    headers: _tk ? { "Content-Type":"application/json", "Authorization":`Bearer ${_tk}` }
+                 : { "Content-Type":"application/json" },
     body:JSON.stringify({ model, max_tokens:maxTokens,
       system:"You are a project management expert. Always respond with valid JSON only, no markdown, no preamble. Keep string values concise to ensure the JSON is complete and not truncated.",
       messages:[{ role:"user", content:prompt }] }),
@@ -345,6 +373,8 @@ async function callClaudeJson(prompt, maxTokens=AI_DEFAULTS.maxTokens, model=AI_
 
   // 에러 응답 방어: Anthropic/서버가 에러를 주면 content가 없음
   if (!res.ok || data.error || !data.content) {
+    if (res.status === 401) throw new Error("세션이 만료되었거나 유효하지 않습니다. 다시 로그인한 뒤 시도하세요.");
+    if (res.status === 403) throw new Error("AI 생성 권한이 없습니다. (열람 전용 계정) 관리자에게 문의하세요.");
     const msg = data?.detail?.error?.message || data?.error?.message || data?.error || `요청 실패 (status ${res.status})`;
     throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
   }
@@ -412,7 +442,7 @@ async function callClaudeJson(prompt, maxTokens=AI_DEFAULTS.maxTokens, model=AI_
   throw new Error("AI 응답을 JSON으로 해석할 수 없습니다. 응답 일부: " + cleaned.slice(0, 120));
   }
 
-export default function ProGenesis() {
+export default function SpiderQaAgent() {
   // 세션: 저장된 토큰을 디코딩해 복원. 서명·만료가 깨진 구버전 토큰은 null이 되어
   // 자동으로 로그인 화면이 표시된다(강제 재로그인).
   const [session, setSession] = useState(() => decodeSession(getToken()));
@@ -480,6 +510,10 @@ export default function ProGenesis() {
   const [pdpData, setPdpData] = useState(null);
   const [wbsData, setWbsData] = useState(null);
   const [wbsSetup, setWbsSetup] = useState({ pbsText: "", selected: {} });   // PBS×FBS 매트릭스 설정
+  // PBS 추천 AI 미사용 모드 — 체크 시 /api/chat 호출 없이 프로젝트 유형별 표준 프리셋을 즉시 적용
+  // (폐쇄망 환경·감리 재현성 확보용. 브라우저에 설정을 영속시켜 프로젝트 간 유지)
+  const [pbsNoAi, setPbsNoAi] = useState(() => { try { return localStorage.getItem(PBS_NOAI_KEY) === "1"; } catch { return false; } });
+  function togglePbsNoAi(v) { setPbsNoAi(!!v); try { localStorage.setItem(PBS_NOAI_KEY, v ? "1" : "0"); } catch {} }
   const [deliverablesData, setDeliverablesData] = useState(null);
   const [requirements, setRequirements] = useState(null);   // AI 작성 요구사항: { items:[...], sourceName, updatedAt }
   const [generating, setGenerating] = useState(false);
@@ -631,8 +665,21 @@ export default function ProGenesis() {
     setGenerating(false);
   }
 
-  // PBS(Product Breakdown Structure) 초안을 AI로 추천 — WBS 생성 자체는 매트릭스 기반 결정적 로직으로 수행
+  // PBS(Product Breakdown Structure) 초안 추천 — WBS 생성 자체는 매트릭스 기반 결정적 로직으로 수행
+  // pbsNoAi(AI 미사용 모드)가 켜져 있으면 API 호출 없이 프로젝트 유형별 표준 프리셋을 그대로 적용한다.
+  function applyPbsPreset() {
+    const preset = PBS_PRESETS[projectForm.type] || PBS_PRESETS["신규개발"];
+    setWbsSetup(s => ({ ...s, pbsText: preset.join("\n") }));
+    return preset.length;
+  }
   async function recommendPBS() {
+    if (pbsNoAi) {   // AI 미사용 모드 — 즉시·결정적 적용 (동일 입력 → 동일 결과)
+      setGenError(null);
+      const n = applyPbsPreset();
+      setGenProgress({ percent: 100, label: `AI 미사용 모드 · ${projectForm.type || "신규개발"} 표준 프리셋 ${n}개 요소를 적용했습니다. 내용을 편집해 사용하세요.` });
+      setTimeout(() => setGenProgress(p => (p && p.percent >= 100 ? null : p)), 2500);
+      return;
+    }
     setGenerating(true); setGenError(null);
     try {
       const result = await callClaude(`당신은 PMBOK 8판에 정통한 프로젝트 관리 전문가입니다. 아래 프로젝트의 PBS(Product Breakdown Structure, 제품 분해 구조)를 작성하세요.
@@ -644,8 +691,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       } else { throw new Error("PBS 응답 형식 오류"); }
     } catch(e) {
       // AI 실패 시 프로젝트 유형별 프리셋 PBS로 폴백 — 사용자가 편집하여 사용
-      const preset = PBS_PRESETS[projectForm.type] || PBS_PRESETS["신규개발"];
-      setWbsSetup(s => ({ ...s, pbsText: preset.join("\n") }));
+      applyPbsPreset();
       setGenError("AI PBS 추천 실패로 기본 프리셋을 적용했습니다. 내용을 편집해 사용하세요. ("+e.message+")");
     }
     setGenerating(false);
@@ -755,8 +801,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     setGenerating(false);
   }
 
-  // ── 위저드 임시저장 (localStorage) ─────────────────────────────
-  const DRAFT_KEY = "progenesis_wizard_draft";
+  // ── 위저드 임시저장 (localStorage) — 키는 모듈 스코프 DRAFT_KEY 사용 ──
 
   function saveDraft() {
     try {
@@ -893,6 +938,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
       pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError} genProgress={genProgress}
       onGeneratePDP={generatePDP} onRecommendPBS={recommendPBS} setWbsData={setWbsData}
+      pbsNoAi={pbsNoAi} onTogglePbsNoAi={togglePbsNoAi}
       wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} onGenerateDeliverables={generateDeliverables}
       requirements={requirements} setRequirements={setRequirements}
       onFinish={finishProject} nav={nav} customOSSP={customOSSP}
@@ -941,8 +987,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       {/* 모바일 헤더 */}
       <div className="mobile-header" style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 18px", background:T.surface, borderBottom:`1px solid ${T.border}`, position:"sticky", top:0, zIndex:100 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-          <div style={{ width:30, height:30, background:`linear-gradient(135deg,${T.accent},#7C3AED)`, borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, fontWeight:800, color:"#fff" }}>P</div>
-          <div style={{ fontSize:14, fontWeight:700 }}>ProGenesis</div>
+          <div style={{ width:30, height:30, background:`linear-gradient(135deg,${T.accent},#7C3AED)`, borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, fontWeight:800, color:"#fff" }}>{APP_MARK}</div>
+          <div style={{ fontSize:14, fontWeight:700 }}>{APP_NAME}</div>
         </div>
         <button onClick={()=>setMenuOpen(!menuOpen)} style={{ background:"none", border:"none", color:T.text, fontSize:22, cursor:"pointer", padding:"4px 8px" }}>
           {menuOpen ? "✕" : "☰"}
@@ -972,8 +1018,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         <aside className="sidebar" style={{ display:"none", width:220, background:T.surface, borderRight:`1px solid ${T.border}`, flexDirection:"column", padding:"24px 0", flexShrink:0 }}>
           <div style={{ padding:"0 20px 24px", borderBottom:`1px solid ${T.border}` }}>
             <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-              <div style={{ width:34, height:34, background:`linear-gradient(135deg,${T.accent},#7C3AED)`, borderRadius:9, display:"flex", alignItems:"center", justifyContent:"center", fontSize:17, fontWeight:800, color:"#fff" }}>P</div>
-              <div><div style={{ fontSize:15, fontWeight:700, letterSpacing:-0.3 }}>ProGenesis</div><div style={{ fontSize:10, color:T.muted }}>v2.1 · AI Platform</div></div>
+              <div style={{ width:34, height:34, background:`linear-gradient(135deg,${T.accent},#7C3AED)`, borderRadius:9, display:"flex", alignItems:"center", justifyContent:"center", fontSize:17, fontWeight:800, color:"#fff" }}>{APP_MARK}</div>
+              <div><div style={{ fontSize:15, fontWeight:700, letterSpacing:-0.3 }}>{APP_NAME}</div><div style={{ fontSize:10, color:T.muted }}>{APP_TAGLINE}</div></div>
             </div>
           </div>
           <nav style={{ padding:"14px 10px", flex:1, display:"flex", flexDirection:"column", gap:2 }}>
@@ -1121,7 +1167,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, requirements, setRequirements, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, saving, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, pbsNoAi, onTogglePbsNoAi, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, requirements, setRequirements, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, saving, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
   const steps = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   const canNext = [
     form.name&&form.client&&form.startDate&&form.endDate&&form.pm,  // 0 기본정보
@@ -1196,7 +1242,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===2 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} sdlc={selectedSDLC} />}
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
-        {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} onRecommendPBS={onRecommendPBS} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} />}
+        {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} genProgress={genProgress} onRecommendPBS={onRecommendPBS} pbsNoAi={pbsNoAi} onTogglePbsNoAi={onTogglePbsNoAi} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} />}
         {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genProgress={genProgress} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} requirements={requirements} setRequirements={setRequirements} pdpCtx={{ ossp:selectedOSSP, sdlc:selectedSDLC, tailoring, pdp:pdpData, requirements }} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} tailoring={tailoring} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
@@ -2411,7 +2457,7 @@ function HolidayCalendar({ holidays, onToggle }) {
   );
 }
 
-function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wbsSetup, setWbsSetup, tailoring, ossp }) {
+function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRecommendPBS, pbsNoAi, onTogglePbsNoAi, wbsSetup, setWbsSetup, tailoring, ossp }) {
   const guide = getGuideForOSSP(ossp);
   const scale = tailoring?.scale || "중형";
   const method = tailoring?.method || "UML";
@@ -2619,17 +2665,36 @@ function StepWBS({ wbsData, setWbsData, generating, genError, onRecommendPBS, wb
       <div style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>① 시스템 구성요소 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>(제품 분해 구조, PBS) · {leaves.length}개 요소</span></div>
-          <Btn variant="outline" onClick={onRecommendPBS} disabled={generating} style={{ fontSize: 11, padding: "4px 10px" }}>
-            {generating ? "추천 중…" : "⚡ AI 추천"}
-          </Btn>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {/* AI 미사용 모드 — 체크 시 Claude API를 호출하지 않고 유형별 표준 프리셋을 적용 (폐쇄망·재현성) */}
+            <label title="체크하면 Claude API를 호출하지 않고 프로젝트 유형별 표준 프리셋을 적용합니다. (폐쇄망 환경·감리 재현성 확보용)"
+              style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: pbsNoAi ? T.amber : T.muted, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}>
+              <input type="checkbox" checked={!!pbsNoAi} onChange={e => onTogglePbsNoAi?.(e.target.checked)}
+                style={{ accentColor: T.amber, cursor: "pointer", margin: 0 }} />
+              AI 미사용
+            </label>
+            <Btn variant="outline" onClick={onRecommendPBS} disabled={generating} style={{ fontSize: 11, padding: "4px 10px" }}>
+              {pbsNoAi ? "📋 표준 프리셋 적용" : (generating ? "추천 중…" : "⚡ AI 추천")}
+            </Btn>
+          </div>
         </div>
-        {generating && <div style={{ marginBottom: 6 }}><Spinner text="프로젝트 정보 기반 시스템 구성요소 구성 중…" /></div>}
+        {!pbsNoAi && generating && <div style={{ marginBottom: 6 }}><Spinner text="프로젝트 정보 기반 시스템 구성요소 구성 중…" /></div>}
+        {pbsNoAi && genProgress?.label && (
+          <div style={{ fontSize: 11, color: T.green, background: T.green + "11", border: `1px solid ${T.green}44`, borderRadius: 8, padding: "7px 11px", marginBottom: 6 }}>
+            ✓ {genProgress.label}
+          </div>
+        )}
         <textarea value={pbsText}
           onChange={e => setWbsSetup(s => ({ ...s, pbsText: e.target.value }))}
           placeholder={"한 줄에 하나씩 \"L1 > L2 > L3\" 형식으로 입력하세요.\n예)\n포털시스템 > 사용자관리 > 로그인\n포털시스템 > 사용자관리 > 권한관리\n포털시스템 > 게시판\n인터페이스 > 공통"}
           rows={6}
           style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 12px", color: T.text, fontSize: 12, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.7 }} />
         <div style={{ fontSize: 10, color: T.muted, marginTop: 4 }}>※ L3을 사용하려면 L2가 있어야 합니다. 여러 요소에 공통 적용되는 부분은 L2에 "공통"을 사용하세요 (WBS에서 중복 허용).</div>
+        <div style={{ fontSize: 10, color: pbsNoAi ? T.amber : T.muted, marginTop: 3 }}>
+          {pbsNoAi
+            ? "※ AI 미사용 모드: Claude API를 호출하지 않고 프로젝트 유형별 표준 프리셋을 적용합니다. 동일 입력에 항상 동일한 결과가 나오며, 폐쇄망에서도 동작합니다. 적용 후 내용을 편집해 사용하세요."
+            : "※ AI 추천은 프로젝트 정보를 Claude API로 전송합니다. 외부 전송이 제한된 환경이거나 결과 재현성이 필요하면 \u0027AI 미사용\u0027을 체크하세요."}
+        </div>
       </div>
 
       {/* 2. 단계별 산출물 × 시스템 구성요소 매트릭스 */}
@@ -3773,7 +3838,7 @@ function makeDocx({ title, metaRows, purpose, doc, catName, meta }) {
     docxP("2. 본문", { bold: true, size: 26, spacingAfter: 160 }) +
     docxP("(작성)") +
     docxP("3. 문서 이력", { bold: true, size: 26, spacingAfter: 160 }) +
-    docxTable([["버전", "일자", "작성자", "변경 내용"], ["V0.1", new Date().toLocaleDateString("ko-KR"), "", "최초 작성 (ProGenesis 자동 생성)"]], -1);
+    docxTable([["버전", "일자", "작성자", "변경 내용"], ["V0.1", new Date().toLocaleDateString("ko-KR"), "", `최초 작성 (${APP_NAME} 자동 생성)`]], -1);
   return docxPackage(body);
 }
 // 본문(body XML) → docx 파일 바이트 (공통 패키징)
@@ -4742,7 +4807,7 @@ function makeWbsGanttXlsx(wbs, meta) {
     ["   · 복수 선행: 쉼표로 구분하면 가장 늦은 시작일이 채택됩니다 (예: 1.1, 1.2+1).", false],
     ["   · 제약: 선행은 자신보다 위쪽 행의 작업만 참조할 수 있습니다 (순환 참조 방지).", false],
     ["   · 선행 열은 텍스트 서식이므로 1.1처럼 입력하면 WBS 코드로 정확히 인식됩니다.", false],
-    ["   · 단순 FS(지연 없는 단일 선행)는 이 시트에서 선행(E)을 고쳐도 즉시 재연결됩니다. 지연·SS·복수 선행은 생성 시점 관계로 고정되므로, 관계를 바꾸려면 ProGenesis 화면에서 수정 후 다시 내보내세요.", false],
+    [`   · 단순 FS(지연 없는 단일 선행)는 이 시트에서 선행(E)을 고쳐도 즉시 재연결됩니다. 지연·SS·복수 선행은 생성 시점 관계로 고정되므로, 관계를 바꾸려면 ${APP_NAME} 화면에서 수정 후 다시 내보내세요.`, false],
     ["4. MS Project로 가져오기", true],
     ["   · [파일] > [열기]에서 이 파일을 선택하고 마법사에서 '새 맵'을 만들어 열을 매핑합니다.", false],
     ["   · 선행(E) 열은 '선행 작업(Predecessors)'이 아니라 'WBS 선행 작업(WBS Predecessors)' 필드에 매핑하세요.", false],
@@ -4758,7 +4823,7 @@ function makeWbsGanttXlsx(wbs, meta) {
     ["7. 행 그룹(개요)", true],
     ["   · 좌측 개요 버튼(1/2/3…)으로 단계별 하위 작업을 접거나 펼 수 있습니다.", false],
     ["", false],
-    ["※ 본 워크북은 ProGenesis가 표준 엑셀 기능(수식·조건부 서식)만으로 자동 생성한 문서입니다 (매크로 없음).", false],
+    [`※ 본 워크북은 ${APP_NAME}가 표준 엑셀 기능(수식·조건부 서식)만으로 자동 생성한 문서입니다 (매크로 없음).`, false],
   ];
   const usageRows = usage.map(([t, b], i) => `<row r="${i + 1}">${cStr(i + 1, 0, t, b ? S.usageHead : S.usage)}</row>`);
   const usageSheet = XMLH +
@@ -6938,7 +7003,7 @@ function UsersTab({ flash, session }) {
     <div>
       <SettingsSection
         title="사용자 계정"
-        desc="ProGenesis에 로그인할 계정을 등록합니다. 비밀번호는 PBKDF2-SHA256 해시로만 저장되며 평문은 어디에도 보관되지 않습니다. 역할에 따라 설정 접근 권한이 달라집니다."
+        desc={`${APP_NAME}에 로그인할 계정을 등록합니다. 비밀번호는 PBKDF2-SHA256 해시로만 저장되며 평문은 어디에도 보관되지 않습니다. 역할에 따라 설정 접근 권한이 달라집니다.`}
         right={<Btn variant={showAdd ? "ghost" : "primary"} onClick={() => { setShowAdd(!showAdd); setF(blank); }}
           style={{ fontSize: 12, padding: "6px 14px" }}>{showAdd ? "취소" : "+ 사용자 등록"}</Btn>}
       >
