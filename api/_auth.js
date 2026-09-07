@@ -119,9 +119,13 @@ export async function putSetting(key, value) {
 let _secrets = { at: 0, current: null, all: [] };
 const SECRET_CACHE_TTL = 60 * 1000;
 
+// DB를 쓸 수 없을 때만 사용하는 최후 폴백 서명 키
+const FALLBACK_SECRET = 'spider-qa-agent-fallback-secret';
 // 예전 버전이 서명에 사용했던 키들 — 이미 발급된 토큰이 무효화되지 않도록 검증에도 포함
+// (브랜드 변경 이전의 폴백 키 포함. 배포 후 1개 릴리스 주기가 지나면 제거 가능)
 function legacySecrets() {
-  return [process.env.APP_SESSION_SECRET, process.env.SUPABASE_SERVICE_KEY, process.env.APP_LOGIN_PW]
+  return [process.env.APP_SESSION_SECRET, process.env.SUPABASE_SERVICE_KEY, process.env.APP_LOGIN_PW,
+          'progenesis-fallback-secret']
     .filter(Boolean);
 }
 
@@ -147,7 +151,7 @@ async function loadSecrets() {
     }
   } catch {
     // DB를 쓸 수 없는 상황(테이블 미생성 등) — 환경변수 체인으로 동작해 기능 중단을 막는다
-    current = envSecret || process.env.SUPABASE_SERVICE_KEY || process.env.APP_LOGIN_PW || 'progenesis-fallback-secret';
+    current = envSecret || process.env.SUPABASE_SERVICE_KEY || process.env.APP_LOGIN_PW || FALLBACK_SECRET;
     all.push(current);
   }
 
