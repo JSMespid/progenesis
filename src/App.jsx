@@ -4691,6 +4691,50 @@ function templateDocCodePairs(xml, meta) {
 // 그런 표는 토큰 치환으로는 아무것도 채워지지 않으므로, 라벨 오른쪽 빈 칸을 직접 채운다.
 // 안전 규칙: (1) 비어 있는 칸만 채운다 (2) 옆칸도 라벨이면 건너뛴다 (3) 표 안에서만 동작한다.
 //   → 서명란처럼 표 밖의 "작성자: ___" 문단은 손대지 않는다 (수기 서명용으로 비워 두는 자리).
+// ── 결재란(사용 권한) 라벨 채우기 ──────────────────────────────────
+// 템플릿의 "작성자:" / "검토자:" / "승인자:" 뒤에 이름을 붙인다.
+// 자체 생성 문서(docxSignLine)와 같은 규칙 — 이름만 채우고 서명·일자는 수기용으로 비워 둔다.
+// 라벨만 홀로 있는 문단·셀에만 적용해, 문장 속의 같은 낱말은 건드리지 않는다.
+const SIGN_LABEL_RE = /^(작성자|검토자|승인자)\s*[:：]$/;
+function signLabelNames(meta) {
+  const v = {
+    "작성자": docMetaValue(meta, "author") || meta?.pm || "",
+    "검토자": docMetaValue(meta, "reviewer"),
+    "승인자": docMetaValue(meta, "approver"),
+  };
+  Object.keys(v).forEach(k => { if (String(v[k] || "").trim() === "") delete v[k]; });
+  return v;
+}
+function fillSignLabels(xml, names, isDocx) {
+  if (!Object.keys(names).length) return xml;
+  const esc = x => String(x ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const blockRe = isDocx ? /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g : /<si>[\s\S]*?<\/si>/g;
+  const textRe = isDocx ? /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g : /<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g;
+  return xml.replace(blockRe, blk => {
+    const txt = [...blk.matchAll(textRe)].map(m => m[1]).join("").trim();
+    const m = SIGN_LABEL_RE.exec(txt);
+    if (!m) return blk;
+    const nm = names[m[1]];
+    if (!nm) return blk;
+    if (isDocx) {
+      // 마지막 run의 글꼴을 물려받아 이름 run을 문단 끝에 덧붙인다
+      const runs = [...blk.matchAll(/<w:r\b[\s\S]*?<\/w:r>/g)];
+      if (!runs.length) return blk;
+      const rPr = /<w:rPr>[\s\S]*?<\/w:rPr>/.exec(runs[runs.length - 1][0])?.[0] || "";
+      const add = `<w:r>${rPr}<w:t xml:space="preserve"> ${esc(nm)}</w:t></w:r>`;
+      return blk.slice(0, blk.length - "</w:p>".length) + add + "</w:p>";
+    }
+    // xlsx 공유문자열: 마지막 <t>의 끝에 이름을 이어 붙인다 (병합 셀과 무관하게 동작)
+    const ts = [...blk.matchAll(/<t(?:\s[^>]*)?>[\s\S]*?<\/t>/g)];
+    if (!ts.length) return blk;
+    const last = ts[ts.length - 1];
+    const opened = /^<t(?:\s[^>]*)?>/.exec(last[0])[0];
+    const inner = last[0].slice(opened.length, -"</t>".length);
+    const rebuilt = `<t xml:space="preserve">${inner} ${esc(nm)}</t>`;
+    return blk.slice(0, last.index) + rebuilt + blk.slice(last.index + last[0].length);
+  });
+}
+
 function tableLabelValues(meta, docNo) {
   const today = new Date().toISOString().slice(0, 10);
   const v = {
@@ -4749,7 +4793,8 @@ function applyTemplateMeta(files, meta, doc) {
   const docNo = templateDocNo(meta, doc);
   const pairs = reqTplPlaceholderPairs(meta, docNo);
   const labelVals = tableLabelValues(meta, docNo);
-  if (!pairs.length && !Object.keys(labelVals).length) return false;
+  const signNames = signLabelNames(meta);
+  if (!pairs.length && !Object.keys(labelVals).length && !Object.keys(signNames).length) return false;
   const td = new TextDecoder();
   let changed = false;
   files.forEach(f => {
@@ -4761,9 +4806,10 @@ function applyTemplateMeta(files, meta, doc) {
     // run 분할 대응: docx는 문단 단위, xlsx 공유문자열은 <si> 단위로 텍스트를 합쳐 치환한다.
     // 문서코드 쌍은 합쳐진 텍스트에서 그때그때 찾아야 "ie.f.RD"+"1301" 분할을 잡을 수 있다.
     const codesFor = t => docCodePairsFromText(t, meta);
-    const out = isDocx ? docxFillLabeledCells(docxReplacePlaceholders(xml, pairs, codesFor), labelVals)
+    const out = isDocx
+      ? fillSignLabels(docxFillLabeledCells(docxReplacePlaceholders(xml, pairs, codesFor), labelVals), signNames, true)
       : f.path === "xl/sharedStrings.xml"
-        ? xlsxSiReplaceAll(xml, pairs, codesFor)
+        ? fillSignLabels(xlsxSiReplaceAll(xml, pairs, codesFor), signNames, false)
         : xmlTextReplaceAll(xml, [...pairs, ...templateDocCodePairs(xml, meta)]);
     if (out !== xml) { f.content = out; changed = true; }
   });
@@ -4859,6 +4905,28 @@ function reqSourceGroup(source) {
   return (head && head.length <= 20) ? head : "";
 }
 
+// ── 명세 본문 들여쓰기 ────────────────────────────────────────────────
+// 텍스트 앞 공백으로 들여쓰면 첫 줄만 밀리고 줄바꿈된 다음 줄은 왼쪽 끝에 붙는다.
+// 선행 공백을 실제 문단 들여쓰기(w:ind)로 바꿔, 줄이 몇 번 넘어가도 정렬이 유지되게 한다.
+// "1)" "2.1" "▪" 처럼 항목 기호로 시작하면 내어쓰기(hanging)를 줘 기호 뒤에 본문이 맞춰지게 한다.
+const IND_PER_SPACE = 110;   // 공백 1칸 = 110 트윕
+const IND_HANGING = 330;     // 항목 기호 자리 폭
+const ITEM_MARKER_RE = /^(?:[0-9]+(?:\.[0-9]+)*[.)]?|[▪•▸-])\s+/;
+function indentedParagraphPr(pPr, line) {
+  const lead = /^[ \t]*/.exec(line)[0];
+  const text = line.slice(lead.length);
+  const spaces = lead.replace(/\t/g, "    ").length;
+  const hang = ITEM_MARKER_RE.test(text) ? IND_HANGING : 0;
+  const left = spaces * IND_PER_SPACE + hang;
+  if (!left) return { pPr, text };
+  const ind = `<w:ind w:left="${left}"${hang ? ` w:hanging="${hang}"` : ""}/>`;
+  let inner = /<w:pPr>([\s\S]*?)<\/w:pPr>/.exec(pPr || "")?.[1] || "";
+  inner = inner.replace(/<w:ind\b[^>]*\/>/g, "").replace(/<w:ind\b[\s\S]*?<\/w:ind>/g, "");
+  const at = inner.indexOf("<w:jc");                 // w:ind 는 w:jc 앞에 와야 한다
+  inner = at >= 0 ? inner.slice(0, at) + ind + inner.slice(at) : inner + ind;
+  return { pPr: `<w:pPr>${inner}</w:pPr>`, text };
+}
+
 async function injectRequirementsIntoSpecDocx(bytes, meta, req, doc) {
   const items0 = req?.items;
   if (!items0?.length) return null;
@@ -4894,9 +4962,12 @@ async function injectRequirementsIntoSpecDocx(bytes, meta, req, doc) {
     const firstP = /<w:p\b[\s\S]*?<\/w:p>/.exec(tc);
     const pPr = firstP ? (/<w:pPr>[\s\S]*?<\/w:pPr>/.exec(firstP[0])?.[0] || "") : "";
     const rPr = firstP ? (/<w:rPr>[\s\S]*?<\/w:rPr>/.exec(firstP[0])?.[0] || "") : "";
-    const ps = (lines.length ? lines : [""]).map(l => String(l).trim() === ""
-      ? `<w:p>${pPr}</w:p>`
-      : `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${escX(l)}</w:t></w:r></w:p>`).join("");
+    const ps = (lines.length ? lines : [""]).map(l => {
+      const raw = String(l);
+      if (raw.trim() === "") return `<w:p>${pPr}</w:p>`;
+      const ip = indentedParagraphPr(pPr, raw);
+      return `<w:p>${ip.pPr}<w:r>${rPr}<w:t xml:space="preserve">${escX(ip.text)}</w:t></w:r></w:p>`;
+    }).join("");
     return `${open}${tcPr}${ps}</w:tc>`;
   };
   // 빈 블록 1개를 요구사항 1건으로 채운 사본 생성
