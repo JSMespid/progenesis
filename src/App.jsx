@@ -3950,13 +3950,27 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
     const hasC = coverDrawXml.includes(`r:embed="${info.C ? info.C.relId : ""}"`) && !!info.C;
     const hasW = coverDrawXml.includes(`r:embed="${info.W ? info.W.relId : ""}"`) && !!info.W;
     const g = sheetGeom(cvXml);
+    // 오른쪽 끝선 기준 열 — 우측 정렬된 제목·문서번호·날짜가 들어 있는 병합 범위의 끝 열을 쓴다.
+    // <dimension>은 값 없이 서식만 있는 열까지 포함해 실제 표 오른쪽 끝보다 넓게 잡히는 경우가 있다.
+    const colIdxOf = l => { let c = 0; for (const ch of l) c = c * 26 + (ch.charCodeAt(0) - 64); return c - 1; };
     const dimL = /<dimension ref="[A-Z]+\d+:([A-Z]+)\d+"/.exec(cvXml)?.[1] || "L";
-    let lastCol = 0; for (const ch of dimL) lastCol = lastCol * 26 + (ch.charCodeAt(0) - 64); lastCol -= 1;
-    let rightEdge = 0; for (let c2 = 0; c2 <= lastCol; c2++) rightEdge += g.colWEmu(c2);
+    let lastCol = colIdxOf(dimL);
+    const mergeEnd = g.merges.reduce((mx, pair) => Math.max(mx, refCR(pair[1]).c), -1);
+    if (mergeEnd >= 0) lastCol = Math.min(lastCol, mergeEnd);
     const anchors = []; const kinds = [];
+    // 셀 기준(oneCellAnchor)으로 배치한다. 열의 절대 위치는 Excel이 직접 계산하므로
+    // 우리 열 폭 추정의 오차가 마지막 한두 열 안으로만 남는다.
+    // (절대좌표 방식은 A열부터의 추정 오차가 전부 누적되어 오른쪽으로 밀려난다)
+    const RIGHT_MARGIN = 30000;
     const placeRight = (k, row, cy) => {
       const cx = Math.max(1, Math.round(cy * info[k].ratio));
-      return absAnchor(k, Math.max(0, rightEdge - 30000 - cx), g.rowTop(row) + 20000, cy);
+      let need = cx + RIGHT_MARGIN, c = lastCol;
+      while (c >= 0) {
+        const w = g.colWEmu(c);
+        if (w >= need) return picAnchor(k, c, row, cy, Math.max(0, Math.round(w - need)), 20000);
+        need -= w; c -= 1;
+      }
+      return picAnchor(k, 0, row, cy, 0, 20000);
     };
     if (cl && !hasC) { anchors.push(placeRight("C", 13, 324000)); kinds.push("C"); }   // 14행 부근 고객사 로고
     if (co && !hasW) { anchors.push(placeRight("W", 16, 324000)); kinds.push("W"); }   // 17행 부근 우리회사 로고
@@ -4707,6 +4721,19 @@ function signLabelNames(meta) {
 }
 function fillSignLabels(xml, names, isDocx) {
   if (!Object.keys(names).length) return xml;
+  if (!isDocx) return fillSignLabelsIn(xml, names, false);
+  // docx는 표 밖 문단에만 적용한다 — 표 안은 docxFillLabeledCells가 라벨 옆칸에 이미 채웠다.
+  // 둘 다 적용하면 "작성자: 장성문" 옆에 또 "장성문"이 붙어 이름이 두 번 나온다.
+  const parts = []; let last = 0;
+  for (const m of xml.matchAll(/<w:tbl>[\s\S]*?<\/w:tbl>/g)) {
+    parts.push(fillSignLabelsIn(xml.slice(last, m.index), names, true));
+    parts.push(m[0]);
+    last = m.index + m[0].length;
+  }
+  parts.push(fillSignLabelsIn(xml.slice(last), names, true));
+  return parts.join("");
+}
+function fillSignLabelsIn(xml, names, isDocx) {
   const esc = x => String(x ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const blockRe = isDocx ? /<w:p\b[^>]*>[\s\S]*?<\/w:p>/g : /<si>[\s\S]*?<\/si>/g;
   const textRe = isDocx ? /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g : /<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g;
@@ -4727,11 +4754,10 @@ function fillSignLabels(xml, names, isDocx) {
     // xlsx 공유문자열: 마지막 <t>의 끝에 이름을 이어 붙인다 (병합 셀과 무관하게 동작)
     const ts = [...blk.matchAll(/<t(?:\s[^>]*)?>[\s\S]*?<\/t>/g)];
     if (!ts.length) return blk;
-    const last = ts[ts.length - 1];
-    const opened = /^<t(?:\s[^>]*)?>/.exec(last[0])[0];
-    const inner = last[0].slice(opened.length, -"</t>".length);
-    const rebuilt = `<t xml:space="preserve">${inner} ${esc(nm)}</t>`;
-    return blk.slice(0, last.index) + rebuilt + blk.slice(last.index + last[0].length);
+    const lastT = ts[ts.length - 1];
+    const opened = /^<t(?:\s[^>]*)?>/.exec(lastT[0])[0];
+    const inner = lastT[0].slice(opened.length, -"</t>".length);
+    return blk.slice(0, lastT.index) + `<t xml:space="preserve">${inner} ${esc(nm)}</t>` + blk.slice(lastT.index + lastT[0].length);
   });
 }
 
@@ -4765,10 +4791,24 @@ function docxFillLabeledCells(xml, values) {
     if ((tbl.match(/<w:tbl>/g) || []).length !== 1) return tbl;   // 중첩 표 잘림 조각 배제
     const tcs = [...tbl.matchAll(tcRe)].map(m => m[0]);
     const texts = tcs.map(cellText);
+    // 라벨-값 인접 판정은 같은 행 안에서만 한다.
+    // 표 전체를 한 줄로 이어 보면 행 끝 라벨(예: 개정이력 머리글의 '작성자')이
+    // 다음 행 첫 칸(버전)을 값 칸으로 오인해 엉뚱한 자리를 채운다.
+    const rowEnd = [];   // 각 tc가 속한 행의 마지막 tc 인덱스
+    {
+      let k2 = 0;
+      for (const tr of (tbl.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) || [])) {
+        const n = (tr.match(tcRe) || []).length;
+        for (let j = 0; j < n; j++) rowEnd[k2 + j] = k2 + n - 1;
+        k2 += n;
+      }
+      for (let j = 0; j < tcs.length; j++) if (rowEnd[j] === undefined) rowEnd[j] = tcs.length - 1;
+    }
     const fill = {};
     for (let i = 0; i < tcs.length - 1; i++) {
       const val = values[norm(texts[i])];
       if (val === undefined) continue;
+      if (i + 1 > rowEnd[i]) continue;                            // 행의 마지막 칸이면 값 칸이 없다
       if (texts[i + 1] !== "") continue;                          // 이미 값이 있으면 건드리지 않는다
       if (values[norm(texts[i + 1])] !== undefined) continue;     // 옆칸도 라벨이면 값 칸이 아니다
       fill[i + 1] = val;
@@ -5861,8 +5901,9 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
     for (const doc of (cat.documents || [])) {
       const pi = prioInfo(doc.priority);
       // 서명본은 파일을 만들지 않고 목록에만 기록한다
+      const docNoOf = d => docCodeWithPrefix(d.code || "", meta) || "-";
       if (isSignOffDoc(doc.name)) {
-        manifest.push([folder, doc.wbsNo || "-", doc.code || "-", doc.name, "서명본", pi.label, signOffNote(doc.name)]);
+        manifest.push([folder, doc.wbsNo || "-", doc.code || "-", docNoOf(doc), doc.name, "서명본", pi.label, signOffNote(doc.name)]);
         signOff += 1; done += 1;
         continue;
       }
@@ -5873,7 +5914,7 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
       const codePart = sanitize(doc.code || "");
       const wbsPart = sanitize(doc.wbsNo || "");   // 동일 산출물명이 여러 Task에 있어도 WBS 번호로 파일명 구분
       files.push({ path: `${folder}/[${pi.label}] ${wbsPart ? wbsPart + "_" : ""}${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`, content: of.bytes });
-      manifest.push([folder, doc.wbsNo || "-", doc.code || "-", doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
+      manifest.push([folder, doc.wbsNo || "-", doc.code || "-", docNoOf(doc), doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
       total += 1; if (pi.label === "필수(M)") mand += 1;
     }
   }
@@ -5884,7 +5925,7 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
     ["전체", `${total}건 (필수(M) ${mand} · 선택(O) ${total - mand})`],
     ...(signOff ? [["서명본", `${signOff}건 — 원본 문서를 출력해 서명받는 문서로, 파일을 생성하지 않습니다`]] : []),
     [],
-    ["폴더", "WBS", "코드", "산출물", "형식", "구분", "목적"],
+    ["폴더", "WBS", "코드", "문서번호", "산출물", "형식", "구분", "목적"],
     ...manifest,
   ] }) });
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
