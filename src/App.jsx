@@ -4773,6 +4773,16 @@ async function injectRequirementsIntoDefXlsx(bytes, meta, req) {
 
 // 명세서(RD1301) docx 템플릿 채움: 표지 placeholder 치환 + 기능·비기능·인터페이스의 빈 명세 블록 표를
 // 요구사항 수만큼 복제해 기입 (작성가이드·작성예 표는 그대로 유지). 모듈 문서는 해당 모듈 배정분 + 공통만 담는다.
+// 요구사항 출처에서 이해관계자 그룹(=관련부서)을 뽑는다. "구매팀_납기변경" → "구매팀"
+// 구분자가 없거나 지나치게 긴 값은 부서명이 아니므로 비워 둔다.
+function reqSourceGroup(source) {
+  const s = String(source || "").trim();
+  const i = s.indexOf("_");
+  if (i <= 0) return "";
+  const head = s.slice(0, i).trim();
+  return (head && head.length <= 20) ? head : "";
+}
+
 async function injectRequirementsIntoSpecDocx(bytes, meta, req, doc) {
   const items0 = req?.items;
   if (!items0?.length) return null;
@@ -4822,7 +4832,11 @@ async function injectRequirementsIntoSpecDocx(bytes, meta, req, doc) {
       "요구사항설명": it.summary || "",
       "유형": (it.type || "") + (it.type === "비기능" && it.quality ? ` (${it.quality})` : ""),
       "중요도": it.priority || "중",
-      "난이도": "", "안정성": "", "관련부서": "", "발의자": "",
+      // 관련부서는 원문의 이해관계자 그룹에서 도출한다.
+      // 난이도·안정성은 분석·설계 단계의 평가값이고 발의자는 개인 식별 정보라,
+      // 요구정의 시점의 원문에 근거가 없다 → 임의로 채우지 않고 공란으로 남긴다.
+      "난이도": "", "안정성": "", "발의자": "",
+      "관련부서": reqSourceGroup(it.source),
       "출처": it.source || "",
       "승인조건": it.acceptance || "",
     };
