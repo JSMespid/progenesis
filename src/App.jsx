@@ -392,6 +392,36 @@ function docApprovers(meta) {
 
 // 위저드에서 프로젝트별로 덮어쓸 수 있는 문서 메타 필드
 const DOC_OVERRIDE_FIELDS = ["codePrefix", "author", "reviewer", "approver", "distribution", "orgName", "orgNameEn", "dept"];
+
+// ── 시스템명 ──────────────────────────────────────────────────────────
+// 문서 머리말의 '시스템'란은 구축 대상 시스템의 이름이며 프로젝트(사업)명과 다르다.
+// 프로젝트 고유값이므로 조직 기본값 체인(docMeta)에 태우지 않고 기본정보에서 직접 받는다.
+// 비워두면 프로젝트명 끝의 사업 접미어를 떼어 도출한다.
+//   "협력사 납품관리 시스템 구축" → "협력사 납품관리 시스템"
+//   "차세대 ERP 구축 사업"        → "차세대 ERP"
+// 긴 접미어를 먼저 검사한다 — "재구축"보다 "구축"이 먼저 걸리면 "…재"만 남는다
+const PROJECT_NAME_SUFFIXES = ["고도화", "재구축", "프로젝트", "구축", "개발", "전환", "이행", "구현", "도입", "사업", "용역", "과업"]
+  .sort((a, b) => b.length - a.length);
+function deriveSystemName(projectName) {
+  const src = String(projectName || "").trim();
+  let s = src;
+  for (let i = 0; i < 3; i++) {           // "…시스템 구축 사업"처럼 겹쳐 붙은 경우 대응
+    const before = s;
+    for (const suf of PROJECT_NAME_SUFFIXES) {
+      const re = new RegExp(`[\\s·]*${suf}$`);
+      if (!re.test(s)) continue;
+      const cut = s.replace(re, "").trim();
+      if (cut) { s = cut; break; }        // 전부 잘려 빈 값이 되면 자르지 않는다
+    }
+    if (s === before) break;
+  }
+  return s || src;
+}
+// meta는 위저드에서는 projectForm, 저장 프로젝트에서는 project 객체가 넘어온다
+function systemNameOf(meta) {
+  const v = String(meta?.systemName || meta?.tailoring?.systemName || "").trim();
+  return v || deriveSystemName(meta?.name);
+}
 const DISTRIBUTION_OPTIONS = ["사내 한정", "고객사 공유", "대외비", "공개"];
 
 const ROLE_LABELS = { admin: "관리자", pm: "PM", qa: "품질보증담당자", viewer: "조회 전용", legacy: "재인증 필요" };
@@ -597,7 +627,7 @@ export default function SpiderQaAgent() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
-  const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", startDate:"", endDate:"", pm:"",
+  const [projectForm, setProjectForm] = useState({ name:"", client:"", type:"신규개발", systemName:"", startDate:"", endDate:"", pm:"",
     members:[],   // 프로젝트 수행 팀원 [{id,name,role,org,auto}] — WBS 작업자 콤보박스의 원천
     ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=""; return o; }, {}), clientLogo:null, companyLogo:null });
   const [selectedOSSP, setSelectedOSSP] = useState(null);
@@ -951,7 +981,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   function editProject(p) {
     setEditingId(p.id);
     const dm = p.tailoring?.docMeta || {};
-    setProjectForm({ name:p.name||"", client:p.client||"", type:p.type||"신규개발", startDate:p.startDate||"", endDate:p.endDate||"", pm:p.pm||"",
+    setProjectForm({ name:p.name||"", client:p.client||"", type:p.type||"신규개발", systemName:p.tailoring?.systemName||"",
+      startDate:p.startDate||"", endDate:p.endDate||"", pm:p.pm||"",
       members: normalizeMembers(p.tailoring?.members),
       ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=dm[k]||""; return o; }, {}),
       clientLogo:p.tailoring?.logos?.client||null, companyLogo:p.tailoring?.logos?.company||null });
@@ -985,6 +1016,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       status:"진행중", ossp:selectedOSSP,
       // sdlc 전용 컬럼 없이 tailoring(JSON)에 함께 보존 → DB 스키마 변경 불필요
       tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors, requirements: requirements||null,
+        // 시스템명 — 전용 컬럼 없이 tailoring(JSON)에 보존 (DB 스키마 변경 불필요)
+        systemName: String(projectForm.systemName || "").trim(),
         // 수행 팀원 명단 — 전용 컬럼 없이 tailoring(JSON)에 보존
         members: normalizeMembers(projectForm.members),
         logos:{ client:projectForm.clientLogo||null, company:projectForm.companyLogo||null },
@@ -1018,7 +1051,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       return;
     }
     setEditingId(null);
-    setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",startDate:"",endDate:"",pm:"",
+    setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",systemName:"",startDate:"",endDate:"",pm:"",
       ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=""; return o; }, {}) });
     setTimeout(()=>{ if (appSettings) applySettingsDefaults(appSettings); }, 0);   // 설정의 QA 기본정책·기본 로고 재적용
     setSelectedOSSP(null); setTailoring({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준",review_cycle:"격주",test_level:"통합",risk:"강화" });
@@ -1544,6 +1577,14 @@ function StepInfo({ form, setForm }) {
       <h2 style={{ fontSize:15, fontWeight:600, marginBottom:16 }}>프로젝트 기본 정보</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
         <Input label="프로젝트명 *" value={form.name} onChange={f("name")} placeholder="예: 스마트팩토리 MES 고도화" />
+        <div>
+          <Input label="시스템명" value={form.systemName} onChange={f("systemName")}
+            placeholder={form.name ? `비워두면 "${deriveSystemName(form.name)}"` : "예: 스마트팩토리 MES"} />
+          <div style={{ fontSize:10, color:T.muted, marginTop:5, lineHeight:1.6 }}>
+            산출물 문서 머리말의 <b style={{ color:T.text }}>시스템</b>란에 기재됩니다. 구축 대상 시스템의 이름이며 사업명과 다를 수 있습니다.
+            비워두면 프로젝트명에서 구축·고도화 같은 사업 접미어를 떼어 자동으로 채웁니다.
+          </div>
+        </div>
         <div>
           <Input label="고객사(발주처) *" value={form.client} onChange={f("client")} placeholder="예: (주)한국제조" />
           <div style={{ fontSize:10, color:T.muted, marginTop:5, lineHeight:1.6 }}>
@@ -3990,7 +4031,7 @@ function docxStdParts({ title, docCode, phase, meta }) {
     title,
     rows: [
       ["프로젝트", meta.name || "", "단계", phase || ""],
-      ["시스템", meta.name || "", "문서번호", code],
+      ["시스템", systemNameOf(meta), "문서번호", code],
       ["작성자", ap.author, "작성일자", today],
       ...((ap.reviewer || ap.approver) ? [["검토자", ap.reviewer, "승인자", ap.approver]] : []),
       ...((ap.org || ap.distribution) ? [["작성조직", ap.org, "배포구분", ap.distribution]] : []),
@@ -4497,6 +4538,7 @@ function reqTplPlaceholderPairs(meta, docNo) {
   const today = new Date().toISOString().slice(0, 10);
   const todayKo = new Date().toLocaleDateString("ko-KR");
   const name = esc(meta?.name || "");
+  const sysName = esc(systemNameOf(meta));
   const client = esc(meta?.client || "");
   const author = esc(docMetaValue(meta, "author") || meta?.pm || "");
   const reviewer = esc(docMetaValue(meta, "reviewer") || "");
@@ -4512,13 +4554,13 @@ function reqTplPlaceholderPairs(meta, docNo) {
   const tok = (labels, value) => labels.flatMap(l =>
     /명$/.test(l) ? [[`{${l}}`, value], [`{${l.slice(0, -1)} 명}`, value]] : [[`{${l}}`, value]]);
   const pairs = [
-    ...tok(["프로젝트명"], name), ...tok(["시스템명"], name), ...tok(["과제명"], name),
+    ...tok(["프로젝트명"], name), ...tok(["시스템명"], sysName), ...tok(["과제명"], name),
     ...tok(["고객사명", "발주처명"], client),
     ...tok(["작성자명"], author), ...tok(["PM명", "관리자명"], pm),
     ...tok(["검토자명"], reviewer), ...tok(["승인자명"], approver),
     ...tok(["조직명", "수행사명", "회사명"], org), ...tok(["부서명"], dept),
     ...tok(["배포구분"], distribution),
-    ["{프로젝트}", name], ["{시스템}", name], ["{고객사}", client], ["{발주처}", client],
+    ["{프로젝트}", name], ["{시스템}", sysName], ["{고객사}", client], ["{발주처}", client],
     ["{작성자}", author], ["{검토자}", reviewer], ["{승인자}", approver],
     ["{작성일}", today], ["{작성일자}", today], ["{YYYY-MM-DD}", today], ["YYYY-MM-DD", today],
     ["{YYYY.MM.DD}", todayKo], ["{버전}", "1.0"],
