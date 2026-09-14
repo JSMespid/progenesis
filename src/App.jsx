@@ -147,7 +147,7 @@ const TAILORING_RULES = [
 // ── 제품 브랜드 ───────────────────────────────────────────────────────
 // 화면·산출물에 노출되는 도구 이름은 반드시 이 상수만 사용한다 (문자열 하드코딩 금지).
 const APP_NAME = "SPIDer QA Agent";
-const APP_TAGLINE = "v2.1 · AI Platform";
+const APP_TAGLINE = "v1.0 · AI Platform";
 const APP_MARK = "S";                       // 로고 이니셜
 
 // localStorage 키 — 브랜드 변경에 따라 접두어를 spiderqa_ 로 통일
