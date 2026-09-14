@@ -1198,6 +1198,18 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   );
 }
 
+// ── 프로젝트 진행 단계 ────────────────────────────────────────────────
+// DB의 status 컬럼은 저장 시 "진행중"으로 고정되어 실제 상태를 나타내지 못한다.
+// 대신 저장된 산출물 유무로 착수 8단계 중 어디까지 왔는지를 그때그때 도출한다.
+// (새 컬럼·새 API 없이 이미 있는 데이터만으로 결정되므로 항상 실제와 일치한다)
+function projectStage(p) {
+  if (p?.deliverables) return { label: "착수 완료",     color: T.green };
+  if (p?.wbs)          return { label: "산출물 단계",   color: "#C084FC" };
+  if (p?.pdp)          return { label: "WBS 단계",      color: T.amber };
+  if (p?.tailoring?.sdlc || p?.ossp) return { label: "테일러링 단계", color: T.accent };
+  return { label: "기본정보 단계", color: T.muted };
+}
+
 function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinueDraft, onDiscardDraft, canCreate = true, onDelete }) {
   const hasDraft = draft && (draft.projectForm?.name || draft.selectedSDLC || draft.selectedOSSP);
   const stats = [
@@ -1264,13 +1276,15 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
                 </div>
               ) : null;
             })()}
-            {projects.map(p=>(
+            {projects.map(p=>{
+              const stage = projectStage(p);
+              return (
               <div key={p.id} onClick={()=>{ setCurrentProject(p); nav("project_detail"); }}
                 style={{ padding:"12px 14px", background:T.bg, borderRadius:10, border:`1px solid ${T.border}`, cursor:"pointer" }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6, gap:8 }}>
                   <div style={{ fontWeight:600, fontSize:14, minWidth:0 }}>{p.name}</div>
                   <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
-                    <Badge color={T.accent}>{p.status}</Badge>
+                    <Badge color={stage.color}>{stage.label}</Badge>
                     {/* 목록에서 바로 삭제 — 중복 항목 정리용. 카드 클릭(상세 이동)과 겹치지 않도록 전파를 막는다 */}
                     {canCreate && onDelete && (
                       <button title="이 프로젝트 삭제"
@@ -1288,7 +1302,8 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
                   {p.deliverables && <Badge color="#C084FC">산출물</Badge>}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>
