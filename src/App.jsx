@@ -395,6 +395,8 @@ const DOC_OVERRIDE_FIELDS = ["codePrefix", "author", "reviewer", "approver", "di
 const DISTRIBUTION_OPTIONS = ["사내 한정", "고객사 공유", "대외비", "공개"];
 
 const ROLE_LABELS = { admin: "관리자", pm: "PM", qa: "품질보증담당자", viewer: "조회 전용", legacy: "재인증 필요" };
+// 실제로 부여 가능한 역할 (서버 _auth.js의 ROLES와 일치). legacy는 표시 전용이라 제외.
+const ASSIGNABLE_ROLES = ["admin", "pm", "qa", "viewer"];
 const ROLE_DESC = {
   admin: "설정·사용자·API 키를 포함한 전체 관리 권한",
   pm: "프로젝트 착수·WBS·산출물 생성 및 편집",
@@ -7384,6 +7386,7 @@ function UsersTab({ flash, session }) {
   const [editId, setEditId] = useState(null);
   const blank = { login_id: "", pw: "", pw2: "", name: "", email: "", role: "qa" };
   const [f, setF] = useState(blank);
+  const [ef, setEf] = useState({ name: "", email: "", role: "qa", is_active: true });
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
@@ -7408,8 +7411,46 @@ function UsersTab({ flash, session }) {
 
   async function patch(id, body, okMsg) {
     try { await apiFetch("/api/users", { method: "PATCH", body: JSON.stringify({ id, ...body }) });
-      flash("ok", okMsg); await load(); }
-    catch (e) { flash("error", e.message); }
+      flash("ok", okMsg); await load(); return true; }
+    catch (e) { flash("error", e.message); return false; }
+  }
+
+  // 계정 정보 편집 — 이름·이메일·역할·상태를 한 번에 수정한다.
+  // 아이디(login_id)는 감사 로그·세션 식별자로 쓰이므로 읽기 전용.
+  function openEdit(u) {
+    if (editId === u.id) { setEditId(null); return; }
+    setEditId(u.id);
+    setEf({ name: u.name || "", email: u.email || "", role: u.role || "qa", is_active: !!u.is_active });
+  }
+
+  async function saveEdit(u) {
+    const name = (ef.name || "").trim();
+    const email = (ef.email || "").trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      flash("error", "이메일 형식이 올바르지 않습니다."); return;
+    }
+
+    const body = {};
+    if (name !== (u.name || "")) body.name = name;
+    if (email !== (u.email || "")) body.email = email;
+    if (ef.role !== u.role) body.role = ef.role;
+    if (ef.is_active !== !!u.is_active) body.is_active = ef.is_active;
+    if (!Object.keys(body).length) { flash("error", "변경된 항목이 없습니다."); setEditId(null); return; }
+
+    const isMe = session?.uid === u.id;
+    if (isMe && body.role !== undefined && body.role !== "admin") {
+      if (!confirm(`본인 계정의 역할을 "${ROLE_LABELS[body.role]}"(으)로 변경합니다.\n관리자 권한을 잃으면 설정 화면에 다시 들어올 수 없습니다. 계속할까요?`)) return;
+    }
+    if (isMe && body.is_active === false) {
+      if (!confirm("본인 계정을 비활성화합니다. 다음 접속부터 로그인할 수 없습니다. 계속할까요?")) return;
+    }
+
+    const LBL = { name: "이름", email: "이메일", role: "역할", is_active: "상태" };
+    const changed = Object.keys(body).map(k => LBL[k]).join("·");
+    setBusy(true);
+    const ok = await patch(u.id, body, `"${u.login_id}" 계정의 ${changed}${josaEul(changed)} 수정했습니다.`);
+    setBusy(false);
+    if (ok) setEditId(null);   // 실패 시 입력값을 잃지 않도록 패널을 열어 둔다
   }
 
   async function resetPw(u) {
@@ -7446,7 +7487,7 @@ function UsersTab({ flash, session }) {
               <Input label="비밀번호 확인 *" type="password" value={f.pw2} onChange={v => setF(s => ({ ...s, pw2: v }))} placeholder="다시 입력" />
               <Input label="이메일" value={f.email} onChange={v => setF(s => ({ ...s, email: v }))} placeholder="예: hong@company.co.kr" />
               <Select label="역할" value={f.role} onChange={v => setF(s => ({ ...s, role: v }))}
-                options={Object.keys(ROLE_LABELS).map(r => ({ value: r, label: ROLE_LABELS[r] }))} />
+                options={ASSIGNABLE_ROLES.map(r => ({ value: r, label: ROLE_LABELS[r] }))} />
             </div>
             <div style={{ fontSize: 10.5, color: T.muted, marginTop: 10, lineHeight: 1.6 }}>
               {ROLE_LABELS[f.role]} — {ROLE_DESC[f.role]}
@@ -7475,45 +7516,69 @@ function UsersTab({ flash, session }) {
               <tbody>
                 {users.map(u => {
                   const editing = editId === u.id;
+                  const isMe = session?.uid === u.id;
                   return (
-                    <tr key={u.id}>
-                      <td style={{ ...td, fontWeight: 600 }}>{u.login_id}{session?.uid === u.id && <span style={{ color: T.accent, fontSize: 10, marginLeft: 6 }}>(나)</span>}</td>
-                      <td style={td}>{u.name || "—"}</td>
-                      <td style={{ ...td, color: T.muted }}>{u.email || "—"}</td>
-                      <td style={td}>
-                        {editing ? (
-                          <select value={u.role} onChange={e => patch(u.id, { role: e.target.value }, "역할을 변경했습니다.")}
-                            style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "4px 8px", color: T.text, fontSize: 11, fontFamily: "inherit" }}>
-                            {Object.keys(ROLE_LABELS).map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-                          </select>
-                        ) : <Badge color={u.role === "admin" ? T.amber : T.accent}>{ROLE_LABELS[u.role] || u.role}</Badge>}
-                      </td>
-                      <td style={td}>
-                        <button onClick={() => patch(u.id, { is_active: !u.is_active }, u.is_active ? "계정을 비활성화했습니다." : "계정을 활성화했습니다.")}
-                          style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit" }}>
-                          <Badge color={u.is_active ? T.green : T.muted}>{u.is_active ? "활성" : "비활성"}</Badge>
-                        </button>
-                      </td>
-                      <td style={{ ...td, color: T.muted, fontSize: 11, whiteSpace: "nowrap" }}>
-                        {u.last_login_at ? new Date(u.last_login_at).toLocaleString("ko-KR") : "—"}
-                      </td>
-                      <td style={{ ...td, whiteSpace: "nowrap" }}>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button onClick={() => setEditId(editing ? null : u.id)} title="역할 변경"
-                            style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 7, color: editing ? T.accent : T.muted, cursor: "pointer", fontSize: 10.5, padding: "4px 8px", fontFamily: "inherit" }}>
-                            {editing ? "완료" : "역할"}
-                          </button>
-                          <button onClick={() => resetPw(u)} title="비밀번호 초기화"
-                            style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 7, color: T.muted, cursor: "pointer", fontSize: 10.5, padding: "4px 8px", fontFamily: "inherit" }}>
-                            PW 초기화
-                          </button>
-                          <button onClick={() => remove(u)} title="삭제"
-                            style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 7, color: T.red, cursor: "pointer", fontSize: 10.5, padding: "4px 8px", fontFamily: "inherit" }}>
-                            삭제
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                    <React.Fragment key={u.id}>
+                      <tr>
+                        <td style={{ ...td, fontWeight: 600 }}>{u.login_id}{isMe && <span style={{ color: T.accent, fontSize: 10, marginLeft: 6 }}>(나)</span>}</td>
+                        <td style={td}>{u.name || "—"}</td>
+                        <td style={{ ...td, color: T.muted }}>{u.email || "—"}</td>
+                        <td style={td}><Badge color={u.role === "admin" ? T.amber : T.accent}>{ROLE_LABELS[u.role] || u.role}</Badge></td>
+                        <td style={td}><Badge color={u.is_active ? T.green : T.muted}>{u.is_active ? "활성" : "비활성"}</Badge></td>
+                        <td style={{ ...td, color: T.muted, fontSize: 11, whiteSpace: "nowrap" }}>
+                          {u.last_login_at ? new Date(u.last_login_at).toLocaleString("ko-KR") : "—"}
+                        </td>
+                        <td style={{ ...td, whiteSpace: "nowrap" }}>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button onClick={() => openEdit(u)} title="이름·이메일·역할·상태 편집"
+                              style={{ background: "none", borderRadius: 7, cursor: "pointer", fontSize: 10.5, padding: "4px 8px", fontFamily: "inherit", border: `1px solid ${editing ? T.accent : T.border}`, color: editing ? T.accent : T.muted }}>
+                              {editing ? "닫기" : "편집"}
+                            </button>
+                            <button onClick={() => resetPw(u)} title="비밀번호 초기화"
+                              style={{ background: "none", borderRadius: 7, cursor: "pointer", fontSize: 10.5, padding: "4px 8px", fontFamily: "inherit", border: `1px solid ${T.border}`, color: T.muted }}>
+                              PW 초기화
+                            </button>
+                            <button onClick={() => remove(u)} title="삭제"
+                              style={{ background: "none", borderRadius: 7, cursor: "pointer", fontSize: 10.5, padding: "4px 8px", fontFamily: "inherit", border: `1px solid ${T.border}`, color: T.red }}>
+                              삭제
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {editing && (
+                        <tr>
+                          <td colSpan={7} style={{ padding: 0, borderBottom: `1px solid ${T.border}` }}>
+                            <div style={{ background: T.bg, border: `1px solid ${T.accentDim}`, borderRadius: 12, padding: 16, margin: "6px 2px 12px" }}>
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12 }}>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                  <label style={{ fontSize: 12, color: T.muted, fontWeight: 600, letterSpacing: 0.8, textTransform: "uppercase" }}>아이디 (변경 불가)</label>
+                                  <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 14px", color: T.muted, fontSize: 14 }}>
+                                    {u.login_id}
+                                  </div>
+                                </div>
+                                <Input label="이름" value={ef.name} onChange={v => setEf(s => ({ ...s, name: v }))} placeholder="예: 홍길동" />
+                                <Input label="이메일" value={ef.email} onChange={v => setEf(s => ({ ...s, email: v }))} placeholder="예: hong@company.co.kr" />
+                                <Select label="역할" value={ef.role} onChange={v => setEf(s => ({ ...s, role: v }))}
+                                  options={(ASSIGNABLE_ROLES.includes(u.role) ? ASSIGNABLE_ROLES : [...ASSIGNABLE_ROLES, u.role])
+                                    .map(r => ({ value: r, label: ROLE_LABELS[r] || r }))} />
+                                <Select label="상태" value={ef.is_active ? "1" : "0"} onChange={v => setEf(s => ({ ...s, is_active: v === "1" }))}
+                                  options={[{ value: "1", label: "활성" }, { value: "0", label: "비활성" }]} />
+                              </div>
+                              <div style={{ fontSize: 10.5, color: T.muted, marginTop: 10, lineHeight: 1.6 }}>
+                                {ROLE_LABELS[ef.role]} — {ROLE_DESC[ef.role]}<br />
+                                아이디는 감사 로그의 식별자로 사용되므로 변경할 수 없습니다. 활성 관리자는 최소 1명 이상 유지해야 합니다.
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+                                <Btn variant="ghost" onClick={() => setEditId(null)} style={{ fontSize: 12, padding: "7px 16px" }}>취소</Btn>
+                                <Btn onClick={() => saveEdit(u)} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>
+                                  {busy ? "저장 중…" : "저장"}
+                                </Btn>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
