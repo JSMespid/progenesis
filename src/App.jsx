@@ -4686,9 +4686,70 @@ function templateDocCodePairs(xml, meta) {
 
 // 템플릿(docx/xlsx) 파트 배열에 문서정보 placeholder를 일괄 치환한다.
 // 반환값: 실제로 바뀐 파트가 있으면 true.
+// ── 템플릿 표의 "라벨 셀 + 빈 셀" 채우기 ────────────────────────────
+// OSSP 표준양식 상당수는 {프로젝트명} 같은 치환 토큰이 아니라 라벨만 있고 값 칸이 비어 있다.
+// 그런 표는 토큰 치환으로는 아무것도 채워지지 않으므로, 라벨 오른쪽 빈 칸을 직접 채운다.
+// 안전 규칙: (1) 비어 있는 칸만 채운다 (2) 옆칸도 라벨이면 건너뛴다 (3) 표 안에서만 동작한다.
+//   → 서명란처럼 표 밖의 "작성자: ___" 문단은 손대지 않는다 (수기 서명용으로 비워 두는 자리).
+function tableLabelValues(meta, docNo) {
+  const today = new Date().toISOString().slice(0, 10);
+  const v = {
+    "프로젝트명": meta?.name || "", "프로젝트": meta?.name || "", "과제명": meta?.name || "",
+    "시스템명": systemNameOf(meta), "시스템": systemNameOf(meta),
+    "고객사": meta?.client || "", "고객사명": meta?.client || "",
+    "발주처": meta?.client || "", "발주처명": meta?.client || "",
+    "문서번호": docNo || "",
+    "작성자": docMetaValue(meta, "author") || meta?.pm || "",
+    "작성자명": docMetaValue(meta, "author") || meta?.pm || "",
+    "검토자": docMetaValue(meta, "reviewer"), "승인자": docMetaValue(meta, "approver"),
+    "작성일": today, "작성일자": today,
+    "작성조직": docMetaValue(meta, "orgName"), "조직명": docMetaValue(meta, "orgName"),
+    "수행사": docMetaValue(meta, "orgName"), "부서": docMetaValue(meta, "dept"),
+    "배포구분": docMetaValue(meta, "distribution"),
+  };
+  Object.keys(v).forEach(k => { if (String(v[k] || "").trim() === "") delete v[k]; });
+  return v;
+}
+function docxFillLabeledCells(xml, values) {
+  if (!Object.keys(values).length) return xml;
+  const tcRe = /<w:tc(?:\s[^>]*)?>[\s\S]*?<\/w:tc>/g;
+  const cellText = tc => [...tc.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)]
+    .map(m => m[1]).join("").replace(/\s+/g, " ").trim();
+  const norm = t => t.replace(/\s+/g, "").replace(/[:：]$/, "");
+  const esc = x => String(x ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return xml.replace(/<w:tbl>[\s\S]*?<\/w:tbl>/g, tbl => {
+    if ((tbl.match(/<w:tbl>/g) || []).length !== 1) return tbl;   // 중첩 표 잘림 조각 배제
+    const tcs = [...tbl.matchAll(tcRe)].map(m => m[0]);
+    const texts = tcs.map(cellText);
+    const fill = {};
+    for (let i = 0; i < tcs.length - 1; i++) {
+      const val = values[norm(texts[i])];
+      if (val === undefined) continue;
+      if (texts[i + 1] !== "") continue;                          // 이미 값이 있으면 건드리지 않는다
+      if (values[norm(texts[i + 1])] !== undefined) continue;     // 옆칸도 라벨이면 값 칸이 아니다
+      fill[i + 1] = val;
+      i++;                                                        // 방금 채운 값 칸은 라벨로 보지 않는다
+    }
+    if (!Object.keys(fill).length) return tbl;
+    let k = -1;
+    return tbl.replace(tcRe, m => {
+      k++;
+      if (fill[k] === undefined) return m;
+      const open = /^<w:tc(?:\s[^>]*)?>/.exec(m)?.[0] || "<w:tc>";
+      const tcPr = /<w:tcPr>[\s\S]*?<\/w:tcPr>/.exec(m)?.[0] || "";
+      const firstP = /<w:p\b[\s\S]*?<\/w:p>/.exec(m);
+      const pPr = firstP ? (/<w:pPr>[\s\S]*?<\/w:pPr>/.exec(firstP[0])?.[0] || "") : "";
+      const rPr = firstP ? (/<w:rPr>[\s\S]*?<\/w:rPr>/.exec(firstP[0])?.[0] || "") : "";
+      return `${open}${tcPr}<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${esc(fill[k])}</w:t></w:r></w:p></w:tc>`;
+    });
+  });
+}
+
 function applyTemplateMeta(files, meta, doc) {
-  const pairs = reqTplPlaceholderPairs(meta, templateDocNo(meta, doc));
-  if (!pairs.length) return false;
+  const docNo = templateDocNo(meta, doc);
+  const pairs = reqTplPlaceholderPairs(meta, docNo);
+  const labelVals = tableLabelValues(meta, docNo);
+  if (!pairs.length && !Object.keys(labelVals).length) return false;
   const td = new TextDecoder();
   let changed = false;
   files.forEach(f => {
@@ -4700,7 +4761,7 @@ function applyTemplateMeta(files, meta, doc) {
     // run 분할 대응: docx는 문단 단위, xlsx 공유문자열은 <si> 단위로 텍스트를 합쳐 치환한다.
     // 문서코드 쌍은 합쳐진 텍스트에서 그때그때 찾아야 "ie.f.RD"+"1301" 분할을 잡을 수 있다.
     const codesFor = t => docCodePairsFromText(t, meta);
-    const out = isDocx ? docxReplacePlaceholders(xml, pairs, codesFor)
+    const out = isDocx ? docxFillLabeledCells(docxReplacePlaceholders(xml, pairs, codesFor), labelVals)
       : f.path === "xl/sharedStrings.xml"
         ? xlsxSiReplaceAll(xml, pairs, codesFor)
         : xmlTextReplaceAll(xml, [...pairs, ...templateDocCodePairs(xml, meta)]);
@@ -5699,6 +5760,21 @@ async function downloadSingleDeliverable(doc, catName, meta, wbs, ctx) {
 
 // 산출물 전체를 폴더 구조 ZIP으로 다운로드 (각 파일은 실제 Office 문서)
 // onProgress?: ({ percent, label }) => void — 건별 파일 생성 진행률 보고 (템플릿 조회·문서 생성이 오래 걸릴 수 있음)
+// ── 서명본 산출물 ─────────────────────────────────────────────────────
+// "승인된 프로젝트 기술서"처럼 원본 문서를 출력해 서명만 받는 산출물은 파일을 따로 만들지 않는다.
+// 내용이 같은 문서가 두 벌 생성되면 어느 쪽이 정본인지 흐려져 형상관리가 어긋난다.
+// 목록·WBS에서는 빼지 않는다 — 프로세스 산출물로서 수행 증적에 남아야 하기 때문.
+const SIGN_OFF_PREFIX = "승인된";
+function isSignOffDoc(name) { return String(name || "").trim().startsWith(SIGN_OFF_PREFIX); }
+function signOffOriginal(name) {
+  const s = String(name || "").trim();
+  return s.startsWith(SIGN_OFF_PREFIX) ? (s.slice(SIGN_OFF_PREFIX.length).trim() || s) : s;
+}
+function signOffNote(name) {
+  const o = signOffOriginal(name);
+  return `${o}${josaEul(o)} 출력해 서명받는 문서입니다 — 별도 파일을 생성하지 않습니다.`;
+}
+
 async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress) {
   const report = (percent, label) => { try { onProgress && onProgress({ percent, label }); } catch (_) {} };
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
@@ -5707,12 +5783,18 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
   let done = 0;
   report(2, `산출물 파일 생성 준비 중… (총 ${allCount}건)`);
   const files = []; const manifest = [];
-  let total = 0, mand = 0;
+  let total = 0, mand = 0, signOff = 0;
   for (let ci = 0; ci < cats.length; ci++) {
     const cat = cats[ci];
     const folder = `${String(ci + 1).padStart(2, "0")}_${sanitize(cat.name)}`;
     for (const doc of (cat.documents || [])) {
       const pi = prioInfo(doc.priority);
+      // 서명본은 파일을 만들지 않고 목록에만 기록한다
+      if (isSignOffDoc(doc.name)) {
+        manifest.push([folder, doc.wbsNo || "-", doc.code || "-", doc.name, "서명본", pi.label, signOffNote(doc.name)]);
+        signOff += 1; done += 1;
+        continue;
+      }
       // 2~92% 구간을 건수 비례로 배분 — 파일 하나 생성할 때마다 전진
       report(2 + (done / Math.max(1, allCount)) * 90, `${doc.name} 생성 중… (${done + 1}/${allCount})`);
       const of = await resolveDeliverableFile(doc, cat.name, meta, wbs, ctx);
@@ -5728,12 +5810,14 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
   files.unshift({ path: "00_산출물목록.xlsx", content: makeXlsx({ sheetName: "산출물목록", rows: [
     ["프로젝트", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
     ["생성일", new Date().toLocaleString("ko-KR")],
-    ["전체", `${total}건 (필수(M) ${mand} · 선택(O) ${total - mand})`], [],
+    ["전체", `${total}건 (필수(M) ${mand} · 선택(O) ${total - mand})`],
+    ...(signOff ? [["서명본", `${signOff}건 — 원본 문서를 출력해 서명받는 문서로, 파일을 생성하지 않습니다`]] : []),
+    [],
     ["폴더", "WBS", "코드", "산출물", "형식", "구분", "목적"],
     ...manifest,
   ] }) });
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
-  report(100, `ZIP 다운로드 시작 — 산출물 ${allCount}건`);
+  report(100, `ZIP 다운로드 시작 — 산출물 ${total}건` + (signOff ? ` (서명본 ${signOff}건 제외)` : ""));
   const url = URL.createObjectURL(blob);
   const aEl = document.createElement("a");
   aEl.href = url; aEl.download = `${sanitize(meta.name) || "project"}_산출물.zip`;
@@ -6270,8 +6354,13 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                         {requirements?.items?.length ? `🤖 ${requirements.items.length}건 ✓` : "🤖 AI 작성"}
                       </button>
                     )}
-                    <button onClick={()=>downloadSingleDeliverable(doc, cat.name, form||{}, wbs, pdpCtx)} title="이 산출물만 다운로드"
-                      style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
+                    {isSignOffDoc(doc.name) ? (
+                      <span title={signOffNote(doc.name)}
+                        style={{ border:`1px solid ${T.amber}66`, borderRadius:6, color:T.amber, fontSize:10.5, padding:"3px 8px", flexShrink:0, whiteSpace:"nowrap" }}>서명본</span>
+                    ) : (
+                      <button onClick={()=>downloadSingleDeliverable(doc, cat.name, form||{}, wbs, pdpCtx)} title="이 산출물만 다운로드"
+                        style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -6617,8 +6706,13 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
                   <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
                   <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.taskName ? `${doc.taskName} — ` : ""}{doc.purpose}</div></div>
                   <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
-                  <button onClick={()=>downloadSingleDeliverable(doc, cat.name, project, project.wbs, pdpCtx)} title="이 산출물만 다운로드"
-                    style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
+                  {isSignOffDoc(doc.name) ? (
+                    <span title={signOffNote(doc.name)}
+                      style={{ border:`1px solid ${T.amber}66`, borderRadius:6, color:T.amber, fontSize:10.5, padding:"3px 8px", flexShrink:0, whiteSpace:"nowrap" }}>서명본</span>
+                  ) : (
+                    <button onClick={()=>downloadSingleDeliverable(doc, cat.name, project, project.wbs, pdpCtx)} title="이 산출물만 다운로드"
+                      style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>⬇</button>
+                  )}
                 </div>
               ))}
             </Card>
