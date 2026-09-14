@@ -4837,11 +4837,19 @@ async function injectRequirementsIntoSpecDocx(bytes, meta, req, doc) {
   // 요구사항 명세 블록 표를 못 찾아도, placeholder 치환분은 살려서 반환한다.
   if (!blanks.length) { f.content = xml; return metaFilled ? zipBytes(files) : null; }
   const typeOrder = ["기능", "비기능", "인터페이스"];
+  // 요구사항 1건 = 1페이지. 블록(표) 뒤마다 페이지 나누기를 넣어 다음 요구사항이,
+  // 절의 마지막 블록 뒤에서는 다음 절 제목이 새 페이지에서 시작하도록 한다.
+  // 문서 맨 끝 블록 뒤에는 넣지 않는다 — 빈 페이지가 하나 생기기 때문.
+  const PAGE_BR = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+  const lists = blanks.slice(0, 3).map((_, bi) => scoped.filter(it => (it.type || "기능") === typeOrder[bi]));
+  let lastIdx = -1;
+  lists.forEach((l, i) => { if (l.length) lastIdx = i; });
   let filledAny = false;
   blanks.slice(0, 3).forEach((tbl, bi) => {
-    const list = scoped.filter(it => (it.type || "기능") === typeOrder[bi]);
+    const list = lists[bi];
     if (!list.length) return;   // 해당 유형 요구사항이 없으면 빈 양식 유지
-    const filled = list.map(it => fillSpecBlock(tbl, it)).join("<w:p/>");
+    const filled = list.map(it => fillSpecBlock(tbl, it)).join(PAGE_BR)
+      + (bi === lastIdx ? "" : PAGE_BR);
     xml = xml.replace(tbl, filled);
     filledAny = true;
   });
