@@ -4537,11 +4537,16 @@ function assignReqIds(items) {
 // WBS에서 요구사항 명세서(spec/both)를 산출물로 가진 '진짜 최하위' Task 목록 — 요구사항 배정 후보(기능 모듈)
 function reqSpecLeaves(wbs) {
   const rows = [];
-  (wbs?.tasks || []).forEach(t => (t.subtasks || []).forEach(s => rows.push(s)));
+  (wbs?.tasks || []).forEach(t => (t.subtasks || []).forEach(s => rows.push({ ...s, _mgmt: !!t.mgmt })));
   const codes = rows.map(s => String(s.wbsCode || ""));
   return rows.filter(s => {
     const k = reqDocKind(s.deliverable || "");
     if (k !== "spec" && k !== "both") return false;
+    // 기능 모듈이 아닌 행 제외:
+    //  ① 관리활동 작업(예: "요구사항 도출 및 명세화")
+    //  ② 구성요소 분해 없이 "공통"으로 만든 문서 작성 작업(level 2, 예: "시스템 요구사항 명세서 작성")
+    if (s._mgmt) return false;
+    if (Number(s.level) > 0 && Number(s.level) <= 2) return false;
     const c = String(s.wbsCode || "");
     if (!c) return false;
     return !codes.some(o => o !== c && o.startsWith(c + "."));   // 하위 행이 없으면 최하위
@@ -6577,6 +6582,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                       </select>
                       <select value={it.wbsNo || "공통"} onChange={e=>upd(i,"wbsNo",e.target.value)} title="이 요구사항이 배정될 WBS 최하위 기능 모듈 — 공통은 모든 모듈 명세서에 포함" style={inp}>
                         <option value="공통">공통 (전 모듈)</option>
+                        {it.wbsNo && it.wbsNo !== "공통" && !leaves.some(l => l.wbsNo === it.wbsNo) && <option value={it.wbsNo}>{it.wbsNo} (모듈 아님 — 다시 배정하세요)</option>}
                         {leaves.map(l=><option key={l.wbsNo} value={l.wbsNo}>{l.wbsNo} {l.name}</option>)}
                       </select>
                       <input value={it.summary} onChange={e=>upd(i,"summary",e.target.value)} placeholder="개요 1문장" style={inp} />
