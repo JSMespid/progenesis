@@ -1393,10 +1393,22 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
       </Card>
       <Card style={{ padding:18 }}>
         <h2 style={{ fontSize:13, fontWeight:600, marginBottom:12 }}>추천 시작 흐름</h2>
-        {["프로젝트 기본정보 입력","OSSP 선택 & 테일러링","PDP 자동 생성 (AI)","WBS 자동 생성 (AI)","산출물 생성 (AI)","프로젝트 착수 완료"].map((s,i)=>(
+        {[
+          ["프로젝트 기본정보 입력", "고객사·기간·PM·팀원·문서 설정"],
+          ["SDLC 추천·확정", "PMBOK® 8판 선정 요인 규칙 기반"],
+          ["OSSP 선택", "조직 표준 프로세스"],
+          ["테일러링", "개발산출물 · 관리활동"],
+          ["PDP 자동 생성", "테일러링결과서"],
+          ["WBS 자동 생성", "산출물 × 시스템 구성요소 (구성요소 AI 추천 선택)"],
+          ["산출물 생성", "OSSP 템플릿 기반 (요구사항 AI 작성 선택)"],
+          ["프로젝트 착수 완료", ""],
+        ].map(([s, sub], i)=>(
           <div key={s} style={{ display:"flex", gap:10, alignItems:"flex-start", marginBottom:8 }}>
             <div style={{ width:20, height:20, borderRadius:"50%", background:T.accentDim, color:T.accent, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:700, flexShrink:0 }}>{i+1}</div>
-            <div style={{ fontSize:12, color:T.muted, lineHeight:1.5 }}>{s}</div>
+            <div style={{ lineHeight:1.4 }}>
+              <div style={{ fontSize:12, color:T.muted }}>{s}</div>
+              {sub && <div style={{ fontSize:10, color:T.muted, opacity:0.7, marginTop:1 }}>{sub}</div>}
+            </div>
           </div>
         ))}
       </Card>
