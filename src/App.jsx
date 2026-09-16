@@ -2416,7 +2416,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
               <tbody>
                 <tr><td style={cellHead}>적용 가이드</td><td style={cell} colSpan={3}>{guide.title}</td></tr>
                 <tr><td style={cellHead}>{guide.scaleTitle || "프로젝트 규모"}</td><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
-                <tr><td style={cellHead}>규모 판정 기준</td><td style={cell} colSpan={3}>{guide.sizeNote?.replace(/^※\s*/, "")}</td></tr>
+                <tr><td style={cellHead}>{guide.criteriaTitle || "규모 판정 기준"}</td><td style={cell} colSpan={3}>{guide.sizeNote?.replace(/^※\s*/, "")}</td></tr>
               </tbody>
             </table>
 
@@ -4262,7 +4262,7 @@ function makePdpDocx(meta, ctx, phase) {
       ["적용 가이드", guide.title || "-"],
       [guide.scaleTitle || "프로젝트 규모", scaleLabel],
       ["설계방식", guide.hasDesignMethod ? method : "해당 없음"],
-      ["규모 판정 기준", (guide.sizeNote || "").replace(/^※\s*/, "")],
+      [guide.criteriaTitle || "규모 판정 기준", (guide.sizeNote || "").replace(/^※\s*/, "")],
     ], 1) +
     docxP(`3. 개발산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
     docxP("※ 필수(M) 산출물은 항상 적용되며 수정할 수 없습니다. 선택(O) 산출물은 테일러링 결과에 따라 적용 여부·변경 여부·사유를 기록합니다.", { size: 18, spacingAfter: 100 }) +
@@ -6586,7 +6586,7 @@ function PdpDocView({ project }) {
         <tbody>
           <tr><td style={cellHead}>적용 가이드</td><td style={cell} colSpan={3}>{guide.title}</td></tr>
           <tr><td style={cellHead}>{guide.scaleTitle || "프로젝트 규모"}</td><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
-          <tr><td style={cellHead}>규모 판정 기준</td><td style={cell} colSpan={3}>{guide.sizeNote?.replace(/^※\s*/, "")}</td></tr>
+          <tr><td style={cellHead}>{guide.criteriaTitle || "규모 판정 기준"}</td><td style={cell} colSpan={3}>{guide.sizeNote?.replace(/^※\s*/, "")}</td></tr>
         </tbody>
       </table>
 
