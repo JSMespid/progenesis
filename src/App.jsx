@@ -771,7 +771,7 @@ export default function SpiderQaAgent() {
       // 프로세스 테일러링(관리 프로세스) 요약 — PDP 개요 작성 근거에 포함
       const procApplicable2 = resolveProcessTailoring(tailoring.process).filter(r => r.status !== "해당없음");
       const procChanged = procApplicable2.filter(r => r.status !== "적용");
-      const procSummary = `적용 등급 ${tailoring.process?.level||"L3"} · 적용대상 ${procApplicable2.length}건 (적용 ${procApplicable2.filter(r=>r.status==="적용").length} / 변경적용 ${procApplicable2.filter(r=>r.status==="변경적용").length} / 미적용 ${procApplicable2.filter(r=>r.status==="미적용").length})`
+      const procSummary = `관리 성숙도 수준 ${tailoring.process?.level||"L3"} · 적용대상 ${procApplicable2.length}건 (적용 ${procApplicable2.filter(r=>r.status==="적용").length} / 변경적용 ${procApplicable2.filter(r=>r.status==="변경적용").length} / 미적용 ${procApplicable2.filter(r=>r.status==="미적용").length})`
         + (procChanged.length ? ` — 변경·미적용: ${procChanged.slice(0,10).map(r=>`${r.process}${r.activity?"›"+r.activity:""}(${r.status}${r.reason?": "+r.reason:""})`).join(", ")}` : "");
 
       // PDP 개요 — AI 미사용. 테일러링 확정 결과를 근거로 표준 문안 템플릿으로 생성 (재현성·즉시성 확보)
@@ -784,11 +784,11 @@ export default function SpiderQaAgent() {
       const result = {
         overview: {
           purpose: `본 문서는 ${projectForm.client ? projectForm.client + " " : ""}"${projectForm.name}" 프로젝트(유형: ${projectForm.type})에 적용할 프로젝트 정의 프로세스(PDP)를 수립하기 위해, ${osspLabel}${josaEul(osspLabel)} 「${guide.title}」 기준으로 테일러링한 결과를 정의하는 것을 목적으로 한다. PMBOK® 8판의 테일러링 원칙에 따라 ${guide.scaleTitle || "프로젝트 규모"}(${scaleLabel})${designTxt} 등 프로젝트 특성을 반영하였다.`,
-          scope: `적용 범위는 ${period ? "사업 기간(" + period + ") 중 " : ""}${selectedSDLC?.label || "선정 SDLC"} 기반 ${phaseCount}개 단계의 확정 산출물 ${applied.length}종과, 「${guide.title}」에 따른 관리 프로세스(적용 등급 ${level}, 적용대상 ${procApplicable2.length}건)의 이행 활동 전체로 한다. 단계별 확정 산출물: ${tailoringSummary}`,
+          scope: `적용 범위는 ${period ? "사업 기간(" + period + ") 중 " : ""}${selectedSDLC?.label || "선정 SDLC"} 기반 ${phaseCount}개 단계의 확정 산출물 ${applied.length}종과, 「${guide.title}」에 따른 관리활동(관리 성숙도 수준 ${level}, 적용대상 ${procApplicable2.length}건)의 이행 활동 전체로 한다. 단계별 확정 산출물: ${tailoringSummary}`,
           objectives: [
             `테일러링 확정 산출물 ${applied.length}종의 단계별 작성·검토·승인 이행`,
             `필수(M) 산출물의 예외 없는 100% 작성 및 베이스라인 관리`,
-            `관리 프로세스 적용 등급 ${level} 기준 이행 및 품질보증 활동 수행`,
+            `관리활동 성숙도 수준 ${level} 기준 이행 및 품질보증 활동 수행`,
             strictReg ? "법정 감리·인증 대응을 위한 프로세스 증적의 체계적 확보" : "PMBOK® 8판 품질 성과영역 기준의 예방 중심 품질 관리 정착",
           ],
         },
@@ -1964,7 +1964,7 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
   return (
     <div>
       <div style={{ display:"flex", gap:3, marginBottom:16, background:T.bg, borderRadius:10, padding:3, border:`1px solid ${T.border}` }}>
-        {[["method","방법론 테일러링 (산출물)"],["process",`프로세스 테일러링 (${procLevel})`]].map(([id,label])=>(
+        {[["method","개발산출물 테일러링"],["process","관리활동 테일러링"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTTab(id)}
             style={{ flex:1, padding:"8px 0", borderRadius:7, fontSize:12, fontWeight:tTab===id?700:400,
               background:tTab===id?T.accent:"transparent", color:tTab===id?"#fff":T.muted,
@@ -1990,7 +1990,7 @@ function ProcessGuideModal({ onClose }) {
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.72)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
       <div onClick={e=>e.stopPropagation()} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:14, width:"100%", maxWidth:1000, maxHeight:"88vh", display:"flex", flexDirection:"column" }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 18px", borderBottom:`1px solid ${T.border}`, flexShrink:0 }}>
-          <div style={{ fontSize:14, fontWeight:700 }}>{G.title} — 전문</div>
+          <div style={{ fontSize:14, fontWeight:700 }}>{G.title.replace("프로세스 테일러링", "관리활동 테일러링")} — 전문</div>
           <button onClick={onClose} style={{ background:"none", border:"none", color:T.muted, fontSize:18, cursor:"pointer" }}>✕</button>
         </div>
         <div style={{ padding:"14px 18px", overflowY:"auto" }}>
@@ -2072,20 +2072,20 @@ function StepProcessTailoring({ tailoring, setTailoring }) {
 
   return (
     <div>
-      <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>프로세스 테일러링</h2>
+      <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>관리활동 테일러링</h2>
       <p style={{ fontSize:12, color:T.muted, marginBottom:14 }}>
-        관리 프로세스의 이행 수준을 확정합니다.
+        요구사항·계획·품질 등 관리활동의 적용 범위를 확정합니다.
         <span style={{ marginLeft:8 }}>
-          · <span onClick={()=>setShowGuide(true)} title="프로세스 테일러링 가이드 전문 보기"
+          · <span onClick={()=>setShowGuide(true)} title="관리활동 테일러링 가이드 전문 보기"
               style={{ color:T.accent, cursor:"pointer", textDecoration:"underline", textUnderlineOffset:3 }}>
-              {G.title} 기준 🔍
+              {G.title.replace("프로세스 테일러링", "관리활동 테일러링")} 기준 🔍
             </span>
         </span>
       </p>
 
       {/* 적용 등급 선택 */}
       <div style={{ marginBottom:14 }}>
-        <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>적용 등급 (Required Maturity Level)</div>
+        <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>관리 성숙도 수준 (Required Maturity Level)</div>
         <div style={{ display:"flex", gap:8 }}>
           {G.levels.map(lv=>(
             <button key={lv} onClick={()=>setLevel(lv)}
@@ -2206,7 +2206,7 @@ function MethodologyTailoring({ tailoring, setTailoring, ossp }) {
 
   return (
     <div>
-      <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>OSSP 테일러링</h2>
+      <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>개발산출물 테일러링</h2>
       <p style={{ fontSize:12, color:T.muted, marginBottom:14 }}>
         선택: <span style={{ color:T.accent, fontWeight:600 }}>{ossp?.label}</span>
         <span style={{ marginLeft:8, color:T.muted }}>
@@ -2417,7 +2417,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
             </table>
 
             {/* 3. 산출물 테일러링 매트릭스 — 적용/변경 여부 및 사유 기록 */}
-            <SectionTitle n="3" title={`산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`} />
+            <SectionTitle n="3" title={`개발산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`} />
             <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
               ※ 필수(M) 산출물은 항상 적용되며 수정할 수 없습니다. 선택(O) 산출물은 테일러링 단계의 선택 결과가 기본값이며, 이 화면에서 적용 여부·변경 여부·테일러링 내역 및 사유를 수정·기록할 수 있습니다 (프로젝트 저장 시 함께 보존).
             </div>
@@ -2472,9 +2472,9 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
             </table>
 
             {/* 4. 프로세스 테일러링 내역서 — 방법론 매트릭스와 동일한 컬럼·규칙 (필수 고정, 선택만 수정) */}
-            <SectionTitle n="4" title={`프로세스 테일러링 내역서 (적용 등급 ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
+            <SectionTitle n="4" title={`관리활동 테일러링 내역서 (관리 성숙도 수준 ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
             <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
-              ※ 필수(●) 프로세스는 항상 적용되며 수정할 수 없습니다. 선택(○) 프로세스는 이 화면 또는 테일러링 단계의 '프로세스 테일러링' 탭에서 적용 여부·변경 여부·사유를 수정할 수 있습니다 (프로젝트 저장 시 함께 보존).
+              ※ 필수(●) 프로세스는 항상 적용되며 수정할 수 없습니다. 선택(○) 프로세스는 이 화면 또는 테일러링 단계의 '관리활동 테일러링' 탭에서 적용 여부·변경 여부·사유를 수정할 수 있습니다 (프로젝트 저장 시 함께 보존).
             </div>
             <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
               <thead>
@@ -2912,7 +2912,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
       <div style={{ marginBottom: 14 }}>
         <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>WBS 자동 생성 (단계별 산출물 × 시스템 구성요소)</h2>
         <p style={{ fontSize: 11, color: T.muted }}>
-          단계별 산출물은 PDP(테일러링결과서)에서, 관리 프로세스 작업은 프로세스 테일러링에서 자동 구성됩니다. 시스템 구성요소를 정의하고, 매트릭스에서 산출물이 적용될 구성요소를 선택한 뒤 WBS를 생성하세요.
+          단계별 산출물은 PDP(테일러링결과서)에서, 관리활동 작업은 관리활동 테일러링에서 자동 구성됩니다. 시스템 구성요소를 정의하고, 매트릭스에서 산출물이 적용될 구성요소를 선택한 뒤 WBS를 생성하세요.
         </p>
       </div>
       {genError && <div style={{ color: T.red, fontSize: 12, padding: 10, background: T.red + "11", borderRadius: 9, marginBottom: 10 }}>{genError}</div>}
@@ -3018,13 +3018,13 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
       {/* 3. 관리 프로세스 작업 — PDP에서 적용 확정된 항목만 그대로 표시 (읽기 전용) */}
       <div style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>③ 관리 프로세스 작업 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· PDP 적용 확정 {mgmtItems.length}건 — WBS 앞부분에 자동 추가</span></div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>③ 관리활동 작업 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· PDP 적용 확정 {mgmtItems.length}건 — WBS 앞부분에 자동 추가</span></div>
           <Btn variant="outline" onClick={() => setShowMgmt(v => !v)} style={{ fontSize: 11, padding: "4px 10px" }}>
             {showMgmt ? "접기 ▲" : "목록 보기 ▼"}
           </Btn>
         </div>
         <div style={{ fontSize: 10, color: T.muted, marginBottom: showMgmt ? 6 : 0 }}>
-          ※ PDP(테일러링결과서)의 프로세스 테일러링 내역서에서 '적용'으로 확정된 관리 프로세스만 반영됩니다. 적용 여부를 바꾸려면 테일러링 단계 또는 PDP 화면에서 수정하세요.
+          ※ PDP(테일러링결과서)의 관리활동 테일러링 내역서에서 '적용'으로 확정된 관리활동만 반영됩니다. 적용 여부를 바꾸려면 테일러링 단계 또는 PDP 화면에서 수정하세요.
         </div>
         {showMgmt && (
           <div style={{ maxHeight: 260, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 10, padding: "8px 10px", background: T.bg, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -4260,10 +4260,10 @@ function makePdpDocx(meta, ctx, phase) {
       ["설계방식", guide.hasDesignMethod ? method : "해당 없음"],
       ["규모 판정 기준", (guide.sizeNote || "").replace(/^※\s*/, "")],
     ], 1) +
-    docxP(`3. 산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
+    docxP(`3. 개발산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
     docxP("※ 필수(M) 산출물은 항상 적용되며 수정할 수 없습니다. 선택(O) 산출물은 테일러링 결과에 따라 적용 여부·변경 여부·사유를 기록합니다.", { size: 18, spacingAfter: 100 }) +
     docxTable(delivRows, -1) +
-    docxP(`4. 프로세스 테일러링 내역서 (적용 등급 ${procLevel} · 적용대상 ${procApplicable.length}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
+    docxP(`4. 관리활동 테일러링 내역서 (관리 성숙도 수준 ${procLevel} · 적용대상 ${procApplicable.length}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
     docxP("※ 필수(●) 프로세스는 항상 적용되며 수정할 수 없습니다.", { size: 18, spacingAfter: 100 }) +
     docxTable(procRows, -1);
   return docxPackage(front + body, pkgOpts);
@@ -6400,7 +6400,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
-        <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>산출물 자동생성</h2><p style={{ fontSize:11, color:T.muted }}>WBS에 반영되는 모든 단계의 산출물 문서 패키지를 구성합니다 (관리 프로세스 + 방법론 전 단계).</p></div>
+        <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>산출물 자동생성</h2><p style={{ fontSize:11, color:T.muted }}>WBS에 반영되는 모든 단계의 산출물 문서 패키지를 구성합니다 (관리활동 + 개발산출물 전 단계).</p></div>
         {!deliverablesData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ 생성</Btn>}
       </div>
       {(generating || genProgress) && (
@@ -6493,7 +6493,7 @@ function StepReview({ form, sdlc, ossp, tailoring, pdpData, wbsData, deliverable
     {label:"유형",value:form.type},{label:"PM",value:form.pm},
     {label:"기간",value:`${form.startDate}~${form.endDate}`},
     {label:"SDLC",value:sdlc?.label},{label:"OSSP",value:ossp?.label},
-    {label:"프로세스 테일러링",value:`${tailoring?.process?.level||"L3"} · 적용대상 ${procApplicable.length}건`},
+    {label:"관리활동 테일러링",value:`${tailoring?.process?.level||"L3"} · 적용대상 ${procApplicable.length}건`},
     {label:"PDP",value:pdpData?"✓ 생성완료":"—"},{label:"WBS",value:wbsData?`✓ ${wbsData.tasks?.length}개 단계`:"—"},
     {label:"산출물",value:deliverablesData?`✓ ${deliverablesData.summary?.totalDocs}건`:"—"},
   ];
@@ -6586,7 +6586,7 @@ function PdpDocView({ project }) {
       </table>
 
       {/* 3. 산출물 테일러링 매트릭스 */}
-      <SectionTitle n="3" title={`산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`} />
+      <SectionTitle n="3" title={`개발산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`} />
       <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
         <thead>
           <tr>{["단계","코드","산출물","구분","적용 여부","변경 여부","테일러링 내역 및 사유"].map(h=>
@@ -6614,7 +6614,7 @@ function PdpDocView({ project }) {
       </table>
 
       {/* 4. 프로세스 테일러링 내역서 — 방법론 매트릭스와 동일한 컬럼 구성 (읽기 전용) */}
-      <SectionTitle n="4" title={`프로세스 테일러링 내역서 (적용 등급 ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
+      <SectionTitle n="4" title={`관리활동 테일러링 내역서 (관리 성숙도 수준 ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
       <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
         <thead>
           <tr>{["프로세스 영역","세부 프로세스","구분","적용 여부","변경 여부","테일러링 내역 및 사유"].map(h=>
