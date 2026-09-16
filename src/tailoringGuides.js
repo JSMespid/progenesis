@@ -347,8 +347,34 @@ export const TAILORING_GUIDES = {
     matrixNote: "필수(M) 산출물은 통합·병합만 허용하며 생략 시 사유 기록·QA 검토·PM 승인이 필요하다. '-'는 해당 등급 미적용(QM 과제의 기능안전 산출물). 비고는 ASPICE 프로세스 · 정보항목(WP) · 테일러링 조건이다.",
     purpose: "본 가이드는 조직 표준 프로세스(OSSP)인 「자동차 SW 개발 표준프로세스(ASPICE 4.0)」를 프로젝트 특성에 맞게 조정하여 PDP(테일러링 결과서)를 수립하기 위한 기준을 정의한다. PMBOK® 8판의 조정(Tailoring) 원칙에 따르되, 고객(OEM)이 요구하는 Automotive SPICE 목표 능력수준과 ISO 26262 ASIL 요구를 충족하는 산출물은 유지하는 것을 원칙으로 한다.",
     matrix: ASPICE_TAILORING_MATRIX,
+    // 관리활동 테일러링 산출물 → 개발산출물(OSSP) 산출물 대체 매핑 (단일 산출물 원칙)
+    // [정규식, 대체 산출물명] — 위에서부터 첫 일치 적용 (포함 표기가 있는 항목을 먼저 둔다)
+    mgmtOutputMap: [
+      [/품질보증\s*계획서/, "품질보증 계획서"],
+      [/구성관리\s*계획서/, "형상관리 계획서"],
+      [/품질보증\s*검토\s*결과서/, "QA 평가 보고서"],
+      [/위험관리\s*내역서/, "리스크 관리대장"],
+      [/요구사항\s*(정의서|명세서)|정의서\s*\/\s*명세서/, "시스템 요구사항 명세서"],
+      [/요구사항\s*추적\s*매트릭스/, "요구사항 추적 매트릭스"],
+      [/변경\s*내역서/, "변경요청 관리대장"],
+      [/Inspection\s*계획\s*및\s*결과서/i, "산출물 검토 기록부"],
+      [/프로젝트\s*상태\s*보고서/, "프로젝트 진척 보고서"],
+      [/프로젝트\s*완료\s*보고서/, "프로젝트 종료 보고서"],
+      [/협력업체\s*프로젝트\s*(계획서|현황\s*보고서)/, "공급자 모니터링 계획서"],
+      [/테일러링\s*내역서/, "테일러링결과서"],
+      [/프로젝트\s*기술서/, "프로젝트 계획서"],
+    ],
   },
 };
+
+// 관리활동 산출물명 → 가이드의 mgmtOutputMap으로 개발산출물명 대체 (매핑 없는 가이드는 원래 이름 그대로)
+export function mapMgmtOutput(name, guide) {
+  const n = String(name || "");
+  const map = guide?.mgmtOutputMap;
+  if (!n || !Array.isArray(map)) return n;
+  for (const [re, to] of map) { if (re.test(n)) return to; }
+  return n;
+}
 
 // 방법론 label → 가이드 key (DB 시딩된 기본 방법론이 UUID id를 갖는 경우 대비)
 const LABEL_TO_GUIDE = { "Waterfall": "waterfall", "Agile/Scrum": "agile", "DevOps": "devops" };
