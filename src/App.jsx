@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { SDLC_FACTOR_CRITERIA } from './sdlcFactorCriteria';
 import TailoringGuideModal from './TailoringGuideModal';
 import { TAILORING_GUIDES, getGuideForOSSP, mapMgmtOutput } from './tailoringGuides';
@@ -287,16 +288,64 @@ function unknownAssignees(v, members) {
   return out;
 }
 
-// 작업자 입력 셀 — [자유 입력란] + [팀원 선택 콤보박스]
-// 콤보박스에서 고르면 쉼표로 이어붙이고, 이미 지정된 팀원은 목록에서 제외한다.
-// 네이티브 <select>를 쓰는 이유: 표 컨테이너가 overflow:auto 라 커스텀 팝업은 잘리기 때문.
+// 작업자 입력 셀 — [자유 입력란] + [팀원 선택 팝업]
+// 팝업에서 팀원을 체크/해제하면 쉼표로 이어붙이거나 제거한다(여러 명 연속 선택 가능).
+// 표 컨테이너가 overflow:auto 라 팝업이 잘리지 않도록 document.body에 포털로 띄우고 position:fixed로 배치한다.
 function AssigneeCell({ value, onChange, onCommit, members, inputStyle }) {
   const names = teamNames(members);
+  const roleOf = {};
+  (members || []).forEach(m => { const n = String(m?.name || "").trim(); if (n && !roleOf[memberKey(n)]) roleOf[memberKey(n)] = String(m?.role || "").trim(); });
   const cur = parseAssignees(value);
   const curKeys = new Set(cur.map(memberKey));
-  const remaining = names.filter(n => !curKeys.has(memberKey(n)));
   const unknown = unknownAssignees(value, members);
   const warn = unknown.length > 0;
+  const btnRef = useRef(null);
+  const popRef = useRef(null);
+  const [pos, setPos] = useState(null);   // null = 닫힘, { left, top, width, maxH }
+  const [hi, setHi] = useState(0);        // 키보드 강조 인덱스
+
+  const openPop = () => {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const width = 190;
+    const rowH = 30, want = Math.min(names.length, 8) * rowH + 38;
+    const below = window.innerHeight - r.bottom - 8, above = r.top - 8;
+    const up = below < want && above > below;
+    const maxH = Math.max(120, Math.min(want, up ? above : below));
+    const left = Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8));
+    setPos({ left, width, maxH, ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }) });
+    setHi(0);
+  };
+  const close = () => setPos(null);
+  const toggle = (n) => {
+    const k = memberKey(n);
+    onChange(curKeys.has(k) ? joinAssignees(cur.filter(x => memberKey(x) !== k)) : joinAssignees([...cur, n]));
+  };
+
+  useEffect(() => {
+    if (!pos) return;
+    const onDown = e => { if (!popRef.current?.contains(e.target) && !btnRef.current?.contains(e.target)) close(); };
+    const onKey = e => {
+      if (e.key === "Escape") { e.preventDefault(); close(); btnRef.current?.focus(); return; }
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "")) return;   // 입력란 타이핑과 충돌 방지
+      else if (e.key === "ArrowDown") { e.preventDefault(); setHi(h => Math.min(h + 1, names.length - 1)); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); }
+      else if (e.key === "Enter" || e.key === " ") { if (names[hi]) { e.preventDefault(); toggle(names[hi]); } }
+    };
+    const onScroll = e => { if (!popRef.current?.contains(e.target)) close(); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", close);
+    };
+  });
+
+  const disabled = names.length === 0;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
       <input value={value || ""}
@@ -306,15 +355,45 @@ function AssigneeCell({ value, onChange, onCommit, members, inputStyle }) {
         title={warn ? `팀원 미등록: ${unknown.join(", ")} — 입력란을 벗어나면 팀원 명단에 자동 등록됩니다.`
                     : "쉼표(,)로 여러 명을 지정할 수 있습니다."}
         style={warn ? { ...inputStyle, borderBottom: `1px solid ${T.amber}`, color: T.amber } : inputStyle} />
-      <select value="" onChange={e => { const n = e.target.value; if (n) onChange(joinAssignees([...cur, n])); }}
-        title={names.length ? "등록된 팀원에서 선택 (선택 시 쉼표로 추가)" : "STEP 1에서 팀원을 먼저 등록하세요"}
-        disabled={remaining.length === 0}
-        style={{ width: 20, flexShrink: 0, background: "transparent", color: remaining.length ? T.accent : T.border,
-          border: "none", fontSize: 10, fontFamily: "inherit", cursor: remaining.length ? "pointer" : "default",
-          outline: "none", padding: 0, colorScheme: "dark" }}>
-        <option value=""></option>
-        {remaining.map(n => <option key={n} value={n}>{n}</option>)}
-      </select>
+      <button ref={btnRef} type="button" disabled={disabled}
+        onClick={() => (pos ? close() : openPop())}
+        title={names.length ? "등록된 팀원에서 선택 (여러 명 선택 가능)" : "STEP 1에서 팀원을 먼저 등록하세요"}
+        style={{ width: 22, height: 22, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+          background: pos ? T.accent + "22" : "transparent", color: disabled ? T.border : T.accent,
+          border: "none", borderRadius: 5, cursor: disabled ? "default" : "pointer", padding: 0, fontSize: 11, fontFamily: "inherit" }}>
+        {pos ? "▴" : "▾"}
+      </button>
+      {pos && createPortal(
+        <div ref={popRef} role="listbox" aria-multiselectable="true"
+          style={{ position: "fixed", left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxH,
+            zIndex: 1000, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10,
+            boxShadow: "0 12px 32px rgba(0,0,0,0.55)", display: "flex", flexDirection: "column", overflow: "hidden", fontFamily: "inherit" }}>
+          <div style={{ padding: "7px 10px", fontSize: 10, color: T.muted, borderBottom: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between" }}>
+            <span>팀원 선택 · {cur.filter(n => names.some(x => memberKey(x) === memberKey(n))).length}명 지정</span>
+            <span onClick={close} style={{ cursor: "pointer" }}>닫기</span>
+          </div>
+          <div style={{ overflowY: "auto", padding: 4 }}>
+            {names.map((n, i) => {
+              const on = curKeys.has(memberKey(n));
+              const role = roleOf[memberKey(n)];
+              return (
+                <div key={n} role="option" aria-selected={on}
+                  onMouseEnter={() => setHi(i)}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => toggle(n)}
+                  style={{ display: "flex", alignItems: "center", gap: 8, height: 30, padding: "0 8px", borderRadius: 6, cursor: "pointer",
+                    background: i === hi ? T.accent + "1F" : "transparent", color: on ? T.text : T.muted, fontSize: 12 }}>
+                  <span style={{ width: 14, height: 14, flexShrink: 0, borderRadius: 4, border: `1px solid ${on ? T.accent : T.border}`,
+                    background: on ? T.accent : "transparent", color: "#fff", fontSize: 10, lineHeight: "13px", textAlign: "center" }}>{on ? "✓" : ""}</span>
+                  <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: on ? 600 : 400 }}>{n}</span>
+                  {role && <span style={{ fontSize: 10, color: T.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 80 }}>{role}</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
