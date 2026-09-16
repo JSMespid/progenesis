@@ -4009,6 +4009,13 @@ async function injectLogosIntoTemplateXlsx(bytes, meta) {
       newDrawingParts.push(dPath);
       kinds.forEach(k => newKinds.add(k));
     }
+    // <drawing r:id>를 넣었는데 루트에 r 네임스페이스 선언이 없으면(openpyxl 등으로 만든 xlsx) 파일이 손상되므로 선언 추가
+    if (/<drawing\s+r:id=/.test(sxml)) {
+      const rootM = /<worksheet\b[^>]*>/.exec(sxml);
+      if (rootM && !/xmlns:r=/.test(rootM[0])) {
+        sxml = sxml.replace(rootM[0], rootM[0].replace("<worksheet", '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'));
+      }
+    }
     sf.content = sxml;
   };
   const sheetPathByName = {};
