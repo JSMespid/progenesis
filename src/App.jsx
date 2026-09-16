@@ -5993,6 +5993,98 @@ function isDynamicDoc(doc, wbs, ctx) {
   if (reqDocKind(doc.name) && ctx?.requirements?.items?.length) return true;   // 확정된 요구사항이 있으면 정의서·명세서를 실문서로 생성
   return false;
 }
+// ── 요구사항 → 헤더 매핑형 xlsx 채움 (OSSP 가이드의 reqXlsxFill 설정 기반) ─────────────
+// 시트에서 설정된 헤더 라벨이 2개 이상 있는 행을 헤더로 찾고, 그 아래를 요구사항 행으로 다시 쓴다.
+// 헤더 다음 행의 셀 서식(테두리 등)을 열별로 재사용한다. 헤더에 없는 라벨은 무시한다.
+async function injectRequirementsIntoXlsxByHeader(bytes, cfg, req) {
+  const all = req?.items || [];
+  const items = Array.isArray(cfg?.types) && cfg.types.length ? all.filter(it => cfg.types.includes(it.type || "기능")) : all;
+  if (!items.length || !cfg?.cols) return null;
+  const files = await unzipBytes(bytes);
+  const td = new TextDecoder();
+  const byPath = {}; files.forEach(f => { byPath[f.path] = f; });
+  const read = p => { const f = byPath[p]; return f ? (typeof f.content === "string" ? f.content : td.decode(f.content)) : ""; };
+  const unesc = x => String(x).replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCharCode(d));
+  const esc = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const norm = x => String(x || "").replace(/[\s\u00a0]/g, "");
+  const sst = [...read("xl/sharedStrings.xml").matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => unesc([...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("")));
+  const wbXml = read("xl/workbook.xml"), relXml = read("xl/_rels/workbook.xml.rels");
+  const relMap = {}; [...relXml.matchAll(/<Relationship\b[^>]*>/g)].forEach(m => { const id = /Id="([^"]+)"/.exec(m[0]); const tg = /Target="([^"]+)"/.exec(m[0]); if (id && tg) relMap[id[1]] = tg[1]; });
+  const sheets = [...wbXml.matchAll(/<sheet\b[^>]*>/g)].map(m => ({ name: unesc(/name="([^"]+)"/.exec(m[0])?.[1] || ""), rid: /r:id="([^"]+)"/.exec(m[0])?.[1] || "" }))
+    .map(s => ({ ...s, path: relMap[s.rid] ? "xl/" + relMap[s.rid].replace(/^\//, "").replace(/^xl\//, "") : "" })).filter(s => byPath[s.path]);
+  const ordered = [...sheets.filter(s => cfg.sheet && s.name === cfg.sheet), ...sheets.filter(s => !(cfg.sheet && s.name === cfg.sheet))];
+  const labels = Object.keys(cfg.cols).map(norm);
+  const cellText = (attrs, inner) => {
+    if (/t="s"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner || ""); return v ? (sst[Number(v[1])] || "") : ""; }
+    if (/t="inlineStr"/.test(attrs)) return unesc([...(inner || "").matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join(""));
+    const v = /<v>([\s\S]*?)<\/v>/.exec(inner || ""); return v ? unesc(v[1]) : "";
+  };
+  for (const sh of ordered) {
+    let xml = read(sh.path);
+    const sd = /<sheetData>([\s\S]*?)<\/sheetData>/.exec(xml);
+    if (!sd) continue;
+    const rows = [...sd[1].matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)].map(m => {
+      const rn = Number(/\br="(\d+)"/.exec(m[1])?.[1] || 0);
+      const cells = [...(m[2] || "").matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)].map(c => ({
+        col: /\br="([A-Z]+)\d+"/.exec(c[1])?.[1] || "", s: /\bs="(\d+)"/.exec(c[1])?.[1] || "", text: cellText(c[1], c[2]) }));
+      return { raw: m[0], rn, attrs: m[1], cells };
+    });
+    const hdr = rows.find(r => r.cells.filter(c => labels.includes(norm(c.text))).length >= 2);
+    if (!hdr) continue;
+    const colOf = {}; hdr.cells.forEach(c => { if (c.col && c.text) colOf[norm(c.text)] = c.col; });
+    const hdrCols = hdr.cells.filter(c => c.col && c.text).map(c => c.col);
+    const styleRow = rows.find(r => r.rn === hdr.rn + 1);
+    const styleOf = {}; (styleRow?.cells || []).forEach(c => { if (c.col && c.s) styleOf[c.col] = c.s; });
+    const text = it => `${it.name || ""} ${it.summary || ""} ${it.detail || ""}`;
+    const derive = (spec, it, i) => {
+      if (spec && typeof spec === "object") {
+        if (spec.seq) return `${spec.seq}${String(i + 1).padStart(spec.pad || 3, "0")}`;
+        if (spec.const !== undefined) return spec.const;
+        return "";
+      }
+      switch (spec) {
+        case "id": return it.id || "";
+        case "name": return it.name || "";
+        case "source": return it.source || "";
+        case "type": return it.type || "";
+        case "priority": return it.priority || "";
+        case "summary": return it.summary || it.name || "";
+        case "nameSummary": return [it.name, it.summary].filter(Boolean).join(" — ");
+        case "module": return (!it.wbsNo || it.wbsNo === "공통") ? "공통" : it.wbsNo;
+        case "bus": {   // 요구사항 문장에 명시된 버스만 표기 (추정 금지)
+          const t = text(it);
+          if (/CAN[\s-]?FD/i.test(t)) return "CAN FD";
+          const cb = /CAN[\s-]?([A-Z])\b/.exec(t); if (cb) return `CAN-${cb[1]}`;
+          if (/\bCAN\b/i.test(t)) return "CAN";
+          if (/\bLIN\b/i.test(t)) return "LIN";
+          if (/Ethernet|이더넷|SOME\/IP|DoIP/i.test(t)) return "Ethernet";
+          return "";
+        }
+        case "message": { const m = /\b([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)\b/.exec(text(it)); return m ? m[1] : ""; }
+        case "periodMs": { const m = /(\d+)\s*ms\s*주기|주기\s*(\d+)\s*ms/i.exec(text(it)); return m ? (m[1] || m[2]) : ""; }
+        default: return "";
+      }
+    };
+    const newRows = items.map((it, i) => {
+      const r = hdr.rn + 1 + i;
+      const vals = {};
+      Object.entries(cfg.cols).forEach(([label, spec]) => { const col = colOf[norm(label)]; if (col) vals[col] = derive(spec, it, i); });
+      const cells = hdrCols.map(col => {
+        const s = styleOf[col] ? ` s="${styleOf[col]}"` : "";
+        const v = vals[col];
+        return v ? `<c r="${col}${r}"${s} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>` : `<c r="${col}${r}"${s}/>`;
+      }).join("");
+      return `<row r="${r}">${cells}</row>`;
+    }).join("");
+    // 헤더 이전 행은 유지, 헤더 이후 행(빈 양식 행)은 요구사항 행으로 교체
+    const before = rows.filter(r => r.rn <= hdr.rn).map(r => r.raw).join("");
+    xml = xml.replace(sd[0], `<sheetData>${before}${newRows}</sheetData>`);
+    byPath[sh.path].content = xml;
+    return zipBytes(files);
+  }
+  return null;
+}
+
 // 산출물 1건 → 파일 결정: 특수 산출물 → OSSP 템플릿 실파일 → 스켈레톤 순
 async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
   // 요구사항 정의서·명세서: 확정 요구사항이 있으면 OSSP 산출물템플릿에 채워 표준 양식 그대로 생성 (실패 시 자체 생성 폴백)
@@ -6045,6 +6137,15 @@ async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
                 if (withReq) cur = withReq;
               }
             } catch (_) { /* 요구사항 주입 실패 시 원본 유지 */ }
+            try {
+              // OSSP 가이드가 지정한 산출물(예: 이해관계자 요구사항 목록·인터페이스 정의서)에 확정 요구사항 채움
+              const nn2 = normDocName(doc.name);
+              const fillCfg = (getGuideForOSSP(ctx?.ossp || {})?.reqXlsxFill || []).find(c => nn2.includes(normDocName(c.match)));
+              if (fillCfg && ctx?.requirements?.items?.length) {
+                const filled = await injectRequirementsIntoXlsxByHeader(cur, fillCfg, ctx.requirements);
+                if (filled) cur = filled;
+              }
+            } catch (_) { /* 채움 실패 시 원본 유지 */ }
             try {
               const injected = await injectLogosIntoTemplateXlsx(cur, meta);
               return { ext, bytes: injected || cur };

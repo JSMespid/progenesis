@@ -327,6 +327,18 @@ export const TAILORING_GUIDES = {
     scaleTitle: "적용 등급",
     criteriaTitle: "등급 판정 기준",
     hideDesignMethod: true,   // PDP 2장에서 "설계방식: 해당 없음" 행 숨김
+    // 확정 요구사항을 채울 xlsx 산출물 (헤더 라벨 → 값). 값: id·name·source·type·priority·summary·nameSummary·module·bus·message·periodMs
+    //  {seq:"STK-"} = 순번 ID, {const:"..."} = 고정값. bus·message·periodMs는 요구사항 문장에 명시된 경우에만 추출(추정 금지).
+    reqXlsxFill: [
+      { match: "이해관계자 요구사항 목록", sheet: "템플릿", cols: {
+          "요구 ID": { seq: "STK-" }, "출처(OEM 사양서·조항)": "source", "요구사항 내용": "summary",
+          "유형(기능/비기능/규제)": "type", "우선순위": "priority", "합의 상태": { const: "검토 중" },
+          "시스템 요구 ID(추적)": "id", "비고": "name" } },
+      { match: "인터페이스 정의서", sheet: "템플릿", types: ["인터페이스"], cols: {
+          "인터페이스 ID": { seq: "IF-" }, "관련 요구사항 ID": "id", "인터페이스 내용": "nameSummary",
+          "버스(CAN/LIN/ETH)": "bus", "메시지명": "message", "주기(ms)": "periodMs",
+          "비고": { const: "메시지 ID·시그널·비트 배치는 DBC/ICD 확정 후 작성" } } },
+    ],
     // 요구사항 AI 작성 모달 문구·AI 역할 (OSSP별)
     reqGen: {
       desc: "OEM·이해관계자 요구 원문 → 도출(SYS.1)·명세(SYS.2) → 검토·확정 시 시스템 요구사항 명세서와 요구사항 추적 매트릭스(13-51)에 자동 반영",
