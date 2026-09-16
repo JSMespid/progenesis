@@ -2415,7 +2415,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
             <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse" }}>
               <tbody>
                 <tr><td style={cellHead}>적용 가이드</td><td style={cell} colSpan={3}>{guide.title}</td></tr>
-                <tr><td style={cellHead}>{guide.scaleTitle || "프로젝트 규모"}</td><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
+                <tr><td style={cellHead}>{guide.scaleTitle || "프로젝트 규모"}</td>{guide.hideDesignMethod ? <td style={cell} colSpan={3}>{scaleLabel}</td> : <><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></>}</tr>
                 <tr><td style={cellHead}>{guide.criteriaTitle || "규모 판정 기준"}</td><td style={cell} colSpan={3}>{guide.sizeNote?.replace(/^※\s*/, "")}</td></tr>
               </tbody>
             </table>
@@ -4261,7 +4261,7 @@ function makePdpDocx(meta, ctx, phase) {
     docxTable([
       ["적용 가이드", guide.title || "-"],
       [guide.scaleTitle || "프로젝트 규모", scaleLabel],
-      ["설계방식", guide.hasDesignMethod ? method : "해당 없음"],
+      ...(guide.hideDesignMethod ? [] : [["설계방식", guide.hasDesignMethod ? method : "해당 없음"]]),
       [guide.criteriaTitle || "규모 판정 기준", (guide.sizeNote || "").replace(/^※\s*/, "")],
     ], 1) +
     docxP(`3. 개발산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
@@ -6585,7 +6585,7 @@ function PdpDocView({ project }) {
       <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse" }}>
         <tbody>
           <tr><td style={cellHead}>적용 가이드</td><td style={cell} colSpan={3}>{guide.title}</td></tr>
-          <tr><td style={cellHead}>{guide.scaleTitle || "프로젝트 규모"}</td><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
+          <tr><td style={cellHead}>{guide.scaleTitle || "프로젝트 규모"}</td>{guide.hideDesignMethod ? <td style={cell} colSpan={3}>{scaleLabel}</td> : <><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></>}</tr>
           <tr><td style={cellHead}>{guide.criteriaTitle || "규모 판정 기준"}</td><td style={cell} colSpan={3}>{guide.sizeNote?.replace(/^※\s*/, "")}</td></tr>
         </tbody>
       </table>

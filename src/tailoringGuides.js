@@ -326,6 +326,7 @@ export const TAILORING_GUIDES = {
     phaseOrder: ["착수·계획", "시스템 요구·설계", "SW 요구·설계", "SW 상세설계·구현", "SW 통합·검증", "시스템 통합·검증", "릴리즈"],
     scaleTitle: "적용 등급",
     criteriaTitle: "등급 판정 기준",
+    hideDesignMethod: true,   // PDP 2장에서 "설계방식: 해당 없음" 행 숨김
     scaleOptions: [
       { value: "(초)대형", label: "A등급 · ASIL C/D·CL3" },
       { value: "중형",    label: "B등급 · ASIL A/B·CL2" },
