@@ -327,6 +327,14 @@ export const TAILORING_GUIDES = {
     scaleTitle: "적용 등급",
     criteriaTitle: "등급 판정 기준",
     hideDesignMethod: true,   // PDP 2장에서 "설계방식: 해당 없음" 행 숨김
+    // 요구사항 AI 작성 모달 문구·AI 역할 (OSSP별)
+    reqGen: {
+      desc: "OEM·이해관계자 요구 원문 → 도출(SYS.1)·명세(SYS.2) → 검토·확정 시 시스템 요구사항 명세서와 요구사항 추적 매트릭스(13-51)에 자동 반영",
+      srcHint: "OEM 사양서 발췌·RFQ·고객 회의록·법규 요구 등 붙여넣기 또는 파일 업로드",
+      placeholder: "예) 차속 15km/h 이상이 되면 전 도어를 자동 잠금해야 한다. 스마트키 인증 후 도어 잠금 해제까지 200ms 이내여야 한다. …",
+      roleDerive: "당신은 Automotive SPICE 4.0 SYS.1(이해관계자 요구사항 도출)·SYS.2(시스템 요구사항 분석)와 ISO 26262·ISO/SAE 21434에 정통한 차량 전장 품질보증 전문가입니다. 아래 OEM·이해관계자 요구사항 원문에서 기능·비기능(성능·타이밍·전원·진단)·인터페이스(CAN/LIN·진단) 요구사항을 도출하세요. 안전(ASIL) 또는 보안 관련 요구는 요약에 그 속성을 명시하세요.",
+      roleSpec: "당신은 Automotive SPICE 4.0 SYS.2(시스템 요구사항 분석, BP1~BP3)와 ISO 26262에 정통한 차량 전장 품질보증 전문가입니다. 아래 요구사항 각각을 검증 가능성(정량 기준·검증 방법)과 구현 가능성을 고려해 상세 명세하세요. 비기능은 측정기준(단위·임계값·측정 조건)을 포함하세요.",
+    },
     scaleOptions: [
       { value: "(초)대형", label: "A등급 · ASIL C/D·CL3" },
       { value: "중형",    label: "B등급 · ASIL A/B·CL2" },

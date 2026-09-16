@@ -6359,7 +6359,9 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
 
 // ── 요구사항 AI 작성 모달: 원문 입력(텍스트·txt·docx 업로드) → AI 도출·명세 → 검토·수정 → 확정 ──
 // 확정된 요구사항은 요구사항 정의서·명세서 docx 생성과 요구사항 추적 매트릭스(xlsx) 자동 채움에 사용됨
-function ReqGenModal({ onClose, form, wbs, requirements, setRequirements }) {
+function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp }) {
+  // OSSP별 문구·AI 역할 — 가이드에 reqGen이 없으면 기존(정보공학) 문구 사용
+  const RG = getGuideForOSSP(ossp || {})?.reqGen || {};
   const leaves = reqSpecLeaves(wbs);   // WBS 최하위 기능 모듈 (요구사항 배정 후보)
   const leafName = {}; leaves.forEach(l => { leafName[l.wbsNo] = l.name; });
   const [srcText, setSrcText] = useState("");
@@ -6407,7 +6409,7 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements }) {
       let raw = [];
       for (let i = 0; i < chunks.length; i++) {
         setProg({ percent: 5 + (i / chunks.length) * 35, label: `요구사항 도출 중… (${i + 1}/${chunks.length})` });
-        const r = await callClaudeJson(`당신은 정보공학 방법론 요구정의 단계(RD1200 요구사항 정의)에 정통한 SI 품질보증 전문가입니다. 아래 이해관계자 요구사항 원문에서 기능·비기능·인터페이스 요구사항을 도출하세요.
+        const r = await callClaudeJson(`${RG.roleDerive || "당신은 정보공학 방법론 요구정의 단계(RD1200 요구사항 정의)에 정통한 SI 품질보증 전문가입니다. 아래 이해관계자 요구사항 원문에서 기능·비기능·인터페이스 요구사항을 도출하세요."}
 프로젝트: ${form?.name || ""} (${form?.type || ""}) / 고객사: ${form?.client || ""}
 규칙: 요구사항 단위로 중복 없이 분할. 비기능은 ISO 9126 품질특성(기능성/신뢰성/사용성/효율성/유지보수성/이식성) 관점으로 식별. 최대 30건.
 JSON만 출력: {"items":[{"type":"기능|비기능|인터페이스","name":"요구사항명(25자 이내)","source":"원문 내 근거(15자 이내)","priority":"상|중|하","summary":"개요 1문장(50자 이내)"}]}
@@ -6428,7 +6430,7 @@ ${chunks[i]}`, 6000);
       for (let i = 0; i < list.length; i += B) {
         const grp = list.slice(i, i + B);
         setProg({ percent: 40 + (i / list.length) * 40, label: `요구사항 명세 작성 중… (${Math.min(i + B, list.length)}/${list.length})` });
-        const r = await callClaudeJson(`당신은 정보공학 방법론 요구정의 단계(RD1300 요구사항 명세)에 정통한 SI 품질보증 전문가입니다. 아래 요구사항 각각을 구현 가능성·테스트 가능성을 고려해 상세 명세하세요. 비기능은 측정기준을 포함하세요.
+        const r = await callClaudeJson(`${RG.roleSpec || "당신은 정보공학 방법론 요구정의 단계(RD1300 요구사항 명세)에 정통한 SI 품질보증 전문가입니다. 아래 요구사항 각각을 구현 가능성·테스트 가능성을 고려해 상세 명세하세요. 비기능은 측정기준을 포함하세요."}
 기능 요구사항은 유스케이스 관점으로 다음을 추가 작성하세요: actors(관련 액터, 쉼표 구분), basicFlow(기본 흐름 3~6단계, 단계는 ';'로 구분), subFlow(서브 흐름, 없으면 빈 문자열), exceptionFlow(예외 흐름 1~3개, ';' 구분), precondition(사전 조건 1문장), postcondition(사후 조건 1문장). 비기능·인터페이스 요구사항은 이 6개 필드를 모두 빈 문자열로 하세요.
 규칙: id는 입력에 주어진 값을 그대로 반환(새 ID 부여·형식 변경 금지). 각 문자열 값은 줄바꿈 없이 한 문단으로 작성.
 JSON만 출력: {"items":[{"id":"...","detail":"상세 설명 2~3문장","acceptance":"측정 가능한 인수 기준 1~2문장","quality":"비기능이면 ISO 9126 품질특성명, 아니면 빈 문자열","assumptions":"가정·제약(없으면 빈 문자열)","actors":"...","basicFlow":"...","subFlow":"...","exceptionFlow":"...","precondition":"...","postcondition":"..."}]}
@@ -6500,7 +6502,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 18px", borderBottom:`1px solid ${T.border}`, flexShrink:0 }}>
           <div>
             <div style={{ fontSize:14, fontWeight:700 }}>🤖 요구사항 정의서·명세서 AI 작성</div>
-            <div style={{ fontSize:10.5, color:T.muted, marginTop:2 }}>이해관계자 요구사항 원문 → 도출(RD1200)·명세(RD1300) → 검토·확정 시 OSSP 템플릿 기반 정의서(xlsx)·명세서(docx)와 요구사항 추적 매트릭스에 자동 반영</div>
+            <div style={{ fontSize:10.5, color:T.muted, marginTop:2 }}>{RG.desc || "이해관계자 요구사항 원문 → 도출(RD1200)·명세(RD1300) → 검토·확정 시 OSSP 템플릿 기반 정의서(xlsx)·명세서(docx)와 요구사항 추적 매트릭스에 자동 반영"}</div>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"none", color:T.muted, fontSize:18, cursor:"pointer" }}>✕</button>
         </div>
@@ -6509,8 +6511,8 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
           <div onDragOver={e=>{ e.preventDefault(); if (!busy) setSrcDrag(true); }} onDragLeave={()=>setSrcDrag(false)}
             onDrop={e=>{ e.preventDefault(); setSrcDrag(false); addSrcFiles(Array.from(e.dataTransfer.files || [])); }}
             style={{ border:`1px solid ${srcDrag ? T.accent : T.accentDim}`, borderLeft:`3px solid ${T.accent}`, borderRadius:9, background: srcDrag ? T.accent+"22" : T.accent+"08", padding:"10px 12px", marginBottom:12 }}>
-            <div style={{ fontSize:11.5, fontWeight:600, marginBottom:6, color:T.accent }}>📝 이해관계자 요구사항 원문 <span style={{ color:T.muted, fontWeight:400, fontSize:10.5 }}>(RFP 발췌·인터뷰 기록·회의록 등 붙여넣기 또는 파일 업로드)</span></div>
-            <textarea value={srcText} onChange={e=>setSrcText(e.target.value)} placeholder="예) 사용자는 네트워크 장비 목록을 조건별로 검색할 수 있어야 한다. 시스템 응답시간은 3초 이내여야 한다. …" disabled={busy}
+            <div style={{ fontSize:11.5, fontWeight:600, marginBottom:6, color:T.accent }}>📝 이해관계자 요구사항 원문 <span style={{ color:T.muted, fontWeight:400, fontSize:10.5 }}>({RG.srcHint || "RFP 발췌·인터뷰 기록·회의록 등 붙여넣기 또는 파일 업로드"})</span></div>
+            <textarea value={srcText} onChange={e=>setSrcText(e.target.value)} placeholder={RG.placeholder || "예) 사용자는 네트워크 장비 목록을 조건별로 검색할 수 있어야 한다. 시스템 응답시간은 3초 이내여야 한다. …"} disabled={busy}
               style={{ ...ta, minHeight:110, marginBottom:8 }} />
             <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
               <label style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"6px 12px", border:`1px dashed ${T.accentDim}`, borderRadius:8, cursor: busy?"default":"pointer", fontSize:11, color:T.muted, background:T.bg }}>
@@ -6702,7 +6704,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
           </div>
         </div>
       )}
-      {reqModal && <ReqGenModal onClose={()=>setReqModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} />}
+      {reqModal && <ReqGenModal onClose={()=>setReqModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} />}
     </div>
   );
 }
