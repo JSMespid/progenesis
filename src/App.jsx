@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { SDLC_FACTOR_CRITERIA } from './sdlcFactorCriteria';
 import TailoringGuideModal from './TailoringGuideModal';
-import { TAILORING_GUIDES, getGuideForOSSP } from './tailoringGuides';
+import { TAILORING_GUIDES, getGuideForOSSP, mapMgmtOutput } from './tailoringGuides';
 import { PROCESS_TAILORING_GUIDE, processMark, processKey, resolveProcessTailoring } from './processTailoringGuide';
 
 const T = {
@@ -854,12 +854,15 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         return toks.find(t => t.length >= 2 && t !== "예") || toks[0] || "";
       };
       resolveProcessTailoring(tailoring.process).filter(r => r.applied).forEach(r => {
-        const n = firstOut(r.outputs);
+        const n = mapMgmtOutput(firstOut(r.outputs), guide);
         if (n && !nameRef.has(n)) nameRef.set(n, { code:null, required: r.mark === "●", mgmt:true });
       });
 
       // ── 개수 대사(對査)용 집계 — 최하위 Task 1건 = 산출물 1건(1:1)이 원칙 ──
-      let leafTotal = 0, leafWithDeliv = 0, dupIncluded = 0, pdpInjected = false;
+      let leafTotal = 0, leafWithDeliv = 0, dupIncluded = 0, pdpInjected = false, mgmtMerged = 0;
+      // 단일 산출물 원칙: 관리활동 Task의 산출물이 개발산출물 Task에도 있으면 개발산출물 쪽 1건만 생성
+      const devDelivNames = new Set();
+      wbsData.tasks.forEach(t => { if (!t.mgmt) (t.subtasks || []).forEach(s => { const n = String(s.deliverable || "").trim(); if (n) devDelivNames.add(n); }); });
       wbsData.tasks.forEach(t => (t.subtasks || []).forEach(s => {
         leafTotal += 1;
         if (String(s.deliverable || "").trim()) leafWithDeliv += 1;
@@ -875,6 +878,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         (t.subtasks || []).forEach(s => {
           const name = String(s.deliverable || "").trim();
           if (!name) return;   // 산출물 미지정 Task만 제외 — 지정된 Task는 중복이라도 전부 1:1 반영
+          if (t.mgmt && devDelivNames.has(name)) { mgmtMerged += 1; return; }   // 관리활동 산출물 → 개발산출물로 통합
           if (seen.has(name)) dupIncluded += 1; else seen.add(name);
           let code = codeByName.get(name);
           if (!code) {
@@ -918,7 +922,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         mandatoryCount: allDocs.filter(d => String(d.priority||"").startsWith("필수")).length,
         source: "wbs",   // WBS 기반 생성 마커 — 구버전 생성분과 구분
         // 개수 대사 내역: 최하위 Task 수 → 산출물 지정(1:1 전부 반영) → PDP 추가 = totalDocs
-        recon: { leafTotal, leafWithDeliv, dupIncluded, pdpInjected },
+        recon: { leafTotal, leafWithDeliv, dupIncluded, pdpInjected, mgmtMerged },
       };
 
       // ── 각 문서의 목적 설명(1문장) — AI 미사용. 산출물명 키워드 사전(deriveDeliverablePurpose)으로 결정적 생성 ──
@@ -2822,12 +2826,12 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
     // 1) 관리 프로세스 작업 (프로세스 테일러링 적용분) — 영역 단위, 시스템 구성요소 분해 없음
     for (const area of Object.keys(mgmtByArea)) {
       a += 1; let b = 0;
-      rows.push({ level: 1, wbsCode: `${a}`, name: area, deliverable: "" });
+      rows.push({ level: 1, wbsCode: `${a}`, name: area, deliverable: "", mgmt: true });
       for (const m of mgmtByArea[area]) {
         b += 1;
         rows.push({ level: 2, wbsCode: `${a}.${b}`,
           name: m.activity ? `${m.process} — ${m.activity}` : m.process,
-          deliverable: firstOutput(m.outputs) });
+          deliverable: mapMgmtOutput(firstOutput(m.outputs), guide) });
       }
     }
     // 2) 단계별 산출물 작성 작업 (방법론 테일러링 × 시스템 구성요소 매트릭스)
@@ -2873,7 +2877,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
     let cur = null;
     rows.forEach((r, idx) => {
       if (r.level === 1) {
-        cur = { id: `t${idx}`, wbsCode: r.wbsCode, phase: r.name, duration: "", subtasks: [] };
+        cur = { id: `t${idx}`, wbsCode: r.wbsCode, phase: r.name, duration: "", subtasks: [], ...(r.mgmt ? { mgmt: true } : {}) };
         tasks.push(cur);
       } else if (cur) {
         cur.subtasks.push({ id: `s${idx}`, wbsCode: r.wbsCode, task: r.name, level: r.level, deliverable: r.deliverable,
@@ -3041,7 +3045,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
                         {r.process}{r.activity && <span style={{ color: T.muted }}> › {r.activity}</span>}
                         {r.changed && <Badge color={T.amber}>변경적용</Badge>}
                       </span>
-                      {firstOutput(r.outputs) && <span style={{ color: T.muted, fontSize: 9.5 }}>→ {firstOutput(r.outputs)}</span>}
+                      {firstOutput(r.outputs) && <span style={{ color: T.muted, fontSize: 9.5 }}>→ {mapMgmtOutput(firstOutput(r.outputs), guide)}</span>}
                     </div>
                   ))}
                 </div>
@@ -6442,6 +6446,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
             <div style={{ fontSize:10.5, color:T.muted, padding:"7px 10px", background:T.bg, border:`1px dashed ${T.border}`, borderRadius:8, marginBottom:12, lineHeight:1.7 }}>
               ℹ <b style={{ color:T.text }}>WBS 개수 대사</b> — 최하위 Task {r.leafTotal}건 중 산출물 지정 <b style={{ color:T.text }}>{r.leafWithDeliv}건</b> 전부 1:1 반영
               {r.leafTotal - r.leafWithDeliv > 0 && <> (미지정 {r.leafTotal - r.leafWithDeliv}건 제외)</>}
+              {r.mgmtMerged > 0 && <> − 관리활동 중복 <b style={{ color:T.text }}>{r.mgmtMerged}건</b>(개발산출물로 통합)</>}
               {r.pdpInjected && <> + 테일러링결과서 <b style={{ color:T.text }}>1건</b>(필수 자동추가)</>}
               {" "}= 전체 <b style={{ color:T.accent }}>{total}건</b>
               {r.dupIncluded > 0 && <span style={{ color:T.muted }}> · 동일 산출물명 {r.dupIncluded}건 포함(WBS 번호로 구분)</span>}
@@ -6805,6 +6810,7 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
             <div style={{ fontSize:10.5, color:T.muted, padding:"7px 10px", background:T.surface, border:`1px dashed ${T.border}`, borderRadius:8, lineHeight:1.7 }}>
               ℹ <b style={{ color:T.text }}>WBS 개수 대사</b> — 최하위 Task {r.leafTotal}건 중 산출물 지정 <b style={{ color:T.text }}>{r.leafWithDeliv}건</b> 전부 1:1 반영
               {r.leafTotal - r.leafWithDeliv > 0 && <> (미지정 {r.leafTotal - r.leafWithDeliv}건 제외)</>}
+              {r.mgmtMerged > 0 && <> − 관리활동 중복 <b style={{ color:T.text }}>{r.mgmtMerged}건</b>(개발산출물로 통합)</>}
               {r.pdpInjected && <> + 테일러링결과서 <b style={{ color:T.text }}>1건</b>(필수 자동추가)</>}
               {" "}= 전체 <b style={{ color:T.accent }}>{tt}건</b>
               {r.dupIncluded > 0 && <span style={{ color:T.muted }}> · 동일 산출물명 {r.dupIncluded}건 포함(WBS 번호로 구분)</span>}
