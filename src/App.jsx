@@ -2706,6 +2706,100 @@ function HolidayCalendar({ holidays, onToggle }) {
   );
 }
 
+// ── 시스템 구성요소(PBS) 파일 업로드 파서 ──────────────────────────────
+// 지원: .txt/.md("L1 > L2 > L3" 줄 또는 들여쓰기 계층), .csv/.tsv, .xlsx(첫 시트, 열 = L1·L2·L3)
+// 표 형식은 빈 셀을 위 행 값으로 채움(병합 셀 대응), 머리글 행 자동 제외, 중복 줄 제거.
+async function xlsxFirstSheetRows(bytes) {
+  const files = await unzipBytes(bytes);
+  const td = new TextDecoder();
+  const read = p => { const f = files.find(x => x.path === p); return f ? td.decode(f.content) : ""; };
+  const unesc = s => String(s).replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCharCode(d));
+  const sst = [...read("xl/sharedStrings.xml").matchAll(/<si>([\s\S]*?)<\/si>/g)]
+    .map(m => unesc([...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("")));
+  const sheets = files.filter(f => /^xl\/worksheets\/sheet\d+\.xml$/.test(f.path))
+    .sort((x, y) => Number(x.path.match(/(\d+)\.xml$/)[1]) - Number(y.path.match(/(\d+)\.xml$/)[1]));
+  if (!sheets.length) return [];
+  const xml = td.decode(sheets[0].content);
+  const colIdx = ref => { const m = /^([A-Z]+)/.exec(ref || ""); if (!m) return -1; return [...m[1]].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1; };
+  return [...xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)].map(rm => {
+    const row = [];
+    let seq = 0;
+    [...rm[1].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)].forEach(cm => {
+      const attrs = cm[1], inner = cm[2] || "";
+      const r = /\br="([A-Z]+\d+)"/.exec(attrs);
+      const ci = r ? colIdx(r[1]) : seq;
+      seq = ci + 1;
+      let val = "";
+      if (/t="s"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); val = v ? (sst[Number(v[1])] || "") : ""; }
+      else if (/t="inlineStr"/.test(attrs)) val = unesc([...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join(""));
+      else { const v = /<v>([\s\S]*?)<\/v>/.exec(inner); val = v ? unesc(v[1]) : ""; }
+      row[ci] = String(val).trim();
+    });
+    return Array.from({ length: row.length }, (_, i) => row[i] || "");
+  });
+}
+function pbsLinesFromRows(rows) {
+  const HEADER = /^(l\s*[123]|level\s*[123]|레벨\s*[123]|대분류|중분류|소분류|시스템|서브시스템|구성요소|컴포넌트|모듈|기능|구분|no\.?|번호|순번)$/i;
+  const out = [];
+  let prev = ["", "", ""];
+  rows.forEach((raw, ri) => {
+    let cells = (raw || []).map(c => String(c ?? "").trim());
+    // 순번 열(숫자·"1.1" 등)이 맨 앞이면 제외
+    if (cells.length > 1 && /^\d+(\.\d+)*\.?$/.test(cells[0])) cells = cells.slice(1);
+    // 이미 "L1 > L2 > L3" 형식인 셀
+    const arrow = cells.find(c => c.includes(">"));
+    if (arrow) { const p = arrow.split(">").map(x => x.trim()).filter(Boolean).slice(0, 3); if (p.length) { out.push(p.join(" > ")); prev = [p[0] || "", p[1] || "", p[2] || ""]; } return; }
+    const c3 = [cells[0] || "", cells[1] || "", cells[2] || ""];
+    if (!c3.some(Boolean)) return;
+    if (ri === 0 && c3.filter(Boolean).every(c => HEADER.test(c.replace(/[(（\[].*?[)）\]]/g, "").trim()))) return;   // 머리글 행 (괄호 설명 무시)
+    // 병합 셀 대응: 왼쪽 빈 칸은 위 행 값으로 채움 (오른쪽에 값이 있을 때만)
+    const lastIdx = c3[2] ? 2 : c3[1] ? 1 : 0;
+    const filled = c3.map((c, i) => (i < lastIdx && !c) ? prev[i] : c);
+    if (!filled[0]) return;
+    const parts = filled[1] ? (filled[2] ? filled : filled.slice(0, 2)) : [filled[0]];
+    out.push(parts.join(" > "));
+    prev = [filled[0], filled[1] || "", filled[2] || ""];
+  });
+  return out;
+}
+function pbsLinesFromText(text) {
+  const lines = String(text || "").replace(/^\uFEFF/, "").split(/\r?\n/);
+  const nonEmpty = lines.filter(l => l.trim());
+  if (!nonEmpty.length) return [];
+  // 1) 화살표 형식
+  if (nonEmpty.some(l => l.includes(">"))) return pbsLinesFromRows(nonEmpty.map(l => [l]));
+  // 2) 표 형식 (탭 또는 쉼표 구분)
+  const delim = nonEmpty.some(l => l.includes("\t")) ? "\t" : (nonEmpty.filter(l => l.includes(",")).length >= nonEmpty.length / 2 ? "," : null);
+  if (delim) return pbsLinesFromRows(nonEmpty.map(l => l.split(delim).map(c => c.replace(/^"(.*)"$/, "$1"))));
+  // 3) 들여쓰기 계층 (공백·탭·"-"·"*" 목록)
+  const items = nonEmpty.map(l => {
+    const m = /^(\s*)(?:[-*•·]\s+|\d+(?:\.\d+)*\.?\s+)?(.*)$/.exec(l.replace(/\t/g, "  "));
+    return { indent: m[1].length, name: m[2].trim() };
+  }).filter(x => x.name);
+  const levels = [...new Set(items.map(x => x.indent))].sort((x, y) => x - y);
+  const out = []; const path = [];
+  items.forEach(it => {
+    const lv = Math.min(levels.indexOf(it.indent), 2);
+    path.length = lv; path[lv] = it.name;
+    out.push(path.slice(0, lv + 1).join(" > "));
+  });
+  // 하위가 있는 상위 줄은 제거 (최하위 요소만 남김)
+  return out.filter(l => !out.some(o => o !== l && o.startsWith(l + " > ")));
+}
+async function parsePbsFile(file) {
+  const name = String(file?.name || "").toLowerCase();
+  if (/\.xls$/.test(name)) throw new Error("구버전 .xls는 지원하지 않습니다. .xlsx 또는 .csv로 저장해 주세요.");
+  if (/\.xlsx$/.test(name)) return pbsLinesFromRows(await xlsxFirstSheetRows(new Uint8Array(await file.arrayBuffer())));
+  if (/\.(txt|csv|tsv|md)$/.test(name) || (file.type || "").startsWith("text/")) {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let text;
+    try { text = new TextDecoder("utf-8", { fatal: true }).decode(buf); }
+    catch { text = new TextDecoder("euc-kr").decode(buf); }   // 엑셀에서 저장한 CSV(CP949) 대응
+    return pbsLinesFromText(text);
+  }
+  throw new Error("지원 형식: .xlsx, .csv, .tsv, .txt");
+}
+
 function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRecommendPBS, pbsNoAi, onTogglePbsNoAi, wbsSetup, setWbsSetup, tailoring, ossp, form, setForm }) {
   // 수행 팀원 — 작업자 콤보박스 원천. 미등록 입력은 MS Project 방식으로 명단에 자동 편입한다.
   const members = form?.members || [];
@@ -2726,6 +2820,27 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
   const holidays = wbsSetup?.holidays || [];
   const [showCal, setShowCal] = useState(false);
   const [showMgmt, setShowMgmt] = useState(false);   // 관리 프로세스 작업 목록 펼침
+  const [pbsDrag, setPbsDrag] = useState(false);     // 구성요소 파일 드래그 오버 표시
+  const [pbsFileMsg, setPbsFileMsg] = useState(null); // 파일 업로드 결과 { ok, text }
+  const pbsFileRef = useRef(null);
+  async function importPbsFile(file) {
+    if (!file) return;
+    try {
+      const lines = [...new Set(await parsePbsFile(file))];
+      if (!lines.length) { setPbsFileMsg({ ok: false, text: `${file.name}: 구성요소를 찾지 못했습니다. "L1 > L2 > L3" 줄 또는 L1·L2·L3 열 형식인지 확인하세요.` }); return; }
+      const cur = (wbsSetup?.pbsText || "").trim();
+      let next = lines.join("\n");
+      let mode = "적용";
+      if (cur) {
+        if (window.confirm(`현재 입력된 구성요소를 파일 내용(${lines.length}개)으로 바꿀까요?\n\n[확인] 바꾸기   [취소] 기존 내용 뒤에 추가`)) mode = "대체";
+        else { const have = new Set(cur.split("\n").map(s => s.trim()).filter(Boolean)); next = cur + "\n" + lines.filter(l => !have.has(l)).join("\n"); mode = "추가"; }
+      }
+      setWbsSetup(s => ({ ...s, pbsText: next.trim(), ...(mode === "대체" ? { selected: {} } : {}) }));
+      setPbsFileMsg({ ok: true, text: `${file.name}에서 구성요소 ${lines.length}개를 불러와 ${mode}했습니다.${mode === "대체" ? " 매트릭스 선택은 초기화되었습니다." : ""}` });
+    } catch (e) {
+      setPbsFileMsg({ ok: false, text: `${file.name}: ${e.message}` });
+    }
+  }
   const [buildMsg, setBuildMsg] = useState(null);    // WBS 생성 결과 피드백 { ok, text }
   const scheduleRef = useRef(null);                  // 생성 후 ④ 일정 계획으로 스크롤 이동
 
@@ -2933,6 +3048,11 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
                 style={{ accentColor: T.amber, cursor: "pointer", margin: 0 }} />
               AI 미사용
             </label>
+            <input ref={pbsFileRef} type="file" accept=".xlsx,.csv,.tsv,.txt" style={{ display: "none" }}
+              onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; importPbsFile(f); }} />
+            <Btn variant="outline" onClick={() => pbsFileRef.current?.click()} style={{ fontSize: 11, padding: "4px 10px" }}>
+              📂 파일 업로드
+            </Btn>
             <Btn variant="outline" onClick={onRecommendPBS} disabled={generating} style={{ fontSize: 11, padding: "4px 10px" }}>
               {pbsNoAi ? "📋 표준 프리셋 적용" : (generating ? "추천 중…" : "⚡ AI 추천")}
             </Btn>
@@ -2944,12 +3064,29 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
             ✓ {genProgress.label}
           </div>
         )}
+        {pbsFileMsg && (
+          <div style={{ fontSize: 11, color: pbsFileMsg.ok ? T.green : T.red, background: (pbsFileMsg.ok ? T.green : T.red) + "11", border: `1px solid ${(pbsFileMsg.ok ? T.green : T.red)}44`, borderRadius: 8, padding: "7px 11px", marginBottom: 6, display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <span>{pbsFileMsg.ok ? "✓ " : "⚠ "}{pbsFileMsg.text}</span>
+            <span onClick={() => setPbsFileMsg(null)} style={{ cursor: "pointer", color: T.muted }}>✕</span>
+          </div>
+        )}
+        <div style={{ position: "relative" }}
+          onDragOver={e => { if ([...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); if (!pbsDrag) setPbsDrag(true); } }}
+          onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setPbsDrag(false); }}
+          onDrop={e => { if (!e.dataTransfer?.files?.length) return; e.preventDefault(); setPbsDrag(false); importPbsFile(e.dataTransfer.files[0]); }}>
+        {pbsDrag && (
+          <div style={{ position: "absolute", inset: 0, zIndex: 2, borderRadius: 10, border: `2px dashed ${T.accent}`, background: T.bg + "E6", display: "flex", alignItems: "center", justifyContent: "center", color: T.accent, fontSize: 13, fontWeight: 600, pointerEvents: "none" }}>
+            📂 여기에 놓으면 구성요소를 불러옵니다 (.xlsx · .csv · .txt)
+          </div>
+        )}
         <textarea value={pbsText}
           onChange={e => setWbsSetup(s => ({ ...s, pbsText: e.target.value }))}
           placeholder={"한 줄에 하나씩 \"L1 > L2 > L3\" 형식으로 입력하세요.\n예)\n포털시스템 > 사용자관리 > 로그인\n포털시스템 > 사용자관리 > 권한관리\n포털시스템 > 게시판\n인터페이스 > 공통"}
           rows={6}
           style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 12px", color: T.text, fontSize: 12, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.7 }} />
+        </div>
         <div style={{ fontSize: 10, color: T.muted, marginTop: 4 }}>※ L3을 사용하려면 L2가 있어야 합니다. 여러 요소에 공통 적용되는 부분은 L2에 "공통"을 사용하세요 (WBS에서 중복 허용).</div>
+        <div style={{ fontSize: 10, color: T.muted, marginTop: 3 }}>※ 파일 업로드·끌어다 놓기: .xlsx(첫 시트, A~C열 = L1·L2·L3) · .csv · .tsv · .txt("L1 &gt; L2 &gt; L3" 줄 또는 들여쓰기 목록). 병합 셀처럼 비어 있는 상위 칸은 위 행 값으로 채웁니다.</div>
         <div style={{ fontSize: 10, color: pbsNoAi ? T.amber : T.muted, marginTop: 3 }}>
           {pbsNoAi
             ? "※ AI 미사용 모드: Claude API를 호출하지 않고 프로젝트 유형별 표준 프리셋을 적용합니다. 동일 입력에 항상 동일한 결과가 나오며, 폐쇄망에서도 동작합니다. 적용 후 내용을 편집해 사용하세요."
