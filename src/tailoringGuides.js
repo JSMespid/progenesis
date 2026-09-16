@@ -161,6 +161,68 @@ export const DEVOPS_TAILORING_MATRIX = [
   {"code": "DO7102", "name": "장애 회고 보고서(Postmortem)", "phase": "모니터링", "method": "공통", "large": "M", "medium": "M", "small": "O"},
 ];
 
+
+// ── 5) 자동차 SW(ASPICE 4.0) — 등록 자산 "자동차SW 테일러링 가이드 V1.0" 기준 (55건)
+// 적용 등급 매핑: A등급(ASIL C/D·CL3)→large / B등급(ASIL A/B·CL2)→medium / C등급(QM·CL1)→small.
+// "-" = 해당 등급 미적용(기능안전 산출물은 QM 과제 제외). note = ASPICE 프로세스 · 정보항목(WP) · 테일러링 조건.
+export const ASPICE_TAILORING_MATRIX = [
+  {"code": "PM1101", "name": "프로젝트 계획서", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "MAN.3 · 08-53, 08-56, 08-61"},
+  {"code": "PM1102", "name": "프로젝트 진척 보고서", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "MAN.3 · 15-06, 13-14"},
+  {"code": "PM1103", "name": "착수보고 자료", "phase": "착수·계획", "method": "공통", "large": "O", "medium": "O", "small": "O", "note": "MAN.3 · 13-52"},
+  {"code": "RK1101", "name": "리스크 관리대장", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "O", "small": "O", "note": "MAN.5 · 08-55, 15-09 · VDA 범위 외"},
+  {"code": "QA1101", "name": "품질보증 계획서", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SUP.1 · 18-07, 18-52"},
+  {"code": "QA1102", "name": "산출물 검토 기록부", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "O", "note": "PA 2.2 · 13-19 · CL2 이상 필수"},
+  {"code": "QA1103", "name": "QA 평가 보고서", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SUP.1 · 13-18, 14-02"},
+  {"code": "CM1101", "name": "형상관리 계획서", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SUP.8 · 18-53, 16-03"},
+  {"code": "CR1101", "name": "문제·변경관리 계획서", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SUP.9, SUP.10 · 18-57"},
+  {"code": "FS1101", "name": "기능안전 계획서", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "-", "note": "ISO 26262-2 · Safety Plan · ASIL 대상만"},
+  {"code": "CS1101", "name": "사이버보안 계획서", "phase": "착수·계획", "method": "공통", "large": "O", "medium": "O", "small": "O", "note": "ISO/SAE 21434 · SEC · CAL 대상 시 필수"},
+  {"code": "SP1101", "name": "공급자 모니터링 계획서", "phase": "착수·계획", "method": "공통", "large": "O", "medium": "O", "small": "O", "note": "ACQ.4 · 02-01, 13-52 · 협력사 개발 포함 시 필수"},
+  {"code": "SY2101", "name": "이해관계자 요구사항 목록", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.1 · 17-00, 17-54"},
+  {"code": "SY2102", "name": "시스템 요구사항 명세서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.2 · 17-00, 17-54, 15-51"},
+  {"code": "SY2103", "name": "시스템 아키텍처 설계서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.3 · 04-06, 17-54, 15-51"},
+  {"code": "SY2104", "name": "인터페이스 정의서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "O", "note": "SYS.3 · 04-06 · 통신 연계 시 필수"},
+  {"code": "SY2105", "name": "요구사항 추적 매트릭스", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.2~SWE.6 · 13-51"},
+  {"code": "SY2106", "name": "시스템 검증 명세서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.5 · 08-60, 08-58"},
+  {"code": "SY2107", "name": "시스템 통합 검증 명세서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.4 · 08-60, 06-50"},
+  {"code": "FS2101", "name": "항목 정의서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "-", "note": "ISO 26262-3 · Item Definition · ASIL 대상만"},
+  {"code": "FS2102", "name": "HARA 결과서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "O", "note": "ISO 26262-3 · HARA · QM 판정 근거는 OEM 제공분 인용 가능"},
+  {"code": "FS2103", "name": "기능안전 개념서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "-", "note": "ISO 26262-3 · FSC · ASIL 대상만"},
+  {"code": "FS2104", "name": "기술안전 요구사항 명세서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "-", "note": "ISO 26262-4 · TSR · ASIL 대상만"},
+  {"code": "FS2105", "name": "시스템 안전분석 보고서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "-", "note": "ISO 26262-9 · FMEA/FTA · A: FMEA+FTA, B: FMEA"},
+  {"code": "CS2101", "name": "TARA 결과서", "phase": "시스템 요구·설계", "method": "공통", "large": "O", "medium": "O", "small": "O", "note": "ISO/SAE 21434 · 14-51, 17-51 · CAL 대상 시 필수"},
+  {"code": "CS2102", "name": "사이버보안 요구사항 명세서", "phase": "시스템 요구·설계", "method": "공통", "large": "O", "medium": "O", "small": "O", "note": "SEC.1 · 17-52 · CAL 대상 시 필수"},
+  {"code": "SW3101", "name": "SW 요구사항 명세서", "phase": "SW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.1 · 17-00, 17-54, 15-51"},
+  {"code": "SW3102", "name": "SW 아키텍처 설계서", "phase": "SW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.2 · 04-04, 17-54, 15-51"},
+  {"code": "SW3103", "name": "SW 통합 검증 명세서", "phase": "SW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.5 · 08-60, 06-50"},
+  {"code": "SW3104", "name": "SW 검증 명세서", "phase": "SW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.6 · 08-60, 08-58"},
+  {"code": "FS3101", "name": "SW 안전 요구사항 명세서", "phase": "SW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "-", "note": "ISO 26262-6 · SW Safety Req. · ASIL 대상만"},
+  {"code": "FS3102", "name": "SW 안전분석 보고서", "phase": "SW 요구·설계", "method": "공통", "large": "M", "medium": "O", "small": "-", "note": "ISO 26262-6/9 · SW FMEA, DFA"},
+  {"code": "SW3105", "name": "코딩 가이드라인", "phase": "SW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "O", "note": "SWE.3 · 18-00"},
+  {"code": "SW3106", "name": "리소스 사용 분석서", "phase": "SW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "O", "note": "SWE.2 · 15-51"},
+  {"code": "SW3107", "name": "재사용 SW 분석서", "phase": "SW 요구·설계", "method": "공통", "large": "O", "medium": "O", "small": "O", "note": "SWE.2, REU.2 · 15-07 · 파생(Carry-over) 개발 시 필수"},
+  {"code": "SW4101", "name": "SW 상세설계서", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.3 · 04-05"},
+  {"code": "SW4102", "name": "SW 소스코드", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.3 · 11-05"},
+  {"code": "SW4103", "name": "SW 유닛 검증 명세서", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.4 · 08-60, 08-58"},
+  {"code": "SW4104", "name": "정적분석 결과서", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "O", "note": "SWE.4 · 15-52"},
+  {"code": "SW4105", "name": "코드 리뷰 기록", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "O", "note": "SWE.4 · 13-19, 15-52"},
+  {"code": "SW4106", "name": "SW 유닛 검증 결과서", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.4 · 15-52, 03-50 · 커버리지 기준 A: MC/DC · B: Branch · C: Statement"},
+  {"code": "SW5101", "name": "SW 통합 검증 결과서", "phase": "SW 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.5 · 15-52, 01-50"},
+  {"code": "SW5102", "name": "SW 검증 결과서", "phase": "SW 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.6 · 15-52"},
+  {"code": "PR5101", "name": "문제 관리대장", "phase": "SW 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SUP.9 · 13-07, 15-12"},
+  {"code": "CR5101", "name": "변경요청 관리대장", "phase": "SW 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SUP.10 · 13-16"},
+  {"code": "SY6101", "name": "시스템 통합 검증 결과서", "phase": "시스템 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.4 · 15-52, 11-06"},
+  {"code": "SY6102", "name": "시스템 검증 결과서", "phase": "시스템 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.5 · 15-52"},
+  {"code": "VL6101", "name": "밸리데이션 보고서", "phase": "시스템 통합·검증", "method": "공통", "large": "O", "medium": "O", "small": "O", "note": "VAL.1 · 13-24 · 실차 밸리데이션 수행 시 필수"},
+  {"code": "CS6101", "name": "사이버보안 검증 결과서", "phase": "시스템 통합·검증", "method": "공통", "large": "O", "medium": "O", "small": "O", "note": "SEC.3, SEC.4 · 15-52 · CAL 대상 시 필수"},
+  {"code": "FS6101", "name": "안전 사례", "phase": "시스템 통합·검증", "method": "공통", "large": "M", "medium": "O", "small": "-", "note": "ISO 26262-2 · Safety Case"},
+  {"code": "FS6102", "name": "기능안전 확인검토 보고서", "phase": "시스템 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "-", "note": "ISO 26262-2 · Confirmation Review · 독립성: A I3 · B I1~I2"},
+  {"code": "RL7101", "name": "릴리즈 노트", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SPL.2 · 11-03"},
+  {"code": "RL7102", "name": "릴리즈 승인서", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "M", "small": "O", "note": "SPL.2 · 13-13, 18-06"},
+  {"code": "CM7101", "name": "형상 감사 보고서", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "M", "small": "O", "note": "SUP.8 · 13-08, 15-56"},
+  {"code": "PM7101", "name": "프로젝트 종료 보고서", "phase": "릴리즈", "method": "공통", "large": "M", "medium": "O", "small": "O", "note": "MAN.3 · 15-06"},
+];
+
 const SIZE_NOTE = "※ 투입 MM 기준 — (초)대형 600MM 초과 / 중형 125MM 초과 / 소형 125MM 이하";
 
 // ── 방법론별 가이드 정의 ──
@@ -256,6 +318,36 @@ export const TAILORING_GUIDES = {
     purpose: "본 가이드는 DevOps 방법론(OSSP)을 서비스 특성과 조직 성숙도에 맞게 조정하여 PDP를 수립하기 위한 기준을 정의한다. PMBOK 8판의 조정(Tailoring) 원칙에 따라 조정하되, 안전한 전달의 최소 장치(CI, 코드리뷰, 롤백 절차, Runbook)는 규모와 무관하게 유지한다.",
     matrix: DEVOPS_TAILORING_MATRIX,
   },
+  aspice: {
+    id: "aspice",
+    title: "자동차SW 테일러링 가이드",
+    subtitle: "Automotive SPICE 4.0 · ISO 26262 · ISO/SAE 21434 · V1.0",
+    hasDesignMethod: false,
+    phaseOrder: ["착수·계획", "시스템 요구·설계", "SW 요구·설계", "SW 상세설계·구현", "SW 통합·검증", "시스템 통합·검증", "릴리즈"],
+    scaleTitle: "적용 등급",
+    scaleOptions: [
+      { value: "(초)대형", label: "A등급 · ASIL C/D·CL3" },
+      { value: "중형",    label: "B등급 · ASIL A/B·CL2" },
+      { value: "소형",    label: "C등급 · QM·CL1" },
+    ],
+    sizeTitle: "적용 등급 판정 기준",
+    sizeNote: "※ ASIL과 목표 ASPICE 능력수준(CL) 중 높은 쪽 기준 — A등급 ASIL C/D 또는 CL3 / B등급 ASIL A/B 또는 CL2 / C등급 QM 및 CL1",
+    sizeCriteria: {
+      headers: ["구분", "판정 기준", "특징"],
+      rows: [
+        ["C등급", "QM 및 목표 CL1", "기능안전 산출물 제외, 기본 실무(BP) 산출물 중심, 커버리지 Statement"],
+        ["B등급", "ASIL A/B 또는 목표 CL2", "표준 산출물 적용, 검토 기록(PA 2.2) 필수, 커버리지 Branch"],
+        ["A등급", "ASIL C/D 또는 목표 CL3", "전 산출물 필수, FMEA+FTA, 커버리지 MC/DC, 확인검토 독립성 I3"],
+      ],
+      notes: [
+        "본 시스템의 적용 등급 선택(A/B/C)은 내부 저장 값 (초)대형/중형/소형에 각각 대응됩니다.",
+        "사이버보안(CAL 대상)·협력사 개발·파생개발·실차 밸리데이션 해당 시 관련 선택(O) 산출물은 필수로 전환합니다.",
+      ],
+    },
+    matrixNote: "필수(M) 산출물은 통합·병합만 허용하며 생략 시 사유 기록·QA 검토·PM 승인이 필요하다. '-'는 해당 등급 미적용(QM 과제의 기능안전 산출물). 비고는 ASPICE 프로세스 · 정보항목(WP) · 테일러링 조건이다.",
+    purpose: "본 가이드는 조직 표준 프로세스(OSSP)인 「자동차 SW 개발 표준프로세스(ASPICE 4.0)」를 프로젝트 특성에 맞게 조정하여 PDP(테일러링 결과서)를 수립하기 위한 기준을 정의한다. PMBOK® 8판의 조정(Tailoring) 원칙에 따르되, 고객(OEM)이 요구하는 Automotive SPICE 목표 능력수준과 ISO 26262 ASIL 요구를 충족하는 산출물은 유지하는 것을 원칙으로 한다.",
+    matrix: ASPICE_TAILORING_MATRIX,
+  },
 };
 
 // 방법론 label → 가이드 key (DB 시딩된 기본 방법론이 UUID id를 갖는 경우 대비)
@@ -268,5 +360,8 @@ export function getGuideForOSSP(ossp) {
   if (ossp.id && TAILORING_GUIDES[ossp.id]) return TAILORING_GUIDES[ossp.id];
   const byLabel = LABEL_TO_GUIDE[ossp.label];
   if (byLabel) return TAILORING_GUIDES[byLabel];
+  // 사내 등록 OSSP 중 자동차(ASPICE) 방법론은 이름으로 식별하여 자동차 전용 가이드 적용
+  const nm = String(ossp.label || ossp.name || "");
+  if (/ASPICE|자동차/i.test(nm)) return TAILORING_GUIDES.aspice;
   return TAILORING_GUIDES.ie;
 }

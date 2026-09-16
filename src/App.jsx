@@ -690,6 +690,7 @@ export default function SpiderQaAgent() {
           desc: o.description || '',
           phases: Array.isArray(o.phases) ? o.phases : [],
           custom: !o.is_builtin,
+          approach: /ASPICE|자동차|V-Model/i.test(o.name || '') ? '예측형' : undefined,   // 자동차 OSSP → 예측형 SDLC 적합 표시
           builtin: !!o.is_builtin,       // 기본 제공 여부 (서버 자동 시딩)
         }));
         setCustomOSSP(mapped.filter(o => !o.builtin));   // 위저드 StepOSSP 중복 방지: 사내 OSSP만
@@ -782,7 +783,7 @@ export default function SpiderQaAgent() {
       const osspLabel = selectedOSSP?.label || "조직 표준 프로세스(OSSP)";
       const result = {
         overview: {
-          purpose: `본 문서는 ${projectForm.client ? projectForm.client + " " : ""}"${projectForm.name}" 프로젝트(유형: ${projectForm.type})에 적용할 프로젝트 정의 프로세스(PDP)를 수립하기 위해, ${osspLabel}${josaEul(osspLabel)} 「${guide.title}」 기준으로 테일러링한 결과를 정의하는 것을 목적으로 한다. PMBOK® 8판의 테일러링 원칙에 따라 프로젝트 규모(${scaleLabel})${designTxt} 등 프로젝트 특성을 반영하였다.`,
+          purpose: `본 문서는 ${projectForm.client ? projectForm.client + " " : ""}"${projectForm.name}" 프로젝트(유형: ${projectForm.type})에 적용할 프로젝트 정의 프로세스(PDP)를 수립하기 위해, ${osspLabel}${josaEul(osspLabel)} 「${guide.title}」 기준으로 테일러링한 결과를 정의하는 것을 목적으로 한다. PMBOK® 8판의 테일러링 원칙에 따라 ${guide.scaleTitle || "프로젝트 규모"}(${scaleLabel})${designTxt} 등 프로젝트 특성을 반영하였다.`,
           scope: `적용 범위는 ${period ? "사업 기간(" + period + ") 중 " : ""}${selectedSDLC?.label || "선정 SDLC"} 기반 ${phaseCount}개 단계의 확정 산출물 ${applied.length}종과, 「${guide.title}」에 따른 관리 프로세스(적용 등급 ${level}, 적용대상 ${procApplicable2.length}건)의 이행 활동 전체로 한다. 단계별 확정 산출물: ${tailoringSummary}`,
           objectives: [
             `테일러링 확정 산출물 ${applied.length}종의 단계별 작성·검토·승인 이행`,
@@ -2218,7 +2219,7 @@ function MethodologyTailoring({ tailoring, setTailoring, ossp }) {
 
       {/* 프로젝트 규모 */}
       <div style={{ marginBottom:14 }}>
-        <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>프로젝트 규모</div>
+        <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>{guide.scaleTitle || "프로젝트 규모"}</div>
         <div style={{ display:"flex", gap:8 }}>
           {guide.scaleOptions.map(o=>(
             <button key={o.value} onClick={()=>setScale(o.value)}
@@ -2410,7 +2411,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
             <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse" }}>
               <tbody>
                 <tr><td style={cellHead}>적용 가이드</td><td style={cell} colSpan={3}>{guide.title}</td></tr>
-                <tr><td style={cellHead}>프로젝트 규모</td><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
+                <tr><td style={cellHead}>{guide.scaleTitle || "프로젝트 규모"}</td><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
                 <tr><td style={cellHead}>규모 판정 기준</td><td style={cell} colSpan={3}>{guide.sizeNote?.replace(/^※\s*/, "")}</td></tr>
               </tbody>
             </table>
@@ -4255,7 +4256,7 @@ function makePdpDocx(meta, ctx, phase) {
     docxP("2. 테일러링 기준", { bold: true, size: 26, spacingAfter: 160 }) +
     docxTable([
       ["적용 가이드", guide.title || "-"],
-      ["프로젝트 규모", scaleLabel],
+      [guide.scaleTitle || "프로젝트 규모", scaleLabel],
       ["설계방식", guide.hasDesignMethod ? method : "해당 없음"],
       ["규모 판정 기준", (guide.sizeNote || "").replace(/^※\s*/, "")],
     ], 1) +
@@ -6579,7 +6580,7 @@ function PdpDocView({ project }) {
       <table style={{ width:"100%", fontSize:11, borderCollapse:"collapse" }}>
         <tbody>
           <tr><td style={cellHead}>적용 가이드</td><td style={cell} colSpan={3}>{guide.title}</td></tr>
-          <tr><td style={cellHead}>프로젝트 규모</td><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
+          <tr><td style={cellHead}>{guide.scaleTitle || "프로젝트 규모"}</td><td style={cell}>{scaleLabel}</td><td style={cellHead}>설계방식</td><td style={cell}>{guide.hasDesignMethod ? method : "해당 없음"}</td></tr>
           <tr><td style={cellHead}>규모 판정 기준</td><td style={cell} colSpan={3}>{guide.sizeNote?.replace(/^※\s*/, "")}</td></tr>
         </tbody>
       </table>

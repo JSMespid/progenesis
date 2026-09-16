@@ -45,7 +45,7 @@ export const SDLC_FACTOR_CRITERIA = {
     options: {
       없음: '법정 규제·감리·인증 요건 없음(내부 도구 등)',
       보통: '일반 보안·개인정보 요건 적용. 인증 편입 검토 수준',
-      엄격: '법정 감리, ISMS-P/CSAP, 금융·공공 규정 등 증적 의무 강함',
+      엄격: '법정 감리, ISMS-P/CSAP, 기능안전(ISO 26262)·ASPICE·사이버보안(ISO/SAE 21434) 등 증적 의무 강함',
     },
   },
   team: {
