@@ -2324,6 +2324,9 @@ function MethodologyTailoring({ tailoring, setTailoring, ossp }) {
           ))}
         </div>
         <div style={{ fontSize:10, color:T.muted, marginTop:6 }}>{guide.sizeNote}</div>
+        {guide.scaleDesc?.[scale] && (
+          <div style={{ fontSize:11, color:T.text, lineHeight:1.6, marginTop:8, padding:"8px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>{guide.scaleDesc[scale]}</div>
+        )}
       </div>
 
       {/* 설계방식 — UML/IE 구분이 있는 가이드(IE 기반)에서만 표시 */}
@@ -6498,7 +6501,7 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp }
   const RG = getGuideForOSSP(ossp || {})?.reqGen || {};
   const QSTD = RG.qualityStd || { name: "ISO 9126", chars: "기능성/신뢰성/사용성/효율성/유지보수성/이식성" };
   // 원문 충실성 규칙 — 안전·보안 등급이나 수치를 AI가 새로 만들어내지 않도록 (모든 OSSP 공통)
-  const FIDELITY = "원문 충실성: 원문에 명시되지 않은 ASIL·CAL 등 안전·보안 등급, 수치(시간·전압·전류·주기·거리), 메시지 ID·주소를 새로 만들지 말 것. 원문에 있는 등급·수치는 표기 그대로 사용(예: 원문이 ASIL B면 ASIL B). 원문에 근거가 없어 필요한 값은 '원문 확인 필요'로 가정·제약에 기재.";
+  const FIDELITY = "원문 충실성: 원문에 명시되지 않은 등급·수치(시간·전압·전류·주기·거리), 메시지 ID·주소를 새로 만들지 말 것. 원문에 있는 등급·수치는 표기 그대로 사용. 원문에 근거가 없어 필요한 값은 '원문 확인 필요'로 가정·제약에 기재.";
   const leaves = reqSpecLeaves(wbs);   // WBS 최하위 기능 모듈 (요구사항 배정 후보)
   const leafName = {}; leaves.forEach(l => { leafName[l.wbsNo] = l.name; });
   const [srcText, setSrcText] = useState("");
