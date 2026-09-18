@@ -81,11 +81,11 @@ export default function TailoringGuideModal({ guide, matrix = [], onClose }) {
   const purpose = guide?.purpose || DEFAULT_PURPOSE;
   const hasDesignMethod = guide ? !!guide.hasDesignMethod : true;
   const phaseOrder = guide?.phaseOrder || null;
-  const colCount = 2 + scaleCols.length + (hasDesignMethod ? 1 : 0);
   // 규모/능력수준 열: 가이드의 scaleOptions 순서·개수에 따라 동적으로 구성 (value → 매트릭스 키)
   const SCALE_KEY = { "(초)대형": "large", "중형": "medium", "소형": "small" };
   const scaleCols = (guide?.scaleOptions?.length ? guide.scaleOptions : [{ value: "(초)대형", label: "(초)대형" }, { value: "중형", label: "중형" }, { value: "소형", label: "소형" }])
     .map((o) => ({ key: SCALE_KEY[o.value] || o.value, label: o.label }));
+  const colCount = 2 + scaleCols.length + (hasDesignMethod ? 1 : 0);
   const sizeCriteria = guide?.sizeCriteria || null;   // 방법론 전용 규모 기준 (없으면 공통 MM 기준표)
   const matrixNote = guide?.matrixNote || null;
 
