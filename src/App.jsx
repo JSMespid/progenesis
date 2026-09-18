@@ -1078,9 +1078,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     setTailoring({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준", review_cycle:"격주", test_level:"통합", risk:"강화", ...t });
     setPdpData(p.pdp||null);
     setWbsData(p.wbs||null);
-    // 매트릭스 선택(selected)은 프로젝트에 저장되지 않으므로 비움 — 일정표(wbsData)는 그대로 복원됨.
-    // 구조를 다시 생성하려면 매트릭스를 재선택 후 "WBS 생성"을 누르면 됨.
-    setWbsSetup({ pbsText:p.wbs?.pbsText||"", selected:{}, holidays:p.wbs?.holidays||[] });
+    // 매트릭스 선택(selected·common)은 WBS 생성 시 wbsData에 함께 저장됨 — 구버전 프로젝트(미저장)는 빈 매트릭스로 복원
+    setWbsSetup({ pbsText:p.wbs?.pbsText||"", selected:p.wbs?.selected||{}, common:p.wbs?.common||{}, holidays:p.wbs?.holidays||[] });
     setDeliverablesData(p.deliverables||null);
     setRequirements(p.tailoring?.requirements || null);
     setGenError(null);
@@ -3093,7 +3092,8 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
           assignee: "", pred: "", start: "", finish: "", effort: "", duration: "", status: "대기" });
       }
     });
-    setWbsData({ tasks, pbsText, holidays });
+    // 매트릭스 선택(selected·common)도 함께 보관 — 프로젝트 저장 후 다시 열 때 매트릭스가 비어 보이지 않도록
+    setWbsData({ tasks, pbsText, holidays, selected: { ...selected }, common: { ...common } });
     const leafCnt = tasks.reduce((n,t)=>n+(t.subtasks||[]).length, 0);
     setBuildMsg({ ok:true, text:`WBS 생성 완료 — 단계 ${tasks.length}개 · Task ${leafCnt}건. 아래 ④ 일정 계획에서 일정을 입력하세요.` });
     setTimeout(() => scheduleRef.current?.scrollIntoView({ behavior:"smooth", block:"start" }), 100);
