@@ -4,6 +4,7 @@ import { SDLC_FACTOR_CRITERIA } from './sdlcFactorCriteria';
 import TailoringGuideModal from './TailoringGuideModal';
 import { TAILORING_GUIDES, getGuideForOSSP, mapMgmtOutput } from './tailoringGuides';
 import { PROCESS_TAILORING_GUIDE, processMark, processKey, resolveProcessTailoring } from './processTailoringGuide';
+import * as AE from './aspiceEngineering';
 
 const T = {
   bg: "#0A0C10", surface: "#111318", border: "#1E2230",
@@ -6089,7 +6090,343 @@ async function injectRequirementsIntoXlsxByHeader(bytes, cfg, req) {
 }
 
 // 산출물 1건 → 파일 결정: 특수 산출물 → OSSP 템플릿 실파일 → 스켈레톤 순
+// ═══════════════════════════════════════════════════════════════════════════
+// ASPICE V-모델 산출물 생성기 (src/aspiceEngineering.js 추적 모델 → docx/xlsx)
+// 모든 문서는 하나의 추적 모델(requirements.aspice)에서 렌더링되므로 문서 간 ID·할당·검증 대상이 항상 일치한다.
+// ═══════════════════════════════════════════════════════════════════════════
+// docx → 텍스트 (제목 스타일 문단은 "§ " 접두) — 템플릿 WP 충족도 점검용
+async function docxOutlineText(bytes) {
+  const files = await unzipBytes(bytes);
+  const td = new TextDecoder();
+  const read = p => { const f = files.find(x => x.path === p); return f ? (typeof f.content === "string" ? f.content : td.decode(f.content)) : ""; };
+  const doc = read("word/document.xml"); if (!doc) return "";
+  const styles = read("word/styles.xml");
+  const heads = new Set();
+  for (const m of styles.matchAll(/<w:style\b[^>]*w:styleId="([^"]+)"[^>]*>([\s\S]*?)<\/w:style>/g)) {
+    const nm = /<w:name w:val="([^"]+)"/.exec(m[2]);
+    if (/<w:outlineLvl/.test(m[2]) || (nm && /heading|제목\s*\d|^title$/i.test(nm[1]))) heads.add(m[1]);
+  }
+  const unesc = s => s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCharCode(d));
+  const out = [];
+  for (const p of doc.match(/<w:p\b[\s\S]*?<\/w:p>/g) || []) {
+    const ps = /<w:pStyle w:val="([^"]+)"/.exec(p);
+    const t = unesc(p.replace(/<w:tab[^>]*\/>/g, "\t").replace(/<[^>]+>/g, ""));
+    out.push(((ps && heads.has(ps[1])) || /<w:outlineLvl/.test(p)) ? "§ " + t.trim() : t);
+  }
+  return out.join("\n");
+}
+
+// 다중 시트 xlsx (머리글 강조·테두리·줄바꿈·열너비·틀고정) — 검증 명세·RTM용
+// sheets: [{ name, rows:[[셀…]], widths:[문자수…], headerRows:[행 인덱스…], titleRows:[행 인덱스…], freezeRow }]
+function makeXlsxBook(sheets) {
+  const stylesXml = XMLH + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<fonts count="3"><font><sz val="10"/><name val="맑은 고딕"/></font><font><b/><sz val="10"/><name val="맑은 고딕"/></font><font><b/><sz val="13"/><name val="맑은 고딕"/></font></fonts>' +
+    '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFDCE6F1"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+    '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FF999999"/></left><right style="thin"><color rgb="FF999999"/></right><top style="thin"><color rgb="FF999999"/></top><bottom style="thin"><color rgb="FF999999"/></bottom><diagonal/></border></borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+    '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>' +
+    '<xf numFmtId="49" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>' +
+    '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>' +
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+  const sheetXml = sh => {
+    const hdr = new Set(sh.headerRows || []), ttl = new Set(sh.titleRows || []);
+    const firstHdr = Math.min(...(sh.headerRows || [0]));
+    const cols = (sh.widths || []).length ? `<cols>${sh.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("")}</cols>` : "";
+    const pane = sh.freezeRow ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${sh.freezeRow}" topLeftCell="A${sh.freezeRow + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` : "";
+    const rows = (sh.rows || []).map((cells, ri) => {
+      const s = ttl.has(ri) ? 3 : hdr.has(ri) ? 1 : (ri > firstHdr && (sh.headerRows || []).length) ? 2 : 0;
+      return `<row r="${ri + 1}">` + (cells || []).map((c, ci) =>
+        `<c r="${colLetter(ci)}${ri + 1}" s="${s}" t="inlineStr"><is><t xml:space="preserve">${xesc(c)}</t></is></c>`).join("") + "</row>";
+    }).join("");
+    return XMLH + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${pane}${cols}<sheetData>${rows}</sheetData></worksheet>`;
+  };
+  const safeName = (n, i) => (String(n || `Sheet${i + 1}`).replace(/[\\/?*\[\]:]/g, " ").slice(0, 30).trim() || `Sheet${i + 1}`);
+  const names = sheets.map((sh, i) => safeName(sh.name, i));
+  return zipBytes([
+    { path: "[Content_Types].xml", content: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("") + "</Types>" },
+    { path: "_rels/.rels", content: XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+    { path: "xl/workbook.xml", content: XMLH + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${names.map((n, i) => `<sheet name="${xesc(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("")}</sheets></workbook>` },
+    { path: "xl/_rels/workbook.xml.rels", content: XMLH + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
+    { path: "xl/styles.xml", content: stylesXml },
+    ...sheets.map((sh, i) => ({ path: `xl/worksheets/sheet${i + 1}.xml`, content: sheetXml(sh) })),
+  ]);
+}
+
+const ASPICE_STATUS = ["Draft", "Reviewed", "Agreed", "Rejected"];
+const charStateLabel = { ok: "충족", input: "자료 확보(작성 대기)", gap: "누락(TBD)", na: "해당 없음" };
+
+// 문서 공통: 문서 정보 표 + ASPICE 적용 기준 표 + 1장 개요
+function aspiceFrontBody({ kind, model, meta, doc, title, extraRows = [] }) {
+  const D = AE.ASPICE_DOCS[kind];
+  const docNo = projectDocNo(meta, doc?.code || D.code);
+  const ap = docApprovers(meta);
+  const today = new Date().toLocaleDateString("ko-KR");
+  const ver = AE.ASPICE_VERSIONS.find(v => v.id === model.version)?.label || model.version;
+  return docxP(title, { bold: true, size: 36, spacingAfter: 60 }) +
+    docxP(meta.name || "", { bold: true, size: 26, spacingAfter: 240 }) +
+    docxTable([
+      ["문서번호", docNo], ["버전", "V0.1 (초안)"], ["고객사", meta.client || "-"], ["작성일", today],
+      ["작성자", ap.author || "-"], ["검토·승인", [ap.reviewer, ap.approver].filter(Boolean).join(" / ") || "-"],
+      ["적용 기준", `Automotive SPICE ${ver}`],
+      ["프로세스", AE.procLabel(D.proc.split("~")[0], model.version)],
+      ["정보항목(WP)", AE.wpLabel(kind, model.version)],
+      ...extraRows,
+    ], 1) +
+    docxP(`※ 본 문서는 ${APP_NAME}의 ASPICE 추적 모델에서 생성된 초안입니다. 상태가 Draft인 항목은 검토·합의(GP 2.2.4) 후 확정하고, 'TBD'는 입력자료 확보 후 보완해야 합니다.`, { size: 18, spacingAfter: 200 });
+}
+// WP 특성 충족 점검표 (부록) — 누락은 숨기지 않고 TBD로 드러낸다
+function aspiceCharAppendix(model, group, secNo) {
+  const list = AE.charStatusList(model, group);
+  if (!list.length) return "";
+  const rows = [["No", "WP 특성", "출처(버전별)", "구분", "판정", "비고"]];
+  list.forEach((c, i) => rows.push([String(i + 1), c.label, c.source, c.origin === "ASPICE" ? "ASPICE" : `${c.origin}(선택)`, charStateLabel[c.state] || c.state, c.note || (c.state === "gap" ? "입력자료 확보 후 작성 (TBD)" : "")]));
+  const s = list.reduce((o, c) => { o[c.state] = (o[c.state] || 0) + 1; return o; }, {});
+  return docxP(`${secNo}. 부록 — ASPICE WP 특성 충족 점검표`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxP(`충족 ${s.ok || 0} · 작성 대기 ${s.input || 0} · 누락(TBD) ${s.gap || 0} · 해당 없음 ${s.na || 0} — 판정은 모델 내용·입력자료 체크리스트·수동 판정 순으로 결정됨`, { size: 18, spacingAfter: 100 }) +
+    docxTable(rows, -1);
+}
+
+// SW / HW 요구사항 명세서 (SWE.1 / HWE.1)
+function makeAspiceReqDocx(level, meta, ctx, doc) {
+  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const kind = level === "SW" ? "SW_RS" : "HW_RS";
+  const title = doc?.name || AE.ASPICE_DOCS[kind].title;
+  const { front, pkgOpts } = docxStdParts({ title, docCode: projectDocNo(meta, doc?.code || AE.ASPICE_DOCS[kind].code), phase: AE.LEVELS[level].reqProc, meta });
+  const reqs = model.reqs[level];
+  const sysById = Object.fromEntries(model.reqs.SYS.map(r => [r.id, r]));
+  const sysComp = Object.fromEntries(model.comps.SYS.map(c => [c.id, c]));
+  const comp = Object.fromEntries(model.comps[level].map(c => [c.id, c]));
+  let body = aspiceFrontBody({ kind, model, meta, doc, title, extraRows: [["요구사항 합계", `${reqs.length}건 (기능 ${reqs.filter(r => r.type === "기능").length} · 비기능 ${reqs.filter(r => r.type === "비기능").length} · 인터페이스 ${reqs.filter(r => r.type === "인터페이스").length})`]] });
+  let sec = 0;
+  body += docxP(`${++sec}. 개요`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxP(`본 문서는 시스템 요구사항 중 ${level === "SW" ? "소프트웨어" : "하드웨어"} 포함 시스템 요소에 할당된 요구를 ${level} 관점으로 구체화한 ${level} 요구사항을 정의한다. 각 요구는 상위 시스템 요구로 양방향 추적되며(${AE.bpLabel(level === "SW" ? "SW_TRACE" : "HW_TRACE", model.version)}), 검증 기준을 갖는다.`) +
+    (model.version !== "4.0" && level === "HW" ? docxP("※ ASPICE 3.1 PRM에는 HW 엔지니어링 프로세스가 없으므로, 본 문서는 ASPICE 4.0 HWE.1을 PAM 확장으로 준용한다.", { size: 18, spacingAfter: 120 }) : "");
+  body += docxP(`${++sec}. ${level} 요구사항 목록`, { bold: true, size: 26, spacingAfter: 120 });
+  const rows = [["No", "ID", "요구사항명", "유형", "상위 시스템 요구", "할당 컴포넌트", "검증 방법", "상태"]];
+  reqs.forEach((r, i) => rows.push([String(i + 1), r.id, r.title || "", r.type || "", (r.parents || []).join(", "), (model.alloc[level][r.id] || []).map(c => comp[c]?.name || c).join(", ") || "미할당", r.verifMethod || "", r.status || "Draft"]));
+  body += docxTable(rows, -1);
+  body += docxP(`${++sec}. ${level} 요구사항 명세`, { bold: true, size: 26, spacingAfter: 120 });
+  reqs.forEach(r => {
+    body += docxP(`${r.id} · ${r.title || ""}`, { bold: true, size: 22, spacingAfter: 80 }) + docxTable([
+      ["요구 내용", r.text || ""], ["유형 / 우선순위", `${r.type || ""} / ${r.priority || "중"}`],
+      ["상위 시스템 요구", (r.parents || []).map(p => `${p} ${sysById[p]?.title || ""}`).join("; ") || "(추적 없음 — 파생 근거 기재 필요)"],
+      ["관련 시스템 요소", (r.sysElems || []).map(e => sysComp[e]?.name || e).join(", ") || "-"],
+      ["할당 컴포넌트", (model.alloc[level][r.id] || []).map(c => `${c} ${comp[c]?.name || ""}`).join(", ") || "미할당"],
+      ["검증 방법", r.verifMethod || "-"], ["검증 기준", r.verifCriteria || "TBD"],
+      ...(r.safety ? [["안전 등급", r.safety]] : []), ...(r.security ? [["보안 관련", "예"]] : []),
+      ["상태", r.status || "Draft"], ...(r.note ? [["비고", r.note]] : []),
+    ], 1);
+  });
+  const ifs = model.interfaces[level];
+  if (ifs.length) {
+    body += docxP(`${++sec}. ${level} 인터페이스 요구`, { bold: true, size: 26, spacingAfter: 120 }) +
+      docxTable([["ID", "From", "To", "유형", "신호·데이터", "주기(ms)", "설명"], ...ifs.map(i => [i.id, comp[i.from]?.name || i.from, comp[i.to]?.name || i.to, i.kind || "", i.signals || "", String(i.periodMs || ""), i.desc || ""])], -1);
+  }
+  body += docxP(`${++sec}. 추적성 — 시스템 요구 → ${level} 요구`, { bold: true, size: 26, spacingAfter: 120 });
+  const parents = AE.parentsForLevel(model, level);
+  body += docxTable([["시스템 요구", "요구사항명", `${level} 요구`, "판정"], ...parents.map(p => {
+    const ch = reqs.filter(r => (r.parents || []).includes(p.id)).map(r => r.id);
+    return [p.id, p.title || "", ch.join(", ") || "-", ch.length ? "추적됨" : "미파생"];
+  })], -1);
+  body += aspiceCharAppendix(model, kind, ++sec);
+  return docxPackage(front + body, pkgOpts);
+}
+
+// 시스템 / SW / HW 아키텍처 설계서 (SYS.3 / SWE.2 / HWE.2)
+function makeAspiceArchDocx(level, meta, ctx, doc) {
+  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const kind = level === "SYS" ? "SYS_AD" : level === "SW" ? "SW_AD" : "HW_AD";
+  const L = AE.LEVELS[level];
+  const title = doc?.name || AE.ASPICE_DOCS[kind].title;
+  const { front, pkgOpts } = docxStdParts({ title, docCode: projectDocNo(meta, doc?.code || AE.ASPICE_DOCS[kind].code), phase: L.archProc, meta });
+  const comps = model.comps[level], ifs = model.interfaces[level], reqs = model.reqs[level];
+  const comp = Object.fromEntries(comps.map(c => [c.id, c]));
+  const sysComp = Object.fromEntries(model.comps.SYS.map(c => [c.id, c]));
+  let body = aspiceFrontBody({ kind, model, meta, doc, title, extraRows: [[L.compLabel, `${comps.length}개`], ["인터페이스", `${ifs.length}건`], ["할당 대상 요구", `${reqs.length}건`]] });
+  let sec = 0;
+  body += docxP(`${++sec}. 개요`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxP(`본 문서는 ${level === "SYS" ? "시스템" : level} 요구사항을 만족하기 위한 ${L.compLabel}의 정적 구조(요소·인터페이스)와 동적 거동(운영 모드·상태 천이)을 정의하고, 요구사항을 ${L.compLabel}에 할당한다.`) +
+    (model.version !== "4.0" && level === "HW" ? docxP("※ ASPICE 3.1에는 HWE 프로세스가 없으므로 4.0 HWE.2를 PAM 확장으로 준용한다.", { size: 18, spacingAfter: 120 }) : "");
+  body += docxP(`${++sec}. 정적 아키텍처 — ${L.compLabel}`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxP("[그림] 블록 다이어그램 — 아래 요소·인터페이스 표를 기준으로 작성하여 삽입 (TBD)", { italic: true, size: 20, spacingAfter: 120 }) +
+    docxTable([["ID", "명칭", "구분", ...(level === "SYS" ? [] : ["상위 시스템 요소"]), "책임(설명)"], ...comps.map(c => [c.id, c.name, c.kind || "", ...(level === "SYS" ? [] : [c.sysElem ? `${c.sysElem} ${sysComp[c.sysElem]?.name || ""}` : "-"]), c.desc || ""])], -1);
+  comps.forEach(c => {
+    const assigned = reqs.filter(r => (model.alloc[level][r.id] || []).includes(c.id));
+    const myIf = ifs.filter(i => i.from === c.id || i.to === c.id);
+    body += docxP(`${c.id} · ${c.name}`, { bold: true, size: 22, spacingAfter: 80 }) + docxTable([
+      ["구분", c.kind || ""], ["책임", c.desc || "TBD"], ["개별 거동", c.behavior || "TBD"],
+      ["인터페이스", myIf.map(i => `${i.id}(${i.from === c.id ? "→ " + (comp[i.to]?.name || i.to) : "← " + (comp[i.from]?.name || i.from)}, ${i.kind || ""})`).join("; ") || "-"],
+      ["할당 요구", assigned.map(r => r.id).join(", ") || "없음"],
+      ...(level !== "SYS" ? [["자원(RAM/ROM/CPU·전력)", "TBD — 플랫폼 사양 확보 후 기재"]] : []),
+    ], 1);
+  });
+  body += docxP(`${++sec}. 인터페이스 정의`, { bold: true, size: 26, spacingAfter: 120 }) +
+    (ifs.length ? docxTable([["ID", "From", "To", "유형", "신호·데이터", "주기(ms)", "설명"], ...ifs.map(i => [i.id, comp[i.from]?.name || i.from, comp[i.to]?.name || i.to, i.kind || "", i.signals || "", String(i.periodMs || ""), i.desc || ""])], -1)
+      : docxP("인터페이스 미정의 (TBD)", { size: 20 }));
+  if (level === "SYS") {
+    body += docxP(`${++sec}. 동적 아키텍처 — 운영 모드·상태`, { bold: true, size: 26, spacingAfter: 120 }) +
+      (model.modes.length ? docxTable([["모드/상태", "설명", "진입·이탈 조건"], ...model.modes.map(x => [x.name, x.desc || "", x.transition || ""])], -1) : docxP("운영 모드 미정의 (TBD)", { size: 20 })) +
+      docxP("[그림] 상태 천이도·시퀀스 다이어그램 — 위 표 기준으로 작성하여 삽입 (TBD)", { italic: true, size: 20, spacingAfter: 120 });
+  } else {
+    body += docxP(`${++sec}. 동적 거동`, { bold: true, size: 26, spacingAfter: 120 }) +
+      docxP(level === "SW" ? "태스크 구조(주기·우선순위)·인터럽트·초기화/종료·오류 처리 시퀀스는 플랫폼(OS·BSW) 확정 후 기술한다 (TBD). 컴포넌트별 거동은 2장 참조." : "파워업/다운 시퀀스·전기적 상태 천이·보호 동작은 회로 설계 확정 후 기술한다 (TBD). 컴포넌트별 거동은 2장 참조.", { size: 20 });
+  }
+  body += docxP(`${++sec}. 요구사항 할당 (${AE.bpLabel(level === "SYS" ? "SYS_ALLOC" : level === "SW" ? "SW_ALLOC" : "HW_ALLOC", model.version)})`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxTable([["요구 ID", "요구사항명", "유형", "할당 요소", "판정"], ...reqs.map(r => {
+      const a = (model.alloc[level][r.id] || []).filter(x => comp[x]);
+      return [r.id, r.title || "", r.type || "", a.map(x => `${x} ${comp[x].name}`).join(", ") || "-", a.length ? "할당" : "미할당"];
+    })], -1);
+  body += docxP(`${++sec}. 아키텍처 분석·설계 근거`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxP(model.rationale[level] || "설계 근거·대안 평가 결과 미작성 (TBD) — 3.1 BP5/BP6(대안 평가), 4.0 04-06/04-04 'justifying rationale' 요구", { size: 20 });
+  body += aspiceCharAppendix(model, kind, ++sec);
+  return docxPackage(front + body, pkgOpts);
+}
+
+// 검증 명세서·결과서 (08-50/08-52 · 08-60/08-58/06-50 · 13-50/15-52)
+function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
+  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const D = AE.ASPICE_DOCS[kind];
+  const tl = AE.TEST_LEVELS[D.test];
+  const tests = model.tests.filter(t => t.level === D.test);
+  const docNo = projectDocNo(meta, doc?.code || D.code);
+  const title = doc?.name || D.title;
+  const term = model.version === "3.1" ? "테스트 케이스" : "검증 수단";
+  const head = [[title], [`프로젝트: ${meta.name || ""}`, `문서번호: ${docNo}`, `프로세스: ${AE.procLabel(tl.proc, model.version)}`, `정보항목: ${AE.wpLabel(kind, model.version)}`], []];
+  const tgtName = {};
+  ["SYS", "SW", "HW"].forEach(lv => { model.reqs[lv].forEach(r => { tgtName[r.id] = r.title; }); model.comps[lv].forEach(c => { tgtName[c.id] = c.name; }); model.interfaces[lv].forEach(i => { tgtName[i.id] = `${i.kind || "IF"} ${i.signals || ""}`.trim(); }); });
+  if (D.result) {
+    const rows = [...head, ["No", `${term} ID`, "검증 대상", "제목", "결과(Pass/Fail/Not executed)", "수행일", "수행자", "형상(SW/HW 버전)", "결함·문제 ID", "비고"]];
+    tests.forEach((t, i) => rows.push([String(i + 1), t.id, (t.targets || []).join(", "), t.title || "", "Not executed", "", "", "", "", ""]));
+    const sum = [[`${tl.label} 결과 요약`], [], ["구분", "건수"], ["전체", String(tests.length)], ["Pass", "(결과 입력 후 집계)"], ["Fail", "(결과 입력 후 집계)"], ["Not executed", String(tests.length)],
+      [], ["※ 4.0 15-52: 통과·미통과·미수행, 수행 정보(일자·수행자), 결과 요약을 포함해야 한다. 3.1 13-50과 동일 목적."]];
+    return makeXlsxBook([
+      { name: "검증 결과", rows, widths: [5, 13, 18, 36, 20, 11, 10, 16, 12, 18], headerRows: [3], titleRows: [0], freezeRow: 4 },
+      { name: "결과 요약", rows: sum, widths: [22, 30], headerRows: [2], titleRows: [0] },
+    ]);
+  }
+  const spec = [...head, ["No", `${term} ID`, "검증 대상(ID)", "대상명", "제목", "기법", "사전조건(진입 기준)", "절차", "기대 결과", "합격 기준", "환경", "회귀 대상", "출처"]];
+  tests.forEach((t, i) => spec.push([String(i + 1), t.id, (t.targets || []).join(", "), (t.targets || []).map(x => tgtName[x] || "").join(", "), t.title || "", t.technique || "", t.precondition || "", String(t.steps || "").replace(/;\s*/g, "\n"), t.expected || "", t.passCriteria || "", t.env || "", t.regression ? "Y" : "", t.origin === "rule" ? "규칙" : t.origin === "ai" ? "AI 초안" : "수동"]));
+  const techs = [...new Set(tests.map(t => t.technique).filter(Boolean))];
+  const strategy = [[`${tl.label} 전략`], [],
+    ["항목", "내용", "근거(3.1 / 4.0)"],
+    ["검증 대상", tl.targetKind === "req" ? `${AE.LEVELS[tl.level].label} 요구사항 ${model.reqs[tl.level].length}건` : `${AE.LEVELS[tl.level].compLabel} ${model.comps[tl.level].length}개 · 인터페이스 ${model.interfaces[tl.level].length}건`, "08-52 Context / 08-60"],
+    ["검증 기법", techs.join(", ") || "-", "08-52 Test strategy / 08-60 Techniques"],
+    ["진입 기준", "검증 대상 형상(SW·HW 버전) 확정 및 형상 식별 기록, 검증 환경 준비 완료", "08-52 / 08-60 entry criteria"],
+    ["종료 기준", "선택된 검증 수단 전부 수행, Fail 항목은 문제 보고 등록(SUP.9)", "08-52 / 08-60 exit criteria"],
+    ["중단·재개 기준", "환경 결함·차단 결함 발생 시 중단, 원인 해소·재확인 후 재개", "08-52 suspension/resumption / 08-60 abort·re-start"],
+    ["회귀 기준", `우선순위 '상'·안전 관련·결함 주입·통합 인터페이스 항목은 변경 시 재수행 (${tests.filter(t => t.regression).length}건 지정)`, "08-50 regression / 08-58"],
+    ["검증 환경", [...new Set(tests.map(t => t.env).filter(Boolean))].join(", ") || "TBD — 검증 환경 정보(HILS·벤치·챔버) 확보 후 기재", "08-52 environment / 08-60 infrastructure"],
+    ...(tl.targetKind === "if" ? [["통합 순서", `${model.comps[tl.level].map(c => c.name).join(" → ") || "TBD"} (의존 관계에 따라 조정)`, "08-50 system integration / 06-50"]] : []),
+  ];
+  const sel = [[`${term} 선택 세트`], [], ["No", `${term} ID`, "제목", "선택", "선택 근거", "회귀 대상"]];
+  tests.forEach((t, i) => sel.push([String(i + 1), t.id, t.title || "", "선택", t.origin === "rule" ? `요구 조건(${t.technique || "요구 기반"})에서 결정적으로 도출` : "요구 정상 시나리오", t.regression ? "Y" : ""]));
+  return makeXlsxBook([
+    { name: "검증 명세", rows: spec, widths: [5, 13, 14, 20, 30, 18, 24, 40, 32, 24, 10, 8, 8], headerRows: [3], titleRows: [0], freezeRow: 4 },
+    { name: "검증 전략", rows: strategy, widths: [16, 70, 30], headerRows: [2], titleRows: [0] },
+    { name: model.version === "3.1" ? "테스트 선택" : "선택 세트(08-58)", rows: sel, widths: [5, 13, 36, 8, 40, 9], headerRows: [2], titleRows: [0], freezeRow: 3 },
+  ]);
+}
+
+// 양방향 추적 매트릭스 (3.1 13-22 / 4.0 13-51) + 일관성 점검 결과
+function makeAspiceRtmXlsx(meta, ctx, doc) {
+  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const sc = model.scope;
+  const tOf = (L, id) => model.tests.filter(t => t.level === L && (t.targets || []).includes(id)).map(t => t.id);
+  const sysComp = Object.fromEntries(model.comps.SYS.map(c => [c.id, c]));
+  const fwd = [["요구사항 추적 매트릭스 — 순방향"], [`프로젝트: ${meta.name || ""}`, `문서번호: ${projectDocNo(meta, doc?.code || "SY2105")}`, `정보항목: ${AE.wpLabel("RTM", model.version)}`], []];
+  const hdr = ["시스템 요구", "요구사항명", "출처(이해관계자)", "할당 시스템 요소", "시스템 검증(SYS.5)", "시스템 통합 검증(SYS.4)"];
+  if (sc.SW) hdr.push("SW 요구", "SW 컴포넌트", "SW 검증(SWE.6)", "SW 통합 검증(SWE.5)");
+  if (sc.HW) hdr.push("HW 요구", "HW 컴포넌트", "HW 요구 검증(HWE.4)", "HW 설계 검증(HWE.3)");
+  hdr.push("판정");
+  fwd.push(hdr);
+  model.reqs.SYS.forEach(r => {
+    const el = (model.alloc.SYS[r.id] || []).filter(e => sysComp[e]);
+    const sifs = model.interfaces.SYS.filter(i => el.includes(i.from) || el.includes(i.to)).map(i => i.id);
+    const sit = [...new Set(sifs.flatMap(i => tOf("SYS4", i)))];
+    const row = [r.id, r.title || "", r.source || "", el.map(e => `${e} ${sysComp[e].name}`).join("\n"), tOf("SYS5", r.id).join(", "), sit.join(", ")];
+    const gaps = [];
+    if (!el.length) gaps.push("미할당");
+    if (!tOf("SYS5", r.id).length) gaps.push("SYS.5 없음");
+    ["SW", "HW"].forEach(lv => {
+      if (!sc[lv]) return;
+      const ch = model.reqs[lv].filter(x => (x.parents || []).includes(r.id));
+      const cs = [...new Set(ch.flatMap(x => model.alloc[lv][x.id] || []))];
+      const q = [...new Set(ch.flatMap(x => tOf(lv === "SW" ? "SWE6" : "HWE4", x.id)))];
+      const it = [...new Set(cs.flatMap(c => [...tOf(lv === "SW" ? "SWE5" : "HWE3", c), ...model.interfaces[lv].filter(i => i.from === c || i.to === c).flatMap(i => tOf(lv === "SW" ? "SWE5" : "HWE3", i.id))]))];
+      row.push(ch.map(x => x.id).join(", "), cs.join(", "), q.join(", "), it.join(", "));
+      const needs = el.some(e => lv === "SW" ? AE.elemHasSW(sysComp[e]) : AE.elemHasHW(sysComp[e]));
+      if (needs && !ch.length) gaps.push(`${lv} 미파생`);
+    });
+    row.push(gaps.length ? gaps.join(", ") : "OK");
+    fwd.push(row);
+  });
+  const back = [["요구사항 추적 매트릭스 — 역방향 (검증 수단 → 요구)"], [], ["검증 수단 ID", "레벨", "제목", "대상 ID", "대상 존재", "회귀"]];
+  const known = new Set(["SYS", "SW", "HW"].flatMap(lv => [...model.reqs[lv].map(x => x.id), ...model.comps[lv].map(x => x.id), ...model.interfaces[lv].map(x => x.id)]));
+  model.tests.forEach(t => back.push([t.id, AE.TEST_LEVELS[t.level]?.proc || t.level, t.title || "", (t.targets || []).join(", "), (t.targets || []).every(x => known.has(x)) ? "예" : "참조 오류", t.regression ? "Y" : ""]));
+  const swBack = [["하위 요구 역추적 (SW/HW 요구 → 시스템 요구)"], [], ["하위 요구", "레벨", "요구사항명", "상위 시스템 요구", "상위 존재"]];
+  const sysIds = new Set(model.reqs.SYS.map(r => r.id));
+  ["SW", "HW"].forEach(lv => sc[lv] && model.reqs[lv].forEach(r => swBack.push([r.id, lv, r.title || "", (r.parents || []).join(", "), (r.parents || []).some(p => sysIds.has(p)) ? "예" : "추적 없음"])));
+  const F = AE.checkConsistency(model);
+  const cons = [["일관성·추적성 점검 결과"], [`점검일: ${new Date().toLocaleString("ko-KR")}`], ["심각도", "관련 BP", "내용", "대상 ID(최대 30)"],
+    ...F.map(f => [f.sev === "error" ? "오류" : f.sev === "warn" ? "경고" : "정보", AE.bpLabel(f.bp, model.version), f.msg, (f.ids || []).join(", ")])];
+  if (!F.length) cons.push(["-", "-", "발견된 문제 없음", ""]);
+  const w = [12, 26, 16, 22, 16, 16, ...(sc.SW ? [16, 14, 16, 16] : []), ...(sc.HW ? [16, 14, 16, 16] : []), 18];
+  return makeXlsxBook([
+    { name: "순방향 추적", rows: fwd, widths: w, headerRows: [3], titleRows: [0], freezeRow: 4 },
+    { name: "역방향(검증→요구)", rows: back, widths: [14, 8, 40, 20, 10, 6], headerRows: [2], titleRows: [0], freezeRow: 3 },
+    { name: "역방향(하위→상위)", rows: swBack, widths: [14, 6, 36, 20, 10], headerRows: [2], titleRows: [0], freezeRow: 3 },
+    { name: "일관성 점검", rows: cons, widths: [8, 34, 60, 50], headerRows: [2], titleRows: [0], freezeRow: 3 },
+  ]);
+}
+
+// 산출물명 → ASPICE 문서 생성 가능 여부 (모델에 해당 내용이 있을 때만 — 없으면 기존 템플릿/스켈레톤 경로 유지)
+function aspiceCanBuild(kind, ctx) {
+  const raw = ctx?.requirements?.aspice;
+  if (!kind || !raw) return false;
+  const m = AE.normalizeModel(raw);
+  const has = { SYS_AD: m.comps.SYS.length > 0, SW_RS: m.scope.SW && m.reqs.SW.length > 0, HW_RS: m.scope.HW && m.reqs.HW.length > 0,
+    SW_AD: m.scope.SW && m.comps.SW.length > 0, HW_AD: m.scope.HW && m.comps.HW.length > 0, RTM: m.reqs.SYS.length > 0 };
+  if (kind in has) return has[kind];
+  const D = AE.ASPICE_DOCS[kind];
+  if (D?.test) return m.scope[AE.TEST_LEVELS[D.test].level] && m.tests.some(t => t.level === D.test);
+  return false;   // SYS_RS는 기존 요구사항 명세서 경로(템플릿 채움)를 유지
+}
+function buildAspiceDoc(kind, meta, ctx, doc) {
+  if (kind === "SW_RS" || kind === "HW_RS") return { ext: "docx", bytes: makeAspiceReqDocx(kind === "SW_RS" ? "SW" : "HW", meta, ctx, doc) };
+  if (kind === "SYS_AD" || kind === "SW_AD" || kind === "HW_AD") return { ext: "docx", bytes: makeAspiceArchDocx(kind === "SYS_AD" ? "SYS" : kind === "SW_AD" ? "SW" : "HW", meta, ctx, doc) };
+  if (kind === "RTM") return { ext: "xlsx", bytes: makeAspiceRtmXlsx(meta, ctx, doc) };
+  return { ext: "xlsx", bytes: makeAspiceVerifXlsx(kind, meta, ctx, doc) };
+}
+// ASPICE V-모델 산출물 패키지 ZIP — 범위 내 생성 가능한 문서 전부 + 일관성 점검 보고
+async function downloadAspicePackage(meta, ctx) {
+  const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
+  const order = ["SYS_AD", "SW_RS", "SW_AD", "HW_RS", "HW_AD", "V_SYS5", "V_SYS4", "V_SWE6", "V_SWE5", "V_HWE4", "V_HWE3", "R_SYS5", "R_SYS4", "R_SWE6", "R_SWE5", "RTM"];
+  const files = [];
+  order.forEach((k, i) => {
+    if (!aspiceCanBuild(k, ctx)) return;
+    const D = AE.ASPICE_DOCS[k];
+    const of = buildAspiceDoc(k, meta, ctx, { name: D.title, code: D.code });
+    files.push({ path: `${String(i + 1).padStart(2, "0")}_${D.code}_${sanitize(D.title)}.${of.ext}`, content: of.bytes });
+  });
+  if (!files.length) throw new Error("생성할 수 있는 ASPICE 산출물이 없습니다. 시스템 요소·하위 요구·검증 수단을 먼저 작성하세요.");
+  const blob = new Blob([zipBytes(files)], { type: "application/zip" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `${sanitize(meta.name) || "project"}_ASPICE_V모델_산출물.zip`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+  return files.length;
+}
+
 async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
+  // ASPICE V-모델 산출물(SyAD·SW/HW 요구·설계·검증 명세/결과·RTM): 추적 모델에 내용이 있으면 모델에서 생성
+  // (SW 요구사항 명세서가 아래 요구사항 경로에 걸려 시스템 요구로 채워지는 것을 막기 위해 가장 먼저 판정)
+  const aKind = AE.aspiceDocKind(doc.name);
+  if (aKind && aspiceCanBuild(aKind, ctx)) {
+    try { return buildAspiceDoc(aKind, meta, ctx, doc); } catch (_) { /* 생성 실패 시 기존 경로 폴백 */ }
+  }
   // 요구사항 정의서·명세서: 확정 요구사항이 있으면 OSSP 산출물템플릿에 채워 표준 양식 그대로 생성 (실패 시 자체 생성 폴백)
   const reqKind0 = reqDocKind(doc.name);
   if (reqKind0 && ctx?.requirements?.items?.length) {
@@ -6634,7 +6971,9 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
     const valid = items.filter(it => String(it.name || "").trim());
     if (!valid.length) { setError("확정할 요구사항이 없습니다. 요구사항명을 입력해 주세요."); return; }
     const normed = assignReqIds(valid).map(it => ({ ...it, wbsNo: it.wbsNo && (it.wbsNo === "공통" || leafName[it.wbsNo] !== undefined) ? it.wbsNo : "공통" }));
-    setRequirements({ items: normed, sourceName: srcFiles.length ? srcFiles.map(f => f.name).join(", ") : "직접 입력", specLeaves: leaves, qualityStd: QSTD.name, updatedAt: new Date().toISOString() });
+    setRequirements({ items: normed, sourceName: srcFiles.length ? srcFiles.map(f => f.name).join(", ") : "직접 입력", specLeaves: leaves, qualityStd: QSTD.name, updatedAt: new Date().toISOString(),
+      // ASPICE V-모델 추적 모델 보존 — 시스템 요구는 V-모델 모달을 열 때 ID 기준으로 재동기화된다
+      ...(requirements?.aspice ? { aspice: { ...requirements.aspice, reqs: { ...(requirements.aspice.reqs || {}), SYS: AE.syncSysReqs(normed, requirements.aspice.reqs?.SYS) } } } : {}) });
     onClose();
   }
 
@@ -6741,6 +7080,595 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ASPICE V-모델 엔지니어링 모달 — SYS.2 확정 요구 → SYS.3 → SWE.1/2 · HWE.1/2 → 검증 수단 → 추적·충족도
+// 저장 위치: requirements.aspice (tailoring JSON 내부 — DB 스키마 변경 없음)
+// ═══════════════════════════════════════════════════════════════════════════
+const AE_TABS = [["setup", "① 설정·입력자료"], ["SYS", "② 시스템 (SYS.2·3)"], ["SW", "③ SW (SWE.1·2)"], ["HW", "④ HW (HWE.1·2)"], ["verif", "⑤ 검증 수단"], ["trace", "⑥ 추적성·충족도"]];
+const AE_SEV = { error: { c: "#FF5B5B", l: "오류" }, warn: { c: "#F5A623", l: "경고" }, info: { c: "#6B7280", l: "정보" } };
+
+// 모달 내부에서 정의하면 렌더마다 컴포넌트가 새로 만들어져 입력 포커스가 사라지므로 최상위에 둔다
+function AeSec({ title, right, children }) {
+  return (
+    <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}><div style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{title}</div>{right}</div>
+      {children}
+    </div>
+  );
+}
+function AeFlags({ r }) {
+  const f = AE.qualityFlags(r);
+  return f.length ? <span title={f.map(x => x.msg).join("\n")} style={{ fontSize: 9.5, color: T.amber, whiteSpace: "nowrap" }}>⚠ {f.length}</span> : <span style={{ fontSize: 9.5, color: T.green }}>✓</span>;
+}
+
+function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, ossp }) {
+  const [items, setItems] = useState(() => (requirements?.items || []).map(x => ({ ...x })));
+  const [model, setModel] = useState(() => {
+    const m = AE.normalizeModel(requirements?.aspice);
+    if (!requirements?.aspice) { m.useAI = !(() => { try { return localStorage.getItem(PBS_NOAI_KEY) === "1"; } catch { return false; } })(); }
+    m.reqs.SYS = AE.syncSysReqs(requirements?.items || [], m.reqs.SYS);
+    return m;
+  });
+  const [tab, setTab] = useState(requirements?.aspice ? "trace" : "setup");
+  const [busy, setBusy] = useState(false);
+  const [prog, setProg] = useState(null);
+  const [err, setErr] = useState(null);
+  const [note, setNote] = useState(null);
+  const [open, setOpen] = useState({});
+  const [dbc, setDbc] = useState(null);        // { fileName, parsed, own }
+  const [tplGroup, setTplGroup] = useState("SYS_RS");
+  const [vFilter, setVFilter] = useState("SYS5");
+  const [guides, setGuides] = useState([]);
+  useEffect(() => { fetchWritingGuides().then(gs => setGuides(gs.filter(g => g.is_active !== false))).catch(() => {}); }, []);
+  const guideBlock = buildGuideBlock(guides);
+  const V = model.version;
+  const findings = AE.checkConsistency(model);
+  const metrics = AE.coverageMetrics(model);
+  const inp = { width: "100%", padding: "4px 6px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 11, fontFamily: "inherit", boxSizing: "border-box" };
+  const ta = { ...inp, minHeight: 40, resize: "vertical", lineHeight: 1.45 };
+  const small = { background: "none", border: `1px solid ${T.border}`, borderRadius: 6, color: T.accent, cursor: "pointer", fontSize: 10.5, padding: "3px 9px", fontFamily: "inherit" };
+  const set = fn => setModel(m => { const n = AE.normalizeModel(JSON.parse(JSON.stringify(m))); fn(n); return n; });
+
+  // ── 공통: AI 호출 래퍼 (청크 진행률) ──
+  async function run(label, fn) {
+    if (busy) return;
+    setBusy(true); setErr(null); setNote(null); setProg({ percent: 3, label });
+    try { const msg = await fn(); setProg({ percent: 100, label: msg || "완료" }); setTimeout(() => setProg(null), 2500); }
+    catch (e) { setErr(`${label} 실패: ${e.message}`); setProg(null); }
+    setBusy(false);
+  }
+  const sysCompName = () => Object.fromEntries(model.comps.SYS.map(c => [c.id, c.name]));
+
+  // ── SYS.3: 시스템 아키텍처 초안 + 할당 ──
+  function sysArch() {
+    return run("시스템 아키텍처 초안 작성", async () => {
+      const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
+      const kept = n.comps.SYS.filter(c => c.origin === "dbc" || c.origin === "manual");
+      const keptIf = n.interfaces.SYS.filter(i => i.origin === "dbc" || i.origin === "manual");
+      if (!n.useAI) {
+        const r = AE.ruleSysArchitecture(items, requirements?.specLeaves || []);
+        const comps = [...r.comps.filter(c => !kept.some(k => k.name === c.name))];
+        kept.forEach(k => comps.push({ ...k, id: comps.some(c => c.id === k.id) ? AE.nextId("SYE-", comps) : k.id }));
+        n.comps.SYS = comps; n.alloc.SYS = { ...r.alloc }; n.interfaces.SYS = keptIf.filter(i => comps.some(c => c.id === i.from) && comps.some(c => c.id === i.to));
+        setModel(n); return `규칙 기반 초안: 요소 ${comps.length}개 (기능 모듈 기준 — 물리 요소로 재분해 필요)`;
+      }
+      setProg({ percent: 10, label: "AI: 시스템 요소·인터페이스·운영 모드 설계 중…" });
+      const res = await callClaudeJson(AE.promptSysArch({ form, reqs: n.reqs.SYS, version: V, guideBlock }), 3500);
+      const a = AE.applyArchResult("SYS", res, n.comps.SYS);
+      const comps = [...a.comps];
+      kept.forEach(k => { if (!comps.some(c => c.name === k.name)) comps.push({ ...k, id: comps.some(c => c.id === k.id) ? AE.nextId("SYE-", comps) : k.id }); });
+      const idOfName = Object.fromEntries(comps.map(c => [c.name, c.id]));
+      const keptIf2 = keptIf.map(i => ({ ...i, from: comps.some(c => c.id === i.from) ? i.from : idOfName[(kept.find(k => k.id === i.from) || {}).name] || i.from, to: comps.some(c => c.id === i.to) ? i.to : idOfName[(kept.find(k => k.id === i.to) || {}).name] || i.to }));
+      const ifs = [...a.interfaces];
+      keptIf2.forEach(i => ifs.push({ ...i, id: AE.nextId("SIF-", ifs) }));
+      n.comps.SYS = comps; n.interfaces.SYS = ifs;
+      if (a.modes.length) n.modes = a.modes;
+      if (a.rationale) n.rationale.SYS = a.rationale;
+      n.alloc.SYS = {};
+      // 할당: 10건씩 (Vercel 타임아웃 대응). DBC 유래 인터페이스 요구는 규칙으로 통신 요소에 할당
+      const commId = (comps.find(c => c.origin === "dbc" && c.kind !== "외부") || {}).id;
+      const pending = n.reqs.SYS.filter(r => { const it = items.find(x => x.id === r.id); if (it?._dbc && commId) { n.alloc.SYS[r.id] = [commId]; return false; } return true; });
+      const ids = new Set(comps.map(c => c.id));
+      for (let i = 0; i < pending.length; i += 10) {
+        setProg({ percent: 30 + (i / Math.max(1, pending.length)) * 65, label: `AI: 요구사항 → 시스템 요소 할당 중… (${Math.min(i + 10, pending.length)}/${pending.length})` });
+        try {
+          const r = await callClaudeJson(AE.promptAllocate({ level: "SYS", reqs: pending.slice(i, i + 10), comps }), 3000);
+          (r?.items || []).forEach(x => { if (x?.id) n.alloc.SYS[x.id] = (x.comps || []).filter(c => ids.has(c)); });
+        } catch (_) { /* 실패분은 미할당으로 남김 — 일관성 점검에서 드러남 */ }
+      }
+      setModel(n);
+      const un = n.reqs.SYS.filter(r => !(n.alloc.SYS[r.id] || []).length).length;
+      return `AI 초안: 요소 ${comps.length}개 · 인터페이스 ${ifs.length}건 · 모드 ${n.modes.length}개${un ? ` · 미할당 ${un}건(수동 할당 필요)` : ""}`;
+    });
+  }
+
+  // ── SWE.1 / HWE.1: 하위 요구 파생 ──
+  function derive(level) {
+    return run(`${level} 요구사항 파생`, async () => {
+      const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
+      const parents = AE.parentsForLevel(n, level);
+      if (!parents.length) throw new Error(`${level} 포함 시스템 요소(구분 ${level === "SW" ? "SW·HW+SW" : "HW·HW+SW"})에 할당된 시스템 요구가 없습니다. ② 시스템 탭에서 요소 구분과 할당을 먼저 확인하세요.`);
+      if (!n.useAI) { n.reqs[level] = AE.ruleDeriveReqs(n, level); setModel(n); return `규칙 기반: 상위 요구 ${parents.length}건을 상속한 ${level} 요구 초안 생성 — ${level} 관점으로 구체화하세요.`; }
+      const keep = n.reqs[level].filter(r => r.origin === "manual");
+      const out = [...keep];
+      const names = sysCompName();
+      const todo = parents.filter(p => !keep.some(k => (k.parents || []).includes(p.id)));
+      for (let i = 0; i < todo.length; i += 5) {
+        const grp = todo.slice(i, i + 5);
+        setProg({ percent: 5 + (i / todo.length) * 90, label: `AI: ${level} 요구 파생 중… (${Math.min(i + 5, todo.length)}/${todo.length})` });
+        let got = [];
+        try { const r = await callClaudeJson(AE.promptDerive({ level, parents: grp, sysCompName: names, version: V }), 5000); got = Array.isArray(r?.items) ? r.items : []; } catch (_) {}
+        grp.forEach(p => {
+          const mine = got.filter(x => x?.parent === p.id && String(x.text || x.title || "").trim());
+          if (!mine.length) {   // AI 누락분은 상속 초안으로 채워 추적 단절을 막는다
+            const tmp = AE.ruleDeriveReqs({ ...n, reqs: { ...n.reqs, [level]: out }, comps: n.comps, alloc: n.alloc }, level).filter(r => (r.parents || []).includes(p.id) && !out.some(o => o.id === r.id));
+            tmp.forEach(t => out.push({ ...t, id: AE.nextId(AE.REQ_PREFIX[level], out, 4) }));
+            return;
+          }
+          mine.slice(0, 3).forEach(x => {
+            const base = { title: String(x.title || "").slice(0, 60), text: String(x.text || ""), type: ["기능", "비기능", "인터페이스"].includes(x.type) ? x.type : p.type };
+            out.push({ id: AE.nextId(AE.REQ_PREFIX[level], out, 4), level, parents: [p.id], sysElems: p.elems, ...base, priority: p.priority,
+              verifMethod: AE.defaultVerifMethod(base), verifCriteria: String(x.verifCriteria || ""), safety: p.safety || "", security: !!p.security, status: "Draft", origin: "ai" });
+          });
+        });
+      }
+      n.reqs[level] = out;
+      // 할당은 새 요구 기준으로 다시 — 기존 할당 중 사라진 요구는 정리
+      Object.keys(n.alloc[level]).forEach(k => { if (!out.some(r => r.id === k)) delete n.alloc[level][k]; });
+      setModel(n);
+      return `${level} 요구 ${out.length}건 (상위 ${parents.length}건 기준)`;
+    });
+  }
+
+  // ── SWE.2 / HWE.2: 컴포넌트 설계 + 할당 ──
+  function compose(level) {
+    return run(`${AE.LEVELS[level].compLabel} 설계`, async () => {
+      const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
+      if (!n.reqs[level].length) throw new Error(`${level} 요구사항이 없습니다. 먼저 요구를 파생하세요.`);
+      if (!n.useAI) { const r = AE.ruleComponents(n, level); n.comps[level] = r.comps; n.alloc[level] = r.alloc; n.interfaces[level] = []; setModel(n); return `규칙 기반: 시스템 요소별 ${level} 컴포넌트 ${r.comps.length}개 초안`; }
+      const want = level === "SW" ? AE.elemHasSW : AE.elemHasHW;
+      const sysElems = n.comps.SYS.filter(want);
+      setProg({ percent: 10, label: `AI: ${AE.LEVELS[level].compLabel} 구조 설계 중…` });
+      const res = await callClaudeJson(AE.promptComponents({ level, reqs: n.reqs[level], sysElems, version: V }), 3500);
+      const a = AE.applyArchResult(level, res, n.comps[level]);
+      const sysIds = new Set(sysElems.map(e => e.id));
+      a.comps.forEach(c => { if (!sysIds.has(c.sysElem)) c.sysElem = ""; });
+      n.comps[level] = a.comps; n.interfaces[level] = a.interfaces; if (a.rationale) n.rationale[level] = a.rationale;
+      n.alloc[level] = {};
+      const ids = new Set(a.comps.map(c => c.id));
+      const rs = n.reqs[level];
+      for (let i = 0; i < rs.length; i += 10) {
+        setProg({ percent: 30 + (i / rs.length) * 65, label: `AI: ${level} 요구 → 컴포넌트 할당 중… (${Math.min(i + 10, rs.length)}/${rs.length})` });
+        try {
+          const r = await callClaudeJson(AE.promptAllocate({ level, reqs: rs.slice(i, i + 10), comps: a.comps }), 3000);
+          (r?.items || []).forEach(x => { if (x?.id) n.alloc[level][x.id] = (x.comps || []).filter(c => ids.has(c)); });
+        } catch (_) {}
+      }
+      setModel(n);
+      return `${AE.LEVELS[level].compLabel} ${a.comps.length}개 · 인터페이스 ${a.interfaces.length}건`;
+    });
+  }
+
+  // ── 검증 수단: 규칙(경계값·타이밍·결함주입·인터페이스) + AI(정상 시나리오 서술) ──
+  function genTests(levels) {
+    return run("검증 수단 생성", async () => {
+      const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
+      const lv = levels.filter(L => n.scope[AE.TEST_LEVELS[L].level]);
+      if (n.useAI) {
+        // 기존 AI TC는 대상 요구가 남아 있는 것만 유지하고, 새로 서술할 요구만 호출
+        const aiTests = n.tests.filter(t => t.origin === "ai" && lv.includes(t.level));
+        n.tests = n.tests.filter(t => !(t.origin === "ai" && lv.includes(t.level)));
+        const reqLevels = lv.filter(L => AE.TEST_LEVELS[L].targetKind === "req");
+        const jobs = [];
+        reqLevels.forEach(L => {
+          const rs = n.reqs[AE.TEST_LEVELS[L].level].filter(r => ["Test", "Measurement", "Demonstration"].includes(r.verifMethod || "Test"));
+          for (let i = 0; i < rs.length; i += 5) jobs.push({ L, grp: rs.slice(i, i + 5) });
+        });
+        const fresh = [];
+        for (let j = 0; j < jobs.length; j++) {
+          const { L, grp } = jobs[j];
+          setProg({ percent: 5 + (j / Math.max(1, jobs.length)) * 85, label: `AI: ${AE.TEST_LEVELS[L].label} 정상 시나리오 서술 중… (${j + 1}/${jobs.length})` });
+          try {
+            const r = await callClaudeJson(AE.promptTests({ testLevel: L, reqs: grp, version: V }), 5000);
+            (r?.items || []).forEach(x => {
+              const tgt = grp.find(g => g.id === x?.target); if (!tgt) return;
+              fresh.push({ level: L, targets: [tgt.id], origin: "ai", regression: tgt.priority === "상" || !!tgt.safety, title: String(x.title || `${tgt.title} — 정상 동작`).slice(0, 80),
+                technique: "요구사항 기반(블랙박스)", precondition: String(x.precondition || ""), steps: String(x.steps || ""), expected: String(x.expected || ""), passCriteria: String(x.passCriteria || tgt.verifCriteria || ""), env: String(x.env || "") });
+            });
+          } catch (_) { /* 실패 청크는 규칙 정상동작 TC로 대체됨 */ }
+        }
+        const keepAi = aiTests.filter(t => !fresh.some(f => (f.targets || [])[0] === (t.targets || [])[0] && f.level === t.level));
+        n.tests = [...n.tests, ...keepAi, ...fresh.map(t => ({ ...t, id: "" }))];
+        // AI TC에 ID 부여 후 규칙 TC와 병합
+        const withIds = [];
+        n.tests.forEach(t => { if (t.id) withIds.push(t); else withIds.push({ ...t, id: AE.nextId(AE.TEST_LEVELS[t.level].prefix, withIds.filter(x => x.level === t.level), 4) }); });
+        n.tests = withIds;
+      }
+      n.tests = AE.generateRuleTests(n, lv);
+      setModel(n);
+      const cnt = lv.map(L => `${AE.TEST_LEVELS[L].proc} ${n.tests.filter(t => t.level === L).length}`).join(" · ");
+      return `검증 수단 생성 완료 — ${cnt}`;
+    });
+  }
+
+  // ── DBC 가져오기 ──
+  async function onDbc(e) {
+    const f = (e.target.files || [])[0]; e.target.value = "";
+    if (!f) return;
+    try {
+      const parsed = AE.parseDbc(await f.text());
+      if (!parsed.messages.length) throw new Error("메시지(BO_)를 찾지 못했습니다.");
+      setDbc({ fileName: f.name, parsed, own: parsed.nodes[0] || "" });
+    } catch (x) { setErr(`DBC 해석 실패: ${x.message}`); }
+  }
+  function applyDbc() {
+    if (!dbc?.own) return;
+    const { reqs, itfs } = AE.dbcToInterfaces(dbc.parsed, dbc.own, { fileName: dbc.fileName });
+    if (!reqs.length) { setErr(`노드 '${dbc.own}'가 송수신하는 메시지가 없습니다.`); return; }
+    // 이미 가져온 메시지(같은 메시지명·방향)는 중복 추가하지 않음
+    const exists = new Set(items.filter(i => i._dbc).map(i => `${i._dbc.msg}|${i._dbc.tx}`));
+    const add = reqs.filter(r => !exists.has(`${r._dbc.msg}|${r._dbc.tx}`));
+    const newItems = assignReqIds([...items, ...add]);
+    setItems(newItems);
+    set(n => {
+      n.reqs.SYS = AE.syncSysReqs(newItems, n.reqs.SYS);
+      let comm = n.comps.SYS.find(c => c.origin === "dbc" && c.kind !== "외부");
+      if (!comm) { comm = { id: AE.nextId("SYE-", n.comps.SYS), name: "차량 통신부", kind: "HW+SW", desc: `차량 네트워크 송수신 (${dbc.fileName})`, behavior: "", origin: "dbc" }; n.comps.SYS.push(comm); }
+      const peers = [...new Set(itfs.flatMap(i => String(i.peer).split(/,\s*/)).filter(Boolean))];
+      peers.forEach(p => { if (!n.comps.SYS.some(c => c.name === `${p} (외부)`)) n.comps.SYS.push({ id: AE.nextId("SYE-", n.comps.SYS), name: `${p} (외부)`, kind: "외부", desc: "시스템 경계 밖 상대 노드 (DBC)", behavior: "", origin: "dbc" }); });
+      const idOf = Object.fromEntries(n.comps.SYS.map(c => [c.name, c.id]));
+      itfs.forEach(i => {
+        if (n.interfaces.SYS.some(x => x.origin === "dbc" && x.msg === i.msg && x.dir === i.dir)) return;
+        String(i.peer).split(/,\s*/).filter(Boolean).forEach(p => {
+          const pid = idOf[`${p} (외부)`]; if (!pid) return;
+          n.interfaces.SYS.push({ id: AE.nextId("SIF-", n.interfaces.SYS), from: i.dir === "TX" ? comm.id : pid, to: i.dir === "TX" ? pid : comm.id, kind: "CAN", signals: `${i.msg}(${i.msgId}): ${i.signals}`, periodMs: i.periodMs, desc: `${i.dir} · DLC ${i.dlc}`, origin: "dbc", msg: i.msg, dir: i.dir });
+        });
+      });
+      newItems.filter(x => x._dbc).forEach(x => { if (!(n.alloc.SYS[x.id] || []).length) n.alloc.SYS[x.id] = [comm.id]; });
+      n.inputs.in_dbc = "have";
+    });
+    setNote(`DBC '${dbc.fileName}' — 노드 ${dbc.own} 기준 인터페이스 요구 ${add.length}건 추가${reqs.length - add.length ? ` (중복 ${reqs.length - add.length}건 제외)` : ""}. 저장 시 시스템 요구사항 명세서·인터페이스 정의서에도 반영됩니다.`);
+    setDbc(null);
+  }
+
+  // ── 템플릿 WP 충족도 점검 (docx 업로드 또는 OSSP 등록 템플릿) ──
+  async function checkTemplateBytes(bytes, fileName) {
+    const text = await docxOutlineText(bytes);
+    const r = AE.checkTemplateCoverage(text, tplGroup, V);
+    set(n => { n.templateChecks[tplGroup] = { fileName, mode: r.mode, outline: r.outlineCount, hits: Object.fromEntries(r.items.map(x => [x.id, x.hit])), at: new Date().toISOString() }; });
+    const miss = r.items.filter(x => !x.hit && x.origin === "ASPICE");
+    setNote(`템플릿 '${fileName}' 점검 (${r.mode === "outline" ? `목차·항목 라벨 ${r.outlineCount}줄 기준` : "본문 기준"}) — ASPICE 특성 ${r.items.filter(x => x.origin === "ASPICE").length}개 중 누락 ${miss.length}개${miss.length ? ": " + miss.slice(0, 6).map(x => x.label).join(", ") + (miss.length > 6 ? " 외" : "") : ""}`);
+  }
+  async function onTplFile(e) {
+    const f = (e.target.files || [])[0]; e.target.value = "";
+    if (!f) return;
+    if (!/\.docx$/i.test(f.name)) { setErr("템플릿 점검은 .docx만 지원합니다 (.doc은 Word에서 docx로 저장 후 업로드)."); return; }
+    try { await checkTemplateBytes(new Uint8Array(await f.arrayBuffer()), f.name); } catch (x) { setErr("템플릿 점검 실패: " + x.message); }
+  }
+  async function checkOsspTemplate() {
+    const title = AE.ASPICE_DOCS[tplGroup === "VERIF" ? "V_SYS5" : tplGroup]?.title;
+    try {
+      const dbId = await resolveOsspDbId(ossp);
+      let tpl = dbId ? findTemplateFor(title, await fetchOsspTemplates(dbId)) : null;
+      if (!tpl) tpl = findTemplateFor(title, await fetchOsspTemplates(null));
+      if (!tpl) { setErr(`OSSP 라이브러리에 '${title}' 템플릿이 없습니다. 파일을 직접 업로드하세요.`); return; }
+      if (!/\.docx$/i.test(tpl.file_name)) { setErr(`등록 템플릿 '${tpl.file_name}'은 docx가 아니어서 점검할 수 없습니다.`); return; }
+      const bytes = await fetchTemplateBytes(tpl);
+      if (!bytes) throw new Error("템플릿 다운로드 실패");
+      await checkTemplateBytes(bytes, tpl.file_name);
+    } catch (x) { setErr("OSSP 템플릿 점검 실패: " + x.message); }
+  }
+
+  function save() {
+    const out = { ...model, reqs: { ...model.reqs, SYS: AE.syncSysReqs(items, model.reqs.SYS) }, updatedAt: new Date().toISOString() };
+    setRequirements({ ...(requirements || {}), items, aspice: out, updatedAt: requirements?.updatedAt || new Date().toISOString() });
+    onClose();
+  }
+  async function downloadPkg() {
+    try { const ctx = { requirements: { ...(requirements || {}), items, aspice: model } }; const n = await downloadAspicePackage(form || {}, ctx); setNote(`ASPICE 산출물 ${n}건 ZIP 다운로드를 시작했습니다.`); }
+    catch (x) { setErr(x.message); }
+  }
+
+  // ── 편집 UI 조각 ──
+  const updReq = (lv, i, k, v) => set(n => { n.reqs[lv][i] = { ...n.reqs[lv][i], [k]: v, ...(k === "verifCriteria" && lv === "SYS" ? { verifCriteriaEdited: true } : {}) }; });
+  const toggleAlloc = (lv, rid, cid) => set(n => { const a = new Set(n.alloc[lv][rid] || []); a.has(cid) ? a.delete(cid) : a.add(cid); n.alloc[lv][rid] = [...a]; });
+  const AllocChips = ({ lv, rid }) => (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+      {model.comps[lv].filter(c => c.kind !== "외부").map(c => { const on = (model.alloc[lv][rid] || []).includes(c.id); return (
+        <button key={c.id} onClick={() => toggleAlloc(lv, rid, c.id)} title={c.desc}
+          style={{ fontSize: 9.5, padding: "1px 6px", borderRadius: 5, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${on ? T.accent : T.border}`, background: on ? T.accentDim : "transparent", color: on ? T.text : T.muted }}>{c.name}</button>); })}
+      {!model.comps[lv].length && <span style={{ fontSize: 10, color: T.muted }}>요소 없음</span>}
+    </div>
+  );
+  const ReqList = ({ lv }) => {
+    const rs = model.reqs[lv];
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {rs.map((r, i) => (
+          <div key={r.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", background: T.surface }}>
+            <div style={{ display: "grid", gridTemplateColumns: "74px 1fr 104px 96px 30px 40px", gap: 6, alignItems: "center" }}>
+              <span style={{ fontFamily: "monospace", fontSize: 10, color: T.accent }}>{r.id}</span>
+              {lv === "SYS" ? <span style={{ fontSize: 11 }}>{r.title} <span style={{ color: T.muted, fontSize: 10 }}>· {r.type}</span></span>
+                : <input value={r.title || ""} onChange={e => updReq(lv, i, "title", e.target.value)} style={inp} />}
+              <select value={r.verifMethod || "Test"} onChange={e => updReq(lv, i, "verifMethod", e.target.value)} style={inp} title="검증 방법 (4.0 08-60: test·measurement·analysis·inspection·review…)">
+                {AE.VERIF_METHODS.map(x => <option key={x}>{x}</option>)}
+              </select>
+              <select value={r.status || "Draft"} onChange={e => updReq(lv, i, "status", e.target.value)} style={inp}>{ASPICE_STATUS.map(x => <option key={x}>{x}</option>)}</select>
+              <AeFlags r={r} />
+              <button onClick={() => setOpen(o => ({ ...o, [lv + r.id]: !o[lv + r.id] }))} style={{ ...small, color: T.muted, padding: "2px 0" }}>{open[lv + r.id] ? "접기" : "상세"}</button>
+            </div>
+            <div style={{ marginTop: 4, display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 9.5, color: T.muted, flexShrink: 0 }}>할당 →</span>{AllocChips({ lv, rid: r.id })}
+            </div>
+            {open[lv + r.id] && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 6 }}>
+                <div><div style={{ fontSize: 10, color: T.muted }}>요구 내용{lv === "SYS" ? " (요구사항 AI 작성에서 수정)" : ""}</div>
+                  {lv === "SYS" ? <div style={{ fontSize: 10.5, lineHeight: 1.5 }}>{r.text}</div> : <textarea value={r.text || ""} onChange={e => updReq(lv, i, "text", e.target.value)} style={ta} />}</div>
+                <div><div style={{ fontSize: 10, color: T.muted }}>검증 기준 (3.1 17-50 / 4.0 verifiable)</div><textarea value={r.verifCriteria || ""} onChange={e => updReq(lv, i, "verifCriteria", e.target.value)} style={ta} /></div>
+                <div><div style={{ fontSize: 10, color: T.muted }}>안전 등급 (ISO 26262 대상 시)</div>
+                  <select value={r.safety || ""} onChange={e => updReq(lv, i, "safety", e.target.value)} style={inp}>{["", "QM", "ASIL A", "ASIL B", "ASIL C", "ASIL D"].map(x => <option key={x} value={x}>{x || "-"}</option>)}</select></div>
+                <div style={{ display: "flex", gap: 10, alignItems: "flex-end", fontSize: 10.5 }}>
+                  <label><input type="checkbox" checked={!!r.security} onChange={e => updReq(lv, i, "security", e.target.checked)} /> 보안 관련</label>
+                  {lv === "SYS" && <label title="4.0 17-57 (IATF 16949)"><input type="checkbox" checked={!!r.special} onChange={e => updReq(lv, i, "special", e.target.checked)} /> 특별 특성</label>}
+                  {lv !== "SYS" && <span style={{ color: T.muted }}>상위: {(r.parents || []).join(", ") || "없음"}</span>}
+                  {lv !== "SYS" && <button onClick={() => set(n => { n.reqs[lv] = n.reqs[lv].filter(x => x.id !== r.id); delete n.alloc[lv][r.id]; })} style={{ ...small, color: T.red, marginLeft: "auto" }}>삭제</button>}
+                </div>
+                {AE.qualityFlags(r).length > 0 && <div style={{ gridColumn: "1 / -1", fontSize: 10, color: T.amber }}>품질 점검: {AE.qualityFlags(r).map(x => x.msg).join(" · ")}</div>}
+              </div>
+            )}
+          </div>
+        ))}
+        {!rs.length && <div style={{ fontSize: 11, color: T.muted, padding: 8 }}>요구 없음</div>}
+      </div>
+    );
+  };
+  const CompList = ({ lv }) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {model.comps[lv].map((c, i) => (
+        <div key={c.id} style={{ display: "grid", gridTemplateColumns: "64px 150px 100px 1fr 1fr 22px", gap: 5, alignItems: "center" }}>
+          <span style={{ fontFamily: "monospace", fontSize: 10, color: T.accent }}>{c.id}</span>
+          <input value={c.name} onChange={e => set(n => { n.comps[lv][i].name = e.target.value; })} style={inp} />
+          <select value={c.kind} onChange={e => set(n => { n.comps[lv][i].kind = e.target.value; })} style={inp}>{AE.COMP_KINDS[lv].map(k => <option key={k}>{k}</option>)}</select>
+          <input value={c.desc || ""} onChange={e => set(n => { n.comps[lv][i].desc = e.target.value; })} placeholder="책임" style={inp} />
+          <input value={c.behavior || ""} onChange={e => set(n => { n.comps[lv][i].behavior = e.target.value; })} placeholder="거동(동적 측면)" style={inp} />
+          <button onClick={() => set(n => { n.comps[lv] = n.comps[lv].filter(x => x.id !== c.id); Object.keys(n.alloc[lv]).forEach(k => { n.alloc[lv][k] = (n.alloc[lv][k] || []).filter(x => x !== c.id); }); n.interfaces[lv] = n.interfaces[lv].filter(x => x.from !== c.id && x.to !== c.id); })} style={{ background: "none", border: "none", color: T.red, cursor: "pointer" }}>✕</button>
+        </div>
+      ))}
+      <button onClick={() => set(n => { n.comps[lv].push({ id: AE.nextId(AE.LEVELS[lv].compPrefix, n.comps[lv]), name: "", kind: AE.COMP_KINDS[lv][0], desc: "", behavior: "", origin: "manual" }); })} style={{ ...small, alignSelf: "flex-start" }}>＋ {AE.LEVELS[lv].compLabel} 추가</button>
+    </div>
+  );
+  const IfList = ({ lv }) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {model.interfaces[lv].map((x, i) => (
+        <div key={x.id} style={{ display: "grid", gridTemplateColumns: "60px 130px 130px 90px 1fr 60px 22px", gap: 5, alignItems: "center" }}>
+          <span style={{ fontFamily: "monospace", fontSize: 10, color: T.accent }}>{x.id}</span>
+          {["from", "to"].map(k => <select key={k} value={x[k]} onChange={e => set(n => { n.interfaces[lv][i][k] = e.target.value; })} style={inp}>
+            <option value="">{k === "from" ? "From" : "To"}</option>{model.comps[lv].map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>)}
+          <input value={x.kind || ""} onChange={e => set(n => { n.interfaces[lv][i].kind = e.target.value; })} placeholder="유형" style={inp} />
+          <input value={x.signals || ""} onChange={e => set(n => { n.interfaces[lv][i].signals = e.target.value; })} placeholder="신호·데이터" style={inp} />
+          <input value={x.periodMs || ""} onChange={e => set(n => { n.interfaces[lv][i].periodMs = e.target.value.replace(/[^\d.]/g, ""); })} placeholder="주기ms" style={inp} />
+          <button onClick={() => set(n => { n.interfaces[lv] = n.interfaces[lv].filter(y => y.id !== x.id); })} style={{ background: "none", border: "none", color: T.red, cursor: "pointer" }}>✕</button>
+        </div>
+      ))}
+      <button onClick={() => set(n => { n.interfaces[lv].push({ id: AE.nextId(lv === "SYS" ? "SIF-" : lv === "SW" ? "SWIF-" : "HWIF-", n.interfaces[lv]), from: "", to: "", kind: "", signals: "", periodMs: "", desc: "", origin: "manual" }); })} style={{ ...small, alignSelf: "flex-start" }}>＋ 인터페이스 추가</button>
+    </div>
+  );
+  const aiLabel = model.useAI ? "⚡ AI" : "⚙ 규칙";
+  const pctBar = (label, v) => (
+    <div key={label} style={{ display: "grid", gridTemplateColumns: "150px 1fr 40px", gap: 8, alignItems: "center", fontSize: 10.5 }}>
+      <span style={{ color: T.muted }}>{label}</span>
+      <div style={{ height: 6, background: T.subtle, borderRadius: 3 }}><div style={{ width: `${v ?? 0}%`, height: 6, borderRadius: 3, background: v === 100 ? T.green : v >= 70 ? T.amber : T.red }} /></div>
+      <span style={{ textAlign: "right", color: v == null ? T.muted : T.text }}>{v == null ? "-" : `${v}%`}</span>
+    </div>
+  );
+  const errCount = findings.filter(f => f.sev === "error").length;
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, width: "100%", maxWidth: 1080, maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>🚗 ASPICE V-모델 산출물 엔지니어링 <Badge color={T.accent}>{AE.ASPICE_VERSIONS.find(v => v.id === V)?.label}</Badge></div>
+            <div style={{ fontSize: 10.5, color: T.muted, marginTop: 2 }}>확정 시스템 요구(SYS.2) → 아키텍처(SYS.3) → SW·HW 요구/설계 → 검증 수단 → 양방향 추적성 — 하나의 추적 모델에서 모든 산출물을 생성합니다</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: T.muted, fontSize: 18, cursor: "pointer" }}>✕</button>
+        </div>
+        <div style={{ display: "flex", gap: 3, padding: "8px 18px 0", flexShrink: 0, flexWrap: "wrap" }}>
+          {AE_TABS.filter(([id]) => !(id === "SW" && !model.scope.SW) && !(id === "HW" && !model.scope.HW)).map(([id, label]) => (
+            <button key={id} onClick={() => setTab(id)} style={{ padding: "6px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: tab === id ? 700 : 400, background: tab === id ? T.accent : "transparent", color: tab === id ? "#fff" : T.muted, border: `1px solid ${tab === id ? T.accent : T.border}`, cursor: "pointer", fontFamily: "inherit" }}>
+              {label}{id === "trace" && errCount ? ` (${errCount})` : ""}</button>
+          ))}
+        </div>
+        <div style={{ padding: "12px 18px", overflowY: "auto", flex: 1 }}>
+          {(busy || prog) && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
+          {err && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{err}</div>}
+          {note && <div style={{ color: T.green, fontSize: 11.5, padding: 9, background: T.green + "11", borderRadius: 8, marginBottom: 10 }}>{note}</div>}
+          {!model.reqs.SYS.length && <div style={{ color: T.amber, fontSize: 11.5, padding: 9, background: T.amber + "11", borderRadius: 8, marginBottom: 10 }}>확정된 시스템 요구사항이 없습니다. '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2를 먼저 확정하거나, ① 탭에서 DBC를 가져오세요.</div>}
+
+          {tab === "setup" && (<>
+            <AeSec title="적용 기준·범위">
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                {AE.ASPICE_VERSIONS.map(v => (
+                  <button key={v.id} onClick={() => set(n => { n.version = v.id; })} title={v.desc}
+                    style={{ ...small, padding: "6px 12px", fontSize: 11.5, color: V === v.id ? "#fff" : T.muted, background: V === v.id ? T.accent : "transparent", borderColor: V === v.id ? T.accent : T.border }}>{v.label}</button>))}
+              </div>
+              <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>{AE.ASPICE_VERSIONS.find(v => v.id === V)?.desc}</div>
+              <div style={{ display: "flex", gap: 16, fontSize: 11.5, flexWrap: "wrap" }}>
+                <label><input type="checkbox" checked disabled /> 시스템 (SYS.2~SYS.5)</label>
+                <label><input type="checkbox" checked={model.scope.SW} onChange={e => set(n => { n.scope.SW = e.target.checked; })} /> SW (SWE.1·2·5·6)</label>
+                <label title={V === "3.1" ? "3.1 PRM에는 HWE가 없어 4.0 HWE를 PAM 확장으로 준용합니다" : ""}><input type="checkbox" checked={model.scope.HW} onChange={e => set(n => { n.scope.HW = e.target.checked; })} /> HW (HWE.1~4){V === "3.1" ? " · PAM 확장" : ""}</label>
+                <label style={{ marginLeft: "auto" }} title="해제 시 /api/chat 호출 없이 규칙 기반 초안만 생성 (폐쇄망·재현성)"><input type="checkbox" checked={model.useAI} onChange={e => set(n => { n.useAI = e.target.checked; })} /> AI 사용 (해제 = 규칙 기반만)</label>
+              </div>
+              <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>※ SWE.3(상세설계)·SWE.4(유닛 검증)·HWE 상세설계는 코드·회로가 있어야 의미가 있으므로 자동 생성하지 않습니다 (OSSP 템플릿 제공).</div>
+            </AeSec>
+            <AeSec title="입력자료 체크리스트 — 확보한 자료를 표시하면 WP 충족도에 반영됩니다 (없는 자료는 AI가 지어내지 않고 TBD로 남깁니다)">
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                {AE.INPUT_CHECKLIST.map(it => (
+                  <div key={it.id} style={{ display: "grid", gridTemplateColumns: "1fr 230px", gap: 8, alignItems: "center", fontSize: 11 }}>
+                    <span>{it.label}{it.optional && <span style={{ color: T.muted }}> (선택)</span>} <span style={{ color: T.muted, fontSize: 9.5 }}>→ {it.feeds.map(f => AE.ASPICE_DOCS[f]?.title || "검증 명세").join(", ")}</span></span>
+                    <div style={{ display: "flex", gap: 3 }}>
+                      {[["have", "확보", T.green], ["", "미확보", T.amber], ["na", "해당 없음", T.muted]].map(([v, l, c]) => { const on = (model.inputs[it.id] || "") === v; return (
+                        <button key={v || "none"} onClick={() => set(n => { if (v) n.inputs[it.id] = v; else delete n.inputs[it.id]; })} style={{ ...small, flex: 1, color: on ? "#fff" : T.muted, background: on ? c : "transparent", borderColor: on ? c : T.border }}>{l}</button>); })}
+                    </div>
+                  </div>))}
+              </div>
+            </AeSec>
+            <AeSec title="통신 DB(DBC) 가져오기 — 메시지·시그널·주기를 인터페이스 요구·시스템 인터페이스로 결정적 변환 (AI 미사용)">
+              <label style={{ ...small, display: "inline-block", padding: "6px 12px" }}>📎 .dbc 파일 선택<input type="file" accept=".dbc,.txt" onChange={onDbc} style={{ display: "none" }} /></label>
+              {dbc && (
+                <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 11 }}>
+                  <span>{dbc.fileName}: 메시지 {dbc.parsed.messages.length}개 · 노드 {dbc.parsed.nodes.length}개 — 우리 시스템 노드:</span>
+                  <select value={dbc.own} onChange={e => setDbc(d => ({ ...d, own: e.target.value }))} style={{ ...inp, width: 160 }}>{dbc.parsed.nodes.map(x => <option key={x}>{x}</option>)}</select>
+                  <span style={{ color: T.muted }}>송신 {dbc.parsed.messages.filter(x => x.tx === dbc.own).length} · 수신 {dbc.parsed.messages.filter(x => x.tx !== dbc.own && x.signals.some(s => s.rx.includes(dbc.own))).length}</span>
+                  <Btn onClick={applyDbc} style={{ fontSize: 11, padding: "4px 12px" }}>인터페이스 요구 추가</Btn>
+                </div>)}
+            </AeSec>
+            <AeSec title="등록 템플릿 WP 특성 점검 — 고객사·조직 템플릿이 ASPICE 정보항목 특성을 담고 있는지 목차·항목 라벨로 결정적 점검">
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <select value={tplGroup} onChange={e => setTplGroup(e.target.value)} style={{ ...inp, width: 220 }}>
+                  {[["SYS_RS", "시스템 요구사항 명세서"], ["SYS_AD", "시스템 아키텍처 설계서"], ["SW_RS", "SW 요구사항 명세서"], ["SW_AD", "SW 아키텍처 설계서"], ["HW_RS", "HW 요구사항 명세서"], ["HW_AD", "HW 아키텍처 설계서"], ["VERIF", "검증 명세서(공통)"]].map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+                <label style={{ ...small, padding: "5px 12px" }}>📎 템플릿 docx 업로드<input type="file" accept=".docx" onChange={onTplFile} style={{ display: "none" }} /></label>
+                <button onClick={checkOsspTemplate} style={{ ...small, padding: "5px 12px" }}>OSSP 등록 템플릿으로 점검</button>
+              </div>
+              {model.templateChecks[tplGroup] && (() => { const tc = model.templateChecks[tplGroup]; const list = AE.charStatusList(model, tplGroup); return (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 4 }}>{tc.fileName} · {tc.mode === "outline" ? `목차·항목 라벨 ${tc.outline}줄` : "본문"} 기준 · {String(tc.at).slice(0, 10)}</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {list.map(c => <span key={c.id} title={c.source} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, border: `1px solid ${c.byTpl ? T.green + "66" : (c.origin === "ASPICE" ? T.red + "66" : T.border)}`, color: c.byTpl ? T.green : (c.origin === "ASPICE" ? T.red : T.muted) }}>{c.byTpl ? "✓" : "✕"} {c.label}{c.origin !== "ASPICE" ? ` (${c.origin})` : ""}</span>)}
+                  </div>
+                </div>); })()}
+            </AeSec>
+          </>)}
+
+          {tab === "SYS" && (<>
+            <AeSec title={`시스템 요구사항 ${model.reqs.SYS.length}건 — 검증 방법·기준·상태·할당 (${AE.procLabel("SYS.2", V)})`}>
+              {ReqList({ lv: "SYS" })}
+            </AeSec>
+            <AeSec title={`시스템 요소 ${model.comps.SYS.length}개 (${AE.procLabel("SYS.3", V)} · 정적 측면)`} right={<Btn onClick={sysArch} disabled={busy || !model.reqs.SYS.length} style={{ fontSize: 11, padding: "4px 12px" }}>{aiLabel} 아키텍처 초안·할당</Btn>}>
+              <div style={{ fontSize: 10, color: T.muted, marginBottom: 6 }}>구분: HW·SW·HW+SW·ME(기구)·외부(시스템 경계 밖). SW/HW 하위 요구는 'SW'·'HW'가 포함된 요소에 할당된 시스템 요구에서 파생됩니다. DBC로 추가된 요소·인터페이스는 재생성 시 보존됩니다.</div>
+              {CompList({ lv: "SYS" })}
+            </AeSec>
+            <AeSec title={`시스템 인터페이스 ${model.interfaces.SYS.length}건 (3.1 SYS.3.BP3 / 4.0 04-06 Interface Definitions)`}>{IfList({ lv: "SYS" })}</AeSec>
+            <AeSec title="운영 모드·상태 (동적 측면 — 3.1 SYS.3.BP4 / 4.0 SYS.3.BP2)">
+              {model.modes.map((x, i) => (
+                <div key={i} style={{ display: "grid", gridTemplateColumns: "140px 1fr 1fr 22px", gap: 5, marginBottom: 4 }}>
+                  <input value={x.name} onChange={e => set(n => { n.modes[i].name = e.target.value; })} placeholder="모드명" style={inp} />
+                  <input value={x.desc} onChange={e => set(n => { n.modes[i].desc = e.target.value; })} placeholder="설명" style={inp} />
+                  <input value={x.transition} onChange={e => set(n => { n.modes[i].transition = e.target.value; })} placeholder="진입·이탈 조건" style={inp} />
+                  <button onClick={() => set(n => { n.modes.splice(i, 1); })} style={{ background: "none", border: "none", color: T.red, cursor: "pointer" }}>✕</button>
+                </div>))}
+              <button onClick={() => set(n => { n.modes.push({ name: "", desc: "", transition: "" }); })} style={small}>＋ 모드 추가</button>
+            </AeSec>
+            <AeSec title="아키텍처 분석·설계 근거 (3.1 SYS.3.BP5 / 4.0 04-06 justifying rationale)">
+              <textarea value={model.rationale.SYS} onChange={e => set(n => { n.rationale.SYS = e.target.value; })} style={{ ...ta, minHeight: 60 }} placeholder="대안 구조와 선택 근거(재사용 플랫폼·원가·안전·제조성 등)" />
+            </AeSec>
+          </>)}
+
+          {(tab === "SW" || tab === "HW") && (() => { const lv = tab; const L = AE.LEVELS[lv]; const parents = AE.parentsForLevel(model, lv); return (<>
+            {lv === "HW" && V === "3.1" && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 8 }}>※ ASPICE 3.1에는 HWE 프로세스가 없어 4.0 HWE.1~4를 PAM 확장으로 준용합니다 (문서에 명기됨).</div>}
+            <AeSec title={`${lv} 요구사항 ${model.reqs[lv].length}건 (${AE.procLabel(L.reqProc, V)}) — 파생 대상 시스템 요구 ${parents.length}건`} right={<Btn onClick={() => derive(lv)} disabled={busy || !parents.length} style={{ fontSize: 11, padding: "4px 12px" }}>{aiLabel} 요구 파생</Btn>}>
+              {!parents.length && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 6 }}>'{lv}'가 포함된 시스템 요소에 할당된 요구가 없습니다. ② 시스템 탭에서 요소 구분(HW/SW/HW+SW)과 할당을 확인하세요.</div>}
+              {ReqList({ lv: lv })}
+              <button onClick={() => set(n => { n.reqs[lv].push({ id: AE.nextId(AE.REQ_PREFIX[lv], n.reqs[lv], 4), level: lv, parents: [], sysElems: [], title: "", text: "", type: "기능", priority: "중", verifMethod: "Test", verifCriteria: "", status: "Draft", origin: "manual" }); })} style={{ ...small, marginTop: 6 }}>＋ {lv} 요구 추가</button>
+            </AeSec>
+            <AeSec title={`${L.compLabel} ${model.comps[lv].length}개 (${AE.procLabel(L.archProc, V)})`} right={<Btn onClick={() => compose(lv)} disabled={busy || !model.reqs[lv].length} style={{ fontSize: 11, padding: "4px 12px" }}>{aiLabel} 컴포넌트 설계·할당</Btn>}>
+              {CompList({ lv: lv })}
+            </AeSec>
+            <AeSec title={`${lv} 인터페이스 ${model.interfaces[lv].length}건`}>{IfList({ lv: lv })}</AeSec>
+            <AeSec title="설계 근거"><textarea value={model.rationale[lv]} onChange={e => set(n => { n.rationale[lv] = e.target.value; })} style={{ ...ta, minHeight: 50 }} /></AeSec>
+          </>); })()}
+
+          {tab === "verif" && (() => {
+            const lvKeys = Object.keys(AE.TEST_LEVELS).filter(k => model.scope[AE.TEST_LEVELS[k].level]);
+            const cur = lvKeys.includes(vFilter) ? vFilter : lvKeys[0];
+            const ts = model.tests.filter(t => t.level === cur);
+            return (<>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+                {lvKeys.map(k => <button key={k} onClick={() => setVFilter(k)} style={{ ...small, padding: "5px 10px", color: cur === k ? "#fff" : T.muted, background: cur === k ? T.accent : "transparent", borderColor: cur === k ? T.accent : T.border }}>{AE.TEST_LEVELS[k].proc} {AE.TEST_LEVELS[k].label} ({model.tests.filter(t => t.level === k).length})</button>)}
+                <div style={{ flex: 1 }} />
+                <Btn variant="outline" onClick={() => genTests([cur])} disabled={busy} style={{ fontSize: 11, padding: "4px 10px" }}>이 레벨만 생성</Btn>
+                <Btn onClick={() => genTests(lvKeys)} disabled={busy} style={{ fontSize: 11, padding: "4px 12px" }}>{model.useAI ? "⚡ 규칙+AI" : "⚙ 규칙"} 전체 생성</Btn>
+              </div>
+              <div style={{ fontSize: 10, color: T.muted, marginBottom: 8 }}>규칙 엔진: 요구 문장의 수치 조건(이상·이하·초과·미만·범위·이내)에서 경계값·타이밍 TC, 고장·진단 문구에서 결함 주입 TC, 인터페이스에서 연동·주기·통신이상 TC를 결정적으로 생성합니다. {model.useAI ? "AI는 정상 시나리오 절차 서술에만 사용합니다." : ""} 수동 추가·수정한 항목은 재생성 시 보존됩니다.</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {ts.map(t => { const i = model.tests.indexOf(t); return (
+                  <div key={t.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", background: T.bg }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "84px 110px 1fr 150px 40px 46px 40px", gap: 6, alignItems: "center" }}>
+                      <span style={{ fontFamily: "monospace", fontSize: 10, color: T.accent }}>{t.id}</span>
+                      <span style={{ fontSize: 9.5, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={(t.targets || []).join(", ")}>{(t.targets || []).join(", ")}</span>
+                      <input value={t.title || ""} onChange={e => set(n => { n.tests[i] = { ...n.tests[i], title: e.target.value, origin: "manual" }; })} style={inp} />
+                      <span style={{ fontSize: 9.5, color: T.muted }}>{t.technique}</span>
+                      <label style={{ fontSize: 9.5 }} title="회귀 대상 (3.1 08-50 / 4.0 08-58)"><input type="checkbox" checked={!!t.regression} onChange={e => set(n => { n.tests[i] = { ...n.tests[i], regression: e.target.checked }; })} />회귀</label>
+                      <span style={{ fontSize: 9, color: t.origin === "manual" ? T.amber : t.origin === "ai" ? T.accent : T.green }}>{t.origin === "rule" ? "규칙" : t.origin === "ai" ? "AI" : "수동"}</span>
+                      <button onClick={() => setOpen(o => ({ ...o, [t.id]: !o[t.id] }))} style={{ ...small, color: T.muted, padding: "2px 0" }}>{open[t.id] ? "접기" : "상세"}</button>
+                    </div>
+                    {open[t.id] && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 6 }}>
+                        {[["precondition", "사전조건(진입 기준)"], ["steps", "절차 (';' 구분)"], ["expected", "기대 결과"], ["passCriteria", "합격 기준"], ["env", "검증 환경"]].map(([k, l]) => (
+                          <div key={k}><div style={{ fontSize: 10, color: T.muted }}>{l}</div><textarea value={t[k] || ""} onChange={e => set(n => { n.tests[i] = { ...n.tests[i], [k]: e.target.value, origin: "manual" }; })} style={ta} /></div>))}
+                        <div style={{ display: "flex", alignItems: "flex-end" }}><button onClick={() => set(n => { n.tests.splice(i, 1); })} style={{ ...small, color: T.red }}>삭제</button></div>
+                      </div>)}
+                  </div>); })}
+                {!ts.length && <div style={{ fontSize: 11, color: T.muted, padding: 8 }}>검증 수단 없음 — 생성 버튼을 누르세요.</div>}
+              </div>
+            </>);
+          })()}
+
+          {tab === "trace" && (<>
+            <AeSec title="추적·검증 커버리지" right={<Btn onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} style={{ fontSize: 11, padding: "4px 12px" }}>📦 V-모델 산출물 ZIP</Btn>}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {pctBar("SYS 요구 → 요소 할당", metrics.sysAlloc)}
+                {model.scope.SW && pctBar("SYS → SW 요구 파생", metrics.swDerive)}
+                {model.scope.SW && pctBar("SW 요구 → 컴포넌트", metrics.swAlloc)}
+                {model.scope.HW && pctBar("SYS → HW 요구 파생", metrics.hwDerive)}
+                {model.scope.HW && pctBar("HW 요구 → 컴포넌트", metrics.hwAlloc)}
+                {Object.keys(AE.TEST_LEVELS).filter(k => model.scope[AE.TEST_LEVELS[k].level]).map(k => pctBar(`${AE.TEST_LEVELS[k].proc} 검증 커버리지`, metrics["t" + k]))}
+              </div>
+            </AeSec>
+            <AeSec title={`일관성·양방향 추적성 점검 — 오류 ${errCount} · 경고 ${findings.filter(f => f.sev === "warn").length} · 정보 ${findings.filter(f => f.sev === "info").length}`}>
+              {findings.map((f, i) => (
+                <div key={i} style={{ display: "grid", gridTemplateColumns: "40px 1fr", gap: 8, padding: "5px 0", borderTop: i ? `1px solid ${T.border}` : "none", fontSize: 11 }}>
+                  <span style={{ color: AE_SEV[f.sev].c, fontWeight: 700, fontSize: 10 }}>{AE_SEV[f.sev].l}</span>
+                  <div>{f.msg}<div style={{ fontSize: 9.5, color: T.muted }}>{AE.bpLabel(f.bp, V)}{f.ids?.length ? ` · ${f.ids.slice(0, 12).join(", ")}${f.count > 12 ? " …" : ""}` : ""}</div></div>
+                </div>))}
+              {!findings.length && <div style={{ fontSize: 11, color: T.green }}>✓ 발견된 문제 없음</div>}
+            </AeSec>
+            <AeSec title="ASPICE WP 특성 충족도 — 모델 내용 · 입력자료 · 템플릿 점검 · 수동 판정 (각 문서 부록에 점검표로 수록)">
+              {["SYS_RS", "SYS_AD", ...(model.scope.SW ? ["SW_RS", "SW_AD"] : []), ...(model.scope.HW ? ["HW_RS", "HW_AD"] : []), "VERIF"].map(g => {
+                const list = AE.charStatusList(model, g);
+                const s = list.reduce((o, c) => { o[c.state] = (o[c.state] || 0) + 1; return o; }, {});
+                return (
+                  <div key={g} style={{ marginBottom: 6 }}>
+                    <button onClick={() => setOpen(o => ({ ...o, ["c" + g]: !o["c" + g] }))} style={{ ...small, width: "100%", textAlign: "left", color: T.text, display: "flex", gap: 10 }}>
+                      <span style={{ flex: 1 }}>{g === "VERIF" ? "검증 명세(공통)" : AE.ASPICE_DOCS[g].title} <span style={{ color: T.muted }}>· {g === "VERIF" ? AE.versionsOf(V).map(v => `${v}: ${v === "3.1" ? "08-50, 08-52, 13-50" : "08-60, 08-58, 15-52"}`).join(" / ") : AE.wpLabel(g, V)}</span></span>
+                      <span style={{ color: T.green }}>충족 {s.ok || 0}</span><span style={{ color: T.accent }}>대기 {s.input || 0}</span><span style={{ color: T.red }}>누락 {s.gap || 0}</span><span style={{ color: T.muted }}>N/A {s.na || 0}</span>
+                    </button>
+                    {open["c" + g] && list.map(c => (
+                      <div key={c.id} style={{ display: "grid", gridTemplateColumns: "1fr 170px 120px", gap: 6, alignItems: "center", padding: "3px 6px", fontSize: 10.5 }}>
+                        <span>{c.label}{c.origin !== "ASPICE" && <span style={{ color: T.muted }}> ({c.origin})</span>}<span style={{ color: T.muted, fontSize: 9.5 }}> · {c.source}{c.byTpl === true ? " · 템플릿 ✓" : c.byTpl === false ? " · 템플릿 ✕" : ""}</span></span>
+                        <span style={{ color: { ok: T.green, input: T.accent, gap: T.red, na: T.muted }[c.state] }}>{charStateLabel[c.state]}</span>
+                        <select value={(model.charOverride[c.id] || {}).state || ""} onChange={e => set(n => { if (e.target.value) n.charOverride[c.id] = { state: e.target.value }; else delete n.charOverride[c.id]; })} style={inp}>
+                          <option value="">자동 판정</option><option value="ok">충족(수동)</option><option value="gap">누락(수동)</option><option value="na">해당 없음</option>
+                        </select>
+                      </div>))}
+                  </div>);
+              })}
+            </AeSec>
+          </>)}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px", borderTop: `1px solid ${T.border}`, flexShrink: 0, gap: 8 }}>
+          <span style={{ fontSize: 10.5, color: T.muted }}>SYS {model.reqs.SYS.length} · 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW ${model.reqs.SW.length}/${model.comps.SW.length}` : ""}{model.scope.HW ? ` · HW ${model.reqs.HW.length}/${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}{requirements?.aspice?.updatedAt ? ` · 저장본 ${String(requirements.aspice.updatedAt).slice(0, 10)}` : ""}</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn variant="outline" onClick={onClose} style={{ fontSize: 12, padding: "7px 14px" }}>취소</Btn>
+            <Btn onClick={save} disabled={busy} style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StepDeliverables({ deliverablesData, generating, genProgress, genError, onGenerate, form, wbs, pdpCtx, requirements, setRequirements }) {
   const [expanded, setExpanded] = useState({});   // { 카테고리id: true } — 여러 카테고리 동시 펼침 유지
   const toggleCat = (id) => setExpanded(m => ({ ...m, [id]: !m[id] }));
@@ -6748,6 +7676,8 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
   const [zipping, setZipping] = useState(false);
   const [zipError, setZipError] = useState(null);
   const [reqModal, setReqModal] = useState(false);   // 요구사항 AI 작성 모달
+  const [aeModal, setAeModal] = useState(false);     // ASPICE V-모델 엔지니어링 모달
+  const isAspice = getGuideForOSSP(pdpCtx?.ossp || {})?.id === "aspice";
   async function handleZipDownload() {
     if (zipping) return;
     setZipping(true); setZipError(null);
@@ -6774,6 +7704,18 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
           subText="WBS 산출물을 수집·구성합니다." />
       )}
       {genError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9 }}>{genError}</div>}
+      {isAspice && (() => { const am = requirements?.aspice ? AE.normalizeModel(requirements.aspice) : null; const errs = am ? AE.checkConsistency(am).filter(f => f.sev === "error").length : 0; return (
+        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", marginBottom:12, background:T.accent+"0D", border:`1px solid ${T.accentDim}`, borderLeft:`3px solid ${T.accent}`, borderRadius:9, flexWrap:"wrap" }}>
+          <div style={{ flex:1, minWidth:240 }}>
+            <div style={{ fontSize:12, fontWeight:700 }}>🚗 ASPICE V-모델 산출물 (시스템·SW·HW 요구 → 설계 → 검증 수단 → 추적성)</div>
+            <div style={{ fontSize:10.5, color:T.muted, marginTop:2 }}>
+              {am ? `SYS ${am.reqs.SYS.length} · 요소 ${am.comps.SYS.length}${am.scope.SW ? ` · SW ${am.reqs.SW.length}` : ""}${am.scope.HW ? ` · HW ${am.reqs.HW.length}` : ""} · 검증 수단 ${am.tests.length} · 일관성 오류 ${errs}건 — 저장된 내용은 아키텍처 설계서·SW/HW 명세서·검증 명세/결과서·추적 매트릭스 다운로드에 반영됩니다`
+                  : requirements?.items?.length ? "확정된 시스템 요구사항에서 SYS.3 → SWE.1/2 · HWE.1/2 → 검증 수단(SYS.4/5·SWE.5/6·HWE.3/4)을 생성합니다 (ASPICE 3.1·4.0 겸용)"
+                  : "먼저 '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2 요구사항을 확정하세요 (DBC만으로 시작할 수도 있습니다)"}
+            </div>
+          </div>
+          <Btn onClick={()=>setAeModal(true)} style={{ fontSize:11.5, padding:"6px 14px" }}>{am ? "V-모델 편집" : "V-모델 시작"}</Btn>
+        </div>); })()}
       {deliverablesData && (
         <div style={{ animation:"fadeIn .4s" }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
@@ -6827,7 +7769,8 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                     <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
                     <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.taskName ? `${doc.taskName} — ` : ""}{doc.purpose}</div></div>
                     <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
-                    {reqDocKind(doc.name) && (
+                    {isAspice && aspiceCanBuild(AE.aspiceDocKind(doc.name), pdpCtx) && <span title="ASPICE V-모델 추적 모델에서 실문서로 생성됩니다" style={{ fontSize:10, color:T.green, border:`1px solid ${T.green}55`, borderRadius:6, padding:"3px 7px", flexShrink:0 }}>V모델 ✓</span>}
+                    {reqDocKind(doc.name) && !(isAspice && aspiceCanBuild(AE.aspiceDocKind(doc.name), pdpCtx)) && (
                       <button onClick={()=>setReqModal(true)} title="이해관계자 요구사항 원문으로 AI 자동 작성"
                         style={{ background: requirements?.items?.length ? T.accentDim : "none", border:`1px solid ${T.accent}66`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>
                         {requirements?.items?.length ? `🤖 ${requirements.items.length}건 ✓` : "🤖 AI 작성"}
@@ -6848,6 +7791,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
         </div>
       )}
       {reqModal && <ReqGenModal onClose={()=>setReqModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} />}
+      {aeModal && <AspiceEngModal onClose={()=>setAeModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} />}
     </div>
   );
 }
