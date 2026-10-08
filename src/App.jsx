@@ -6246,36 +6246,91 @@ const ARCH_DASHED_KINDS = new Set(["외부", "외부 공급"]);
 const ARCH_FONT = '"Malgun Gothic","맑은 고딕","Apple SD Gothic Neo","Noto Sans KR","Noto Sans CJK KR",sans-serif';
 
 function archDiagramLayout(level, model, projectName) {
-  const BW = 150, BH = 58, GX = 90, GY = 66;
   const comps = (model.comps[level] || []).filter(c => c && c.id);
   if (!comps.length) return null;
+  const sysName = Object.fromEntries((model.comps.SYS || []).map(c => [c.id, c.name]));
+  const parentOf = c => (c.sysElem && sysName[c.sysElem] !== undefined ? c.sysElem : "");
+  const parents = level === "SYS" ? [] : [...new Set(comps.map(parentOf))];
+  const single = parents.length === 1 && parents[0];
+  const tagged = level !== "SYS" && !single;            // 박스마다 상위 시스템 요소 표기
+  const BW = level === "SYS" ? 150 : 164, BH = tagged ? 74 : 58, GX = 90, GY = 66;
   const known = new Set(comps.map(c => c.id));
   const ifs = (model.interfaces[level] || []).filter(i => i && known.has(i.from) && known.has(i.to) && i.from !== i.to);
   const deg = {}; comps.forEach(c => { deg[c.id] = 0; });
   ifs.forEach(i => { deg[i.from]++; deg[i.to]++; });
-  const byDeg = list => [...list].sort((a, b) => deg[b.id] - deg[a.id]);
-  // 격자 칸을 중심에서 가까운 순으로 — 연결이 많은 요소를 가운데에 둔다
-  const gridSlots = (n, cols) => {
-    const rows = Math.ceil(n / cols), cx = (cols - 1) / 2, cy = (rows - 1) / 2, slots = [];
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) slots.push({ r, c, d: Math.hypot(c - cx, (r - cy) * 1.2) + r * 0.001 + c * 0.0001 });
-    // 마지막 행이 덜 찰 때는 위쪽 행부터 채운다
-    const full = slots.sort((a, b) => a.d - b.d).slice(0, n);
-    return { slots: full, rows, cols };
-  };
   const boxes = {}, frames = [];
+  // 격자 배치 최적화 — 연결선 길이·교차·박스 관통이 최소가 되도록 칸을 맞바꾸며 개선 (결정적, AI 미사용)
   const place = (list, cols, ox, oy) => {
-    const { slots, rows } = gridSlots(list.length, cols);
-    byDeg(list).forEach((c, k) => { const s = slots[k]; boxes[c.id] = { x: ox + s.c * (BW + GX), y: oy + s.r * (BH + GY), w: BW, h: BH, comp: c }; });
-    return { w: cols * BW + (cols - 1) * GX, h: rows * BH + (rows - 1) * GY };
+    const n = list.length, rows = Math.ceil(n / cols), cx0 = (cols - 1) / 2, cy0 = (rows - 1) / 2;
+    const slots = [];
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) slots.push({ r, c, d: Math.hypot(c - cx0, (r - cy0) * 1.2) + r * 0.001 + c * 0.0001 });
+    const order = slots.map((s, k) => k).sort((a, b) => slots[a].d - slots[b].d);
+    const nodes = [...list].sort((a, b) => deg[b.id] - deg[a.id] || (a.id < b.id ? -1 : 1));
+    let at = Array(slots.length).fill(null);              // 칸 → 요소 id
+    const ids = new Set(list.map(c => c.id));
+    const E = ifs.filter(i => ids.has(i.from) && ids.has(i.to));
+    const ctr = k => [slots[k].c * (BW + GX) + BW / 2, slots[k].r * (BH + GY) + BH / 2];
+    const cross = (p1, p2, p3, p4) => {
+      const d = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+      const d1 = d(p3, p4, p1), d2 = d(p3, p4, p2), d3 = d(p1, p2, p3), d4 = d(p1, p2, p4);
+      return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0)) && d1 && d2 && d3 && d4;
+    };
+    const cost = () => {
+      const pos = {}; at.forEach((id, k) => { if (id) pos[id] = ctr(k); });
+      const seg = E.map(e => [pos[e.from], pos[e.to], e.from, e.to]);
+      let s = 0;
+      seg.forEach(([a, b, fa, fb], i) => {
+        s += Math.hypot(b[0] - a[0], b[1] - a[1]);
+        for (let t = 1; t < 16; t++) {            // 다른 박스 관통
+          const x = a[0] + (b[0] - a[0]) * t / 16, y = a[1] + (b[1] - a[1]) * t / 16;
+          for (const id in pos) if (id !== fa && id !== fb && Math.abs(x - pos[id][0]) < BW / 2 + 6 && Math.abs(y - pos[id][1]) < BH / 2 + 6) { s += 60; }
+        }
+        for (let j = i + 1; j < seg.length; j++) {
+          const o = seg[j]; if (fa === o[2] || fa === o[3] || fb === o[2] || fb === o[3]) continue;
+          if (cross(a, b, o[0], o[1])) s += 420;
+        }
+      });
+      return s;
+    };
+    const climb = () => {
+      let best = cost();
+      for (let it = 0; it < 40; it++) {
+        let improved = false;
+        for (let a = 0; a < at.length; a++) for (let b = a + 1; b < at.length; b++) {
+          if (!at[a] && !at[b]) continue;
+          [at[a], at[b]] = [at[b], at[a]];
+          const c = cost();
+          if (c < best - 0.5) { best = c; improved = true; } else [at[a], at[b]] = [at[b], at[a]];
+        }
+        if (!improved) break;
+      }
+      return best;
+    };
+    // 시작 배치를 여러 개(가장 연결 많은 요소를 각 칸에 두고 거리순 배치) 시도해 가장 좋은 결과를 채택 — 결정적
+    let bestAt = null, bestCost = Infinity;
+    const starts = [order, ...slots.map((s0, k0) => slots.map((s, k) => k).sort((a, b) =>
+      Math.hypot(slots[a].c - slots[k0].c, (slots[a].r - slots[k0].r) * 1.2) - Math.hypot(slots[b].c - slots[k0].c, (slots[b].r - slots[k0].r) * 1.2) || a - b))];
+    starts.forEach(ord => {
+      at = Array(slots.length).fill(null);
+      nodes.forEach((c, k) => { at[ord[k]] = c.id; });
+      const c = climb();
+      if (c < bestCost - 0.5) { bestCost = c; bestAt = [...at]; }
+    });
+    at = bestAt;
+    // 빈 행·열을 걷어내고 좌표 확정
+    const usedR = [...new Set(at.map((id, k) => id && slots[k].r).filter(v => v !== null && v !== false))].sort((x, y) => x - y);
+    const usedC = [...new Set(at.map((id, k) => id && slots[k].c).filter(v => v !== null && v !== false))].sort((x, y) => x - y);
+    const byId = Object.fromEntries(list.map(c => [c.id, c]));
+    at.forEach((id, k) => { if (!id) return; const r = usedR.indexOf(slots[k].r), c = usedC.indexOf(slots[k].c); boxes[id] = { x: ox + c * (BW + GX), y: oy + r * (BH + GY), w: BW, h: BH, comp: byId[id] }; });
+    return { w: usedC.length * BW + (usedC.length - 1) * GX, h: usedR.length * BH + (usedR.length - 1) * GY };
   };
+  const colsFor = n => n <= 3 ? n : n <= 12 ? 3 : 4;   // A4 세로 본문 폭에서 글자가 읽히도록 3열 위주
   let W, H;
   if (level === "SYS") {
     const inner = comps.filter(c => c.kind !== "외부"), ext = comps.filter(c => c.kind === "외부");
-    const n = inner.length || 1;
-    const cols = n <= 3 ? n : n <= 9 ? 3 : 4;   // A4 세로 본문 폭에서 글자가 읽히도록 최대 3~4열
     const PAD = 34, EXT_GAP = 70, topH = ext.length ? BH + EXT_GAP : 0;
     const ox = 30 + PAD, oy = 30 + topH + PAD + 14;
-    const g = inner.length ? place(inner, cols, ox, oy) : { w: BW, h: BH };
+    const g = inner.length ? place(inner, colsFor(inner.length), ox, oy) : { w: BW, h: BH };
     const fr = { x: ox - PAD, y: oy - PAD - 14, w: g.w + PAD * 2, h: g.h + PAD * 2 + 14, label: `시스템 경계 — ${projectName || "대상 시스템"}`, dashed: true };
     frames.push(fr);
     // 외부 요소: 시스템 경계 위·아래 줄에, 연결된 내부 요소 가까이 배치 (가로 폭을 늘리지 않음)
@@ -6307,24 +6362,14 @@ function archDiagramLayout(level, model, projectName) {
     W = Math.max(fr.x + fr.w, ...Object.values(boxes).map(b => b.x + b.w)) + 30;
     H = Math.max(fr.y + fr.h, ...Object.values(boxes).map(b => b.y + b.h)) + 30;
   } else {
-    // SW/HW: 상위 시스템 요소별 묶음(프레임) — 시스템 요소 순서 유지, 미지정은 맨 뒤
-    const sysName = Object.fromEntries((model.comps.SYS || []).map(c => [c.id, c.name]));
-    const order = (model.comps.SYS || []).map(c => c.id);
-    const groups = {};
-    comps.forEach(c => { const k = c.sysElem && sysName[c.sysElem] !== undefined ? c.sysElem : "_"; (groups[k] = groups[k] || []).push(c); });
-    const keys = [...order.filter(k => groups[k]), ...(groups._ ? ["_"] : [])];
-    const PAD = 18, LBL = 24, GAP = 48, MAXW = 860;
-    let cx = 30, cy = 30, rowH = 0, maxX = 0;
-    keys.forEach(k => {
-      const list = groups[k], cols = list.length <= 2 ? list.length : list.length <= 6 ? 2 : 3;
-      const rows = Math.ceil(list.length / cols);
-      const gw = cols * BW + (cols - 1) * GX + PAD * 2, gh = rows * BH + (rows - 1) * GY + PAD * 2 + LBL;
-      if (cx > 30 && cx + gw > MAXW) { cx = 30; cy += rowH + GAP; rowH = 0; }
-      place(list, cols, cx + PAD, cy + PAD + LBL);
-      frames.push({ x: cx, y: cy, w: gw, h: gh, label: k === "_" ? "상위 시스템 요소 미지정" : `${k} ${sysName[k]}`, dashed: false });
-      cx += gw + GAP; rowH = Math.max(rowH, gh); maxX = Math.max(maxX, cx - GAP);
-    });
-    W = maxX + 30; H = cy + rowH + 30;
+    // SW/HW: 상위 시스템 요소가 하나뿐이면 전체를 그 요소의 프레임으로 감싸고,
+    // 여럿이면 각 박스 하단에 상위 시스템 요소를 표기한다 (작은 묶음 프레임이 선을 가리지 않도록)
+    const PAD = single ? 34 : 0, LBL = single ? 14 : 0;
+    const ox = 30 + PAD, oy = 30 + PAD + LBL;
+    const g = place(comps, colsFor(comps.length), ox, oy);
+    if (single) frames.push({ x: ox - PAD, y: oy - PAD - LBL, w: g.w + PAD * 2, h: g.h + PAD * 2 + LBL, label: `상위 시스템 요소 — ${single} ${sysName[single]}`, dashed: false });
+    else Object.values(boxes).forEach(b => { const p = parentOf(b.comp); b.tag = p ? `상위: ${p} ${sysName[p]}` : "상위: 미지정"; });
+    W = ox + g.w + PAD + 30; H = oy + g.h + PAD + 30;
   }
   // 같은 요소 쌍의 인터페이스는 한 선으로 합치고 방향을 함께 표시
   const pairs = {};
@@ -6349,7 +6394,8 @@ function archDiagramPng(level, model, projectName) {
   // 범례 폭을 먼저 재서 그림 폭보다 길면 두 줄로 나눈다
   const LEG_ARROW = "인터페이스 방향(From → To) · 라벨 = 인터페이스 ID";
   g.font = font(11, false);
-  const legKinds = Object.keys(ARCH_KIND_STYLE[level] || {});
+  const usedKinds = new Set(Object.values(L.boxes).map(b => b.comp.kind));
+  const legKinds = Object.keys(ARCH_KIND_STYLE[level] || {}).filter(k => usedKinds.has(k));
   const legKindsW = legKinds.reduce((w, k) => w + 28 + g.measureText(k).width + 22, 0);
   const legArrowW = 38 + g.measureText(LEG_ARROW).width;
   const legTwo = 30 + legKindsW + legArrowW + 30 > L.W;
@@ -6427,8 +6473,13 @@ function archDiagramPng(level, model, projectName) {
     g.fillStyle = hex(st[1]); g.font = font(10.5, false); g.fillText(id, b.x + b.w / 2, b.y + 6);
     const lines = wrap2(c.name || "", 13, b.w - 14);
     g.fillStyle = "#1E2B33"; g.font = font(13, true);
-    const y0 = lines.length === 1 ? b.y + 28 : b.y + 21;
+    const y0 = b.tag ? (lines.length === 1 ? b.y + 29 : b.y + 22) : (lines.length === 1 ? b.y + 28 : b.y + 21);
     lines.forEach((t, k) => g.fillText(t, b.x + b.w / 2, y0 + k * 16));
+    if (b.tag) {
+      g.font = font(10, false);
+      const tpx = g.measureText(b.tag).width <= b.w - 12 ? 10 : 9;   // 길면 한 단계 줄이고, 그래도 넘치면 말줄임
+      g.fillStyle = "#5B6770"; g.fillText(fit(b.tag, tpx, false, b.w - 12), b.x + b.w / 2, b.y + b.h - 17);
+    }
   });
   // 인터페이스 ID 라벨 — 서로 겹치지 않는 위치를 곡선 위에서 찾는다
   g.font = font(11, false);
@@ -6437,7 +6488,8 @@ function archDiagramPng(level, model, projectName) {
   labels.forEach(({ e, best }) => {
     const curveLen = Math.hypot(best.p1[0] - best.p0[0], best.p1[1] - best.p0[1]);
     let txt = e.ids.length > 2 ? `${e.ids[0]} 외 ${e.ids.length - 1}` : e.ids.join(", ");
-    if (e.ids.length === 2 && g.measureText(txt).width + 8 > Math.max(curveLen - 20, 60)) txt = `${e.ids[0]} 외 1`;
+    const horiz = Math.abs(best.p1[0] - best.p0[0]) > Math.abs(best.p1[1] - best.p0[1]);
+    if (e.ids.length === 2 && horiz && g.measureText(txt).width + 8 > Math.max(curveLen - 20, 60)) txt = `${e.ids[0]} 외 1`;
     const w = g.measureText(txt).width + 8, h = 16;
     let pos = null, fallback = null;
     for (const t of [0.5, 0.4, 0.6, 0.3, 0.7, 0.25, 0.75]) {
@@ -6446,6 +6498,7 @@ function archDiagramPng(level, model, projectName) {
       if (!placed.some(o => ov(r, o)) && !boxRects.some(b => ov(r, b))) { pos = r; break; }
     }
     if (!pos) { const p = q(best.p0, best.ctl, best.p1, 0.5); pos = fallback || { x: p[0] - w / 2, y: p[1] - h / 2, w, h }; }
+    pos.x = Math.min(Math.max(pos.x, 4), L.W - pos.w - 4); pos.y = Math.min(Math.max(pos.y, 4), L.H - pos.h - 48);
     placed.push(pos);
     g.fillStyle = "rgba(255,255,255,0.92)"; rrect(pos.x, pos.y, pos.w, pos.h, 3); g.fill();
     g.fillStyle = "#2B3640"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(txt, pos.x + pos.w / 2, pos.y + pos.h / 2 + 0.5);
@@ -6454,7 +6507,8 @@ function archDiagramPng(level, model, projectName) {
   let ly = L.H - 30 - (legTwo ? 22 : 0);
   let lx = 30;
   g.textAlign = "left"; g.textBaseline = "middle"; g.font = font(11, false);
-  Object.entries(ARCH_KIND_STYLE[level] || {}).forEach(([k, st]) => {
+  legKinds.forEach(k => {
+    const st = ARCH_KIND_STYLE[level][k];
     g.save(); rrect(lx, ly - 7, 22, 14, 3); g.fillStyle = hex(st[0]); g.fill(); g.strokeStyle = hex(st[1]); g.lineWidth = 1.4;
     if (ARCH_DASHED_KINDS.has(k)) g.setLineDash([4, 3]); g.stroke(); g.restore();
     g.fillStyle = "#3D4852"; g.fillText(k, lx + 28, ly); lx += 28 + g.measureText(k).width + 22;
