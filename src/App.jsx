@@ -6234,6 +6234,240 @@ function makeAspiceReqDocx(level, meta, ctx, doc) {
   return docxPackage(front + body, pkgOpts);
 }
 
+// ── 아키텍처 블록 다이어그램 (SYS.3 / SWE.2 / HWE.2 정적 측면) ──
+// 추적 모델의 요소·인터페이스에서 규칙 기반으로 그린다 (AI 미사용). 표와 같은 모델을 쓰므로 ID가 항상 일치한다.
+// 브라우저 canvas에 동기적으로 그려 PNG로 만든다 — canvas를 쓸 수 없으면 null을 돌려주고 호출부는 TBD 안내로 폴백한다.
+const ARCH_KIND_STYLE = {
+  SYS: { "HW": ["DCEBFA", "2F6DB5"], "SW": ["E2F4E8", "2E8B57"], "HW+SW": ["EEE6F8", "6B4BA3"], "ME": ["F3EEE2", "8A6D3B"], "외부": ["F2F2F2", "777777"] },
+  SW: { "자체 개발": ["E2F4E8", "2E8B57"], "BSW·플랫폼": ["DCEBFA", "2F6DB5"], "외부 공급": ["F2F2F2", "777777"], "자동 생성": ["FFF1D6", "B7791F"] },
+  HW: { "회로 블록": ["DCEBFA", "2F6DB5"], "주요 부품": ["EEE6F8", "6B4BA3"], "전원": ["FDE4E1", "B5473A"], "커넥터·기구": ["F3EEE2", "8A6D3B"] },
+};
+const ARCH_DASHED_KINDS = new Set(["외부", "외부 공급"]);
+const ARCH_FONT = '"Malgun Gothic","맑은 고딕","Apple SD Gothic Neo","Noto Sans KR","Noto Sans CJK KR",sans-serif';
+
+function archDiagramLayout(level, model, projectName) {
+  const BW = 150, BH = 58, GX = 90, GY = 66;
+  const comps = (model.comps[level] || []).filter(c => c && c.id);
+  if (!comps.length) return null;
+  const known = new Set(comps.map(c => c.id));
+  const ifs = (model.interfaces[level] || []).filter(i => i && known.has(i.from) && known.has(i.to) && i.from !== i.to);
+  const deg = {}; comps.forEach(c => { deg[c.id] = 0; });
+  ifs.forEach(i => { deg[i.from]++; deg[i.to]++; });
+  const byDeg = list => [...list].sort((a, b) => deg[b.id] - deg[a.id]);
+  // 격자 칸을 중심에서 가까운 순으로 — 연결이 많은 요소를 가운데에 둔다
+  const gridSlots = (n, cols) => {
+    const rows = Math.ceil(n / cols), cx = (cols - 1) / 2, cy = (rows - 1) / 2, slots = [];
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) slots.push({ r, c, d: Math.hypot(c - cx, (r - cy) * 1.2) + r * 0.001 + c * 0.0001 });
+    // 마지막 행이 덜 찰 때는 위쪽 행부터 채운다
+    const full = slots.sort((a, b) => a.d - b.d).slice(0, n);
+    return { slots: full, rows, cols };
+  };
+  const boxes = {}, frames = [];
+  const place = (list, cols, ox, oy) => {
+    const { slots, rows } = gridSlots(list.length, cols);
+    byDeg(list).forEach((c, k) => { const s = slots[k]; boxes[c.id] = { x: ox + s.c * (BW + GX), y: oy + s.r * (BH + GY), w: BW, h: BH, comp: c }; });
+    return { w: cols * BW + (cols - 1) * GX, h: rows * BH + (rows - 1) * GY };
+  };
+  let W, H;
+  if (level === "SYS") {
+    const inner = comps.filter(c => c.kind !== "외부"), ext = comps.filter(c => c.kind === "외부");
+    const n = inner.length || 1;
+    const cols = n <= 3 ? n : n <= 9 ? 3 : 4;   // A4 세로 본문 폭에서 글자가 읽히도록 최대 3~4열
+    const PAD = 34, EXT_GAP = 70, topH = ext.length ? BH + EXT_GAP : 0;
+    const ox = 30 + PAD, oy = 30 + topH + PAD + 14;
+    const g = inner.length ? place(inner, cols, ox, oy) : { w: BW, h: BH };
+    const fr = { x: ox - PAD, y: oy - PAD - 14, w: g.w + PAD * 2, h: g.h + PAD * 2 + 14, label: `시스템 경계 — ${projectName || "대상 시스템"}`, dashed: true };
+    frames.push(fr);
+    // 외부 요소: 시스템 경계 위·아래 줄에, 연결된 내부 요소 가까이 배치 (가로 폭을 늘리지 않음)
+    const midY = fr.y + fr.h / 2, top = [], bottom = [];
+    const nbAvg = e => {
+      const nb = ifs.filter(i => i.from === e.id || i.to === e.id).map(i => boxes[i.from === e.id ? i.to : i.from]).filter(b => b && b.comp.kind !== "외부");
+      return nb.length ? { x: nb.reduce((s, b) => s + b.x + b.w / 2, 0) / nb.length, y: nb.reduce((s, b) => s + b.y + b.h / 2, 0) / nb.length } : null;
+    };
+    ext.forEach(e => {
+      const a = nbAvg(e);
+      let row = !a ? (top.length <= bottom.length ? top : bottom) : a.y <= midY ? top : bottom;
+      const other = row === top ? bottom : top;
+      if (row.length > other.length + 1) row = other;   // 한쪽 쏠림 방지
+      row.push(e);
+    });
+    const layRow = (list, y) => {
+      const items = list.map(e => ({ e, tx: (nbAvg(e)?.x ?? fr.x + fr.w / 2) - BW / 2 })).sort((a, b) => a.tx - b.tx);
+      let end = -Infinity;
+      items.forEach(it => { it.x = Math.max(30, it.tx, end + 30); end = it.x + BW; });
+      const over = end - (fr.x + fr.w);
+      if (over > 0 && items.length) { const sh = Math.min(over, items[0].x - 30); items.forEach(it => { it.x -= sh; }); }
+      items.forEach(it => { boxes[it.e.id] = { x: it.x, y, w: BW, h: BH, comp: it.e }; });
+    };
+    layRow(top, 30);
+    layRow(bottom, fr.y + fr.h + EXT_GAP);
+    if (ext.length && !top.length) { // 위 줄이 비면 전체를 끌어올린다
+      Object.values(boxes).forEach(b => { b.y -= topH; }); fr.y -= topH;
+    }
+    W = Math.max(fr.x + fr.w, ...Object.values(boxes).map(b => b.x + b.w)) + 30;
+    H = Math.max(fr.y + fr.h, ...Object.values(boxes).map(b => b.y + b.h)) + 30;
+  } else {
+    // SW/HW: 상위 시스템 요소별 묶음(프레임) — 시스템 요소 순서 유지, 미지정은 맨 뒤
+    const sysName = Object.fromEntries((model.comps.SYS || []).map(c => [c.id, c.name]));
+    const order = (model.comps.SYS || []).map(c => c.id);
+    const groups = {};
+    comps.forEach(c => { const k = c.sysElem && sysName[c.sysElem] !== undefined ? c.sysElem : "_"; (groups[k] = groups[k] || []).push(c); });
+    const keys = [...order.filter(k => groups[k]), ...(groups._ ? ["_"] : [])];
+    const PAD = 18, LBL = 24, GAP = 48, MAXW = 860;
+    let cx = 30, cy = 30, rowH = 0, maxX = 0;
+    keys.forEach(k => {
+      const list = groups[k], cols = list.length <= 2 ? list.length : list.length <= 6 ? 2 : 3;
+      const rows = Math.ceil(list.length / cols);
+      const gw = cols * BW + (cols - 1) * GX + PAD * 2, gh = rows * BH + (rows - 1) * GY + PAD * 2 + LBL;
+      if (cx > 30 && cx + gw > MAXW) { cx = 30; cy += rowH + GAP; rowH = 0; }
+      place(list, cols, cx + PAD, cy + PAD + LBL);
+      frames.push({ x: cx, y: cy, w: gw, h: gh, label: k === "_" ? "상위 시스템 요소 미지정" : `${k} ${sysName[k]}`, dashed: false });
+      cx += gw + GAP; rowH = Math.max(rowH, gh); maxX = Math.max(maxX, cx - GAP);
+    });
+    W = maxX + 30; H = cy + rowH + 30;
+  }
+  // 같은 요소 쌍의 인터페이스는 한 선으로 합치고 방향을 함께 표시
+  const pairs = {};
+  ifs.forEach(i => {
+    const [a, b] = i.from < i.to ? [i.from, i.to] : [i.to, i.from];
+    const p = pairs[a + "|" + b] = pairs[a + "|" + b] || { a, b, ids: [], ab: false, ba: false };
+    p.ids.push(i.id); if (i.from === a) p.ab = true; else p.ba = true;
+  });
+  return { boxes, frames, edges: Object.values(pairs), W, H: H + 44 /* 범례 */ };
+}
+
+function archDiagramPng(level, model, projectName) {
+  if (typeof document === "undefined" || !document.createElement) return null;
+  const L = archDiagramLayout(level, model, projectName);
+  if (!L) return null;
+  const S = 2; // 인쇄 품질용 2배 해상도
+  const canvas = document.createElement("canvas");
+  let g = canvas.getContext && canvas.getContext("2d");
+  if (!g) return null;
+  const hex = c => "#" + c;
+  const font = (px, bold) => `${bold ? "bold " : ""}${px}px ${ARCH_FONT}`;
+  // 범례 폭을 먼저 재서 그림 폭보다 길면 두 줄로 나눈다
+  const LEG_ARROW = "인터페이스 방향(From → To) · 라벨 = 인터페이스 ID";
+  g.font = font(11, false);
+  const legKinds = Object.keys(ARCH_KIND_STYLE[level] || {});
+  const legKindsW = legKinds.reduce((w, k) => w + 28 + g.measureText(k).width + 22, 0);
+  const legArrowW = 38 + g.measureText(LEG_ARROW).width;
+  const legTwo = 30 + legKindsW + legArrowW + 30 > L.W;
+  if (legTwo) L.H += 22;
+  L.W = Math.max(L.W, 30 + Math.max(legTwo ? legKindsW : 0, legArrowW) + 30);
+  canvas.width = Math.ceil(L.W * S); canvas.height = Math.ceil(L.H * S);
+  g = canvas.getContext("2d");   // 크기 변경 시 컨텍스트 상태가 초기화된다
+  g.scale(S, S);
+  g.fillStyle = "#FFFFFF"; g.fillRect(0, 0, L.W, L.H);
+  const rrect = (x, y, w, h, r) => { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };
+  const fit = (t, px, bold, maxW) => { g.font = font(px, bold); if (g.measureText(t).width <= maxW) return t; let s = t; while (s.length > 1 && g.measureText(s + "…").width > maxW) s = s.slice(0, -1); return s + "…"; };
+  const wrap2 = (t, px, maxW) => {
+    g.font = font(px, true);
+    if (g.measureText(t).width <= maxW) return [t];
+    let cut = t.length;
+    while (cut > 1 && g.measureText(t.slice(0, cut)).width > maxW) cut--;
+    const sp = t.lastIndexOf(" ", cut); if (sp > cut * 0.5) cut = sp;
+    return [t.slice(0, cut).trim(), fit(t.slice(cut).trim(), px, true, maxW)];
+  };
+  // 프레임(시스템 경계 / 상위 시스템 요소 묶음)
+  L.frames.forEach(f => {
+    g.save(); rrect(f.x, f.y, f.w, f.h, 10);
+    g.fillStyle = f.dashed ? "#FBFCFD" : "#F7F9FB"; g.fill();
+    g.strokeStyle = "#8A97A3"; g.lineWidth = 1.2; if (f.dashed) g.setLineDash([7, 5]); g.stroke(); g.restore();
+  });
+  // 연결선 — 다른 박스를 관통하면 곡선으로 우회
+  const boxList = Object.entries(L.boxes);
+  const hit = (x, y, skip) => x < 8 || y < 8 || x > L.W - 8 || y > L.H - 52 || boxList.some(([id, b]) => !skip.has(id) && x > b.x - 6 && x < b.x + b.w + 6 && y > b.y - 6 && y < b.y + b.h + 6);
+  const clip = (b, tx, ty) => { // 박스 중심에서 (tx,ty) 방향으로 나가는 경계점
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2, dx = tx - cx, dy = ty - cy;
+    if (!dx && !dy) return [cx, cy];
+    const s = Math.min(dx ? (b.w / 2) / Math.abs(dx) : Infinity, dy ? (b.h / 2) / Math.abs(dy) : Infinity);
+    return [cx + dx * s, cy + dy * s];
+  };
+  const q = (p0, c, p1, t) => [(1 - t) * (1 - t) * p0[0] + 2 * (1 - t) * t * c[0] + t * t * p1[0], (1 - t) * (1 - t) * p0[1] + 2 * (1 - t) * t * c[1] + t * t * p1[1]];
+  const labels = [], placed = [];
+  const arrow = (tip, from) => {
+    const a = Math.atan2(tip[1] - from[1], tip[0] - from[0]), l = 9;
+    g.beginPath(); g.moveTo(tip[0], tip[1]);
+    g.lineTo(tip[0] - l * Math.cos(a - 0.42), tip[1] - l * Math.sin(a - 0.42));
+    g.lineTo(tip[0] - l * Math.cos(a + 0.42), tip[1] - l * Math.sin(a + 0.42));
+    g.closePath(); g.fill();
+  };
+  L.edges.forEach(e => {
+    const A = L.boxes[e.a], B = L.boxes[e.b];
+    const ca = [A.x + A.w / 2, A.y + A.h / 2], cb = [B.x + B.w / 2, B.y + B.h / 2];
+    const dx = cb[0] - ca[0], dy = cb[1] - ca[1], len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
+    const skip = new Set([e.a, e.b]);
+    let best = null;
+    for (const off of [0, 45, -45, 90, -90, 140, -140, 200, -200]) {
+      const ctl = [(ca[0] + cb[0]) / 2 + nx * off * 2, (ca[1] + cb[1]) / 2 + ny * off * 2];
+      const p0 = clip(A, ctl[0], ctl[1]), p1 = clip(B, ctl[0], ctl[1]);
+      let hits = 0; for (let k = 1; k < 24; k++) { const p = q(p0, ctl, p1, k / 24); if (hit(p[0], p[1], skip)) hits++; }
+      if (!best || hits < best.hits) best = { hits, ctl, p0, p1 };
+      if (!hits) break;
+    }
+    g.strokeStyle = "#3D4852"; g.fillStyle = "#3D4852"; g.lineWidth = 1.4;
+    g.beginPath(); g.moveTo(best.p0[0], best.p0[1]); g.quadraticCurveTo(best.ctl[0], best.ctl[1], best.p1[0], best.p1[1]); g.stroke();
+    if (e.ab) arrow(best.p1, best.ctl);
+    if (e.ba) arrow(best.p0, best.ctl);
+    labels.push({ e, best });
+  });
+  // 프레임 이름 — 연결선 위에 바탕을 깔아 가려지지 않게
+  L.frames.forEach(f => {
+    const t = fit(f.label, 12, true, f.w - 24), tw = g.measureText(t).width;
+    g.fillStyle = f.dashed ? "#FBFCFD" : "#F7F9FB"; g.fillRect(f.x + 8, f.y + 4, tw + 8, 18);
+    g.fillStyle = "#4A5560"; g.textBaseline = "top"; g.textAlign = "left"; g.fillText(t, f.x + 12, f.y + 7);
+  });
+  // 요소 박스
+  boxList.forEach(([id, b]) => {
+    const c = b.comp, st = (ARCH_KIND_STYLE[level] || {})[c.kind] || ["F7F7F7", "555555"];
+    g.save(); rrect(b.x, b.y, b.w, b.h, 7); g.fillStyle = hex(st[0]); g.fill();
+    g.strokeStyle = hex(st[1]); g.lineWidth = 1.6; if (ARCH_DASHED_KINDS.has(c.kind)) g.setLineDash([5, 4]); g.stroke(); g.restore();
+    g.textAlign = "center"; g.textBaseline = "top";
+    g.fillStyle = hex(st[1]); g.font = font(10.5, false); g.fillText(id, b.x + b.w / 2, b.y + 6);
+    const lines = wrap2(c.name || "", 13, b.w - 14);
+    g.fillStyle = "#1E2B33"; g.font = font(13, true);
+    const y0 = lines.length === 1 ? b.y + 28 : b.y + 21;
+    lines.forEach((t, k) => g.fillText(t, b.x + b.w / 2, y0 + k * 16));
+  });
+  // 인터페이스 ID 라벨 — 서로 겹치지 않는 위치를 곡선 위에서 찾는다
+  g.font = font(11, false);
+  const ov = (r, o) => r.x < o.x + o.w && r.x + r.w > o.x && r.y < o.y + o.h && r.y + r.h > o.y;
+  const boxRects = boxList.map(([, b]) => b);
+  labels.forEach(({ e, best }) => {
+    const curveLen = Math.hypot(best.p1[0] - best.p0[0], best.p1[1] - best.p0[1]);
+    let txt = e.ids.length > 2 ? `${e.ids[0]} 외 ${e.ids.length - 1}` : e.ids.join(", ");
+    if (e.ids.length === 2 && g.measureText(txt).width + 8 > Math.max(curveLen - 20, 60)) txt = `${e.ids[0]} 외 1`;
+    const w = g.measureText(txt).width + 8, h = 16;
+    let pos = null, fallback = null;
+    for (const t of [0.5, 0.4, 0.6, 0.3, 0.7, 0.25, 0.75]) {
+      const p = q(best.p0, best.ctl, best.p1, t), r = { x: p[0] - w / 2, y: p[1] - h / 2, w, h };
+      if (!fallback && !boxRects.some(b => ov(r, b))) fallback = r;
+      if (!placed.some(o => ov(r, o)) && !boxRects.some(b => ov(r, b))) { pos = r; break; }
+    }
+    if (!pos) { const p = q(best.p0, best.ctl, best.p1, 0.5); pos = fallback || { x: p[0] - w / 2, y: p[1] - h / 2, w, h }; }
+    placed.push(pos);
+    g.fillStyle = "rgba(255,255,255,0.92)"; rrect(pos.x, pos.y, pos.w, pos.h, 3); g.fill();
+    g.fillStyle = "#2B3640"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(txt, pos.x + pos.w / 2, pos.y + pos.h / 2 + 0.5);
+  });
+  // 범례
+  let ly = L.H - 30 - (legTwo ? 22 : 0);
+  let lx = 30;
+  g.textAlign = "left"; g.textBaseline = "middle"; g.font = font(11, false);
+  Object.entries(ARCH_KIND_STYLE[level] || {}).forEach(([k, st]) => {
+    g.save(); rrect(lx, ly - 7, 22, 14, 3); g.fillStyle = hex(st[0]); g.fill(); g.strokeStyle = hex(st[1]); g.lineWidth = 1.4;
+    if (ARCH_DASHED_KINDS.has(k)) g.setLineDash([4, 3]); g.stroke(); g.restore();
+    g.fillStyle = "#3D4852"; g.fillText(k, lx + 28, ly); lx += 28 + g.measureText(k).width + 22;
+  });
+  if (legTwo) { lx = 30; ly += 22; }
+  g.strokeStyle = "#3D4852"; g.fillStyle = "#3D4852"; g.lineWidth = 1.4;
+  g.beginPath(); g.moveTo(lx, ly); g.lineTo(lx + 30, ly); g.stroke(); arrow([lx + 30, ly], [lx, ly]);
+  g.fillText(LEG_ARROW, lx + 38, ly);
+  let parsed = null;
+  try { parsed = dataUrlToBytes(canvas.toDataURL("image/png")); } catch (_) { return null; }
+  return parsed ? { bytes: parsed.bytes, wPx: L.W, hPx: L.H } : null;
+}
+
 // 시스템 / SW / HW 아키텍처 설계서 (SYS.3 / SWE.2 / HWE.2)
 function makeAspiceArchDocx(level, meta, ctx, doc) {
   const model = AE.normalizeModel(ctx?.requirements?.aspice);
@@ -6246,11 +6480,25 @@ function makeAspiceArchDocx(level, meta, ctx, doc) {
   const sysComp = Object.fromEntries(model.comps.SYS.map(c => [c.id, c]));
   let body = aspiceFrontBody({ kind, model, meta, doc, title, extraRows: [[L.compLabel, `${comps.length}개`], ["인터페이스", `${ifs.length}건`], ["할당 대상 요구", `${reqs.length}건`]] });
   let sec = 0;
+  // 정적 아키텍처 블록 다이어그램 — 같은 추적 모델에서 규칙 기반으로 그려 삽입 (canvas 불가·요소 없음 → TBD 안내 폴백)
+  let archFigure = docxP("[그림] 블록 다이어그램 — 아래 요소·인터페이스 표를 기준으로 작성하여 삽입 (TBD)", { italic: true, size: 20, spacingAfter: 120 });
+  try {
+    const png = comps.length ? archDiagramPng(level, model, meta?.name) : null;
+    if (png) {
+      const fileName = `arch_${level.toLowerCase()}.png`, relId = "rIdArch1";
+      pkgOpts.media.push({ fileName, bytes: png.bytes });
+      pkgOpts.bodyImages.push({ relId, fileName });
+      let cx = 5760000, cy = Math.round(cx * png.hPx / png.wPx);      // 본문 폭 16cm 기준
+      if (cy > 7920000) { cx = Math.round(cx * 7920000 / cy); cy = 7920000; }  // 세로 최대 22cm
+      archFigure = `<w:p><w:pPr><w:spacing w:after="60"/><w:jc w:val="center"/></w:pPr>${docxImageRun(relId, cx, cy, 101)}</w:p>` +
+        docxP(`[그림 1] ${level === "SYS" ? "시스템" : level} 정적 아키텍처 — ${L.compLabel} ${comps.length}개 · 인터페이스 ${ifs.length}건 (추적 모델 기준 자동 생성 · 상세는 아래 표와 3장 인터페이스 정의 참조)`, { size: 18, align: "center", spacingAfter: 200 });
+    }
+  } catch (_) { /* 그림 생성 실패 시 TBD 안내 유지 */ }
   body += docxP(`${++sec}. 개요`, { bold: true, size: 26, spacingAfter: 120 }) +
     docxP(`본 문서는 ${level === "SYS" ? "시스템" : level} 요구사항을 만족하기 위한 ${L.compLabel}의 정적 구조(요소·인터페이스)와 동적 거동(운영 모드·상태 천이)을 정의하고, 요구사항을 ${L.compLabel}에 할당한다.`) +
     (model.version !== "4.0" && level === "HW" ? docxP("※ ASPICE 3.1에는 HWE 프로세스가 없으므로 4.0 HWE.2를 PAM 확장으로 준용한다.", { size: 18, spacingAfter: 120 }) : "");
   body += docxP(`${++sec}. 정적 아키텍처 — ${L.compLabel}`, { bold: true, size: 26, spacingAfter: 120 }) +
-    docxP("[그림] 블록 다이어그램 — 아래 요소·인터페이스 표를 기준으로 작성하여 삽입 (TBD)", { italic: true, size: 20, spacingAfter: 120 }) +
+    archFigure +
     docxTable([["ID", "명칭", "구분", ...(level === "SYS" ? [] : ["상위 시스템 요소"]), "책임(설명)"], ...comps.map(c => [c.id, c.name, c.kind || "", ...(level === "SYS" ? [] : [c.sysElem ? `${c.sysElem} ${sysComp[c.sysElem]?.name || ""}` : "-"]), c.desc || ""])], -1);
   comps.forEach(c => {
     const assigned = reqs.filter(r => (model.alloc[level][r.id] || []).includes(c.id));
