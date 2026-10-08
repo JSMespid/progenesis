@@ -6158,6 +6158,27 @@ const ASPICE_STATUS = ["Draft", "Reviewed", "Agreed", "Rejected"];
 const charStateLabel = { ok: "충족", input: "자료 확보(작성 대기)", gap: "누락(TBD)", na: "해당 없음" };
 
 // 문서 공통: 문서 정보 표 + ASPICE 적용 기준 표 + 1장 개요
+// ── 프로젝트·프로세스 요구(비제품 요구) 분리 ──
+// 인도물·보고·인증·프로세스 준수처럼 제품 기능이 아닌 이해관계자 요구는 reqClass:"project"로 표시한다.
+// 이런 요구는 시스템 요소에 할당하거나 SW/HW 요구로 분해하지 않고(SYS.3/SWE.1 범위 밖), RTM의 별도 시트에서
+// 관리 프로세스(MAN.3·SUP 등)·관리 산출물·확인 방법으로 추적한다.
+const aeIsProjectReq = r => r?.reqClass === "project";
+function aeProductModel(m) {
+  const prj = new Set((m.reqs.SYS || []).filter(aeIsProjectReq).map(r => r.id));
+  if (!prj.size) return m;
+  return { ...m, reqs: { ...m.reqs, SYS: m.reqs.SYS.filter(r => !prj.has(r.id)) },
+    alloc: { ...m.alloc, SYS: Object.fromEntries(Object.entries(m.alloc.SYS || {}).filter(([k]) => !prj.has(k))) } };
+}
+// 설계서 추가 절(archInfo) 렌더링 — { title, text|[text], header, rows } 목록
+function aeInfoSections(list, secNo) {
+  let out = "", sub = 0;
+  (list || []).forEach(x => {
+    out += docxP(`${secNo}.${++sub} ${x.title}`, { bold: true, size: 22, spacingAfter: 80 });
+    [].concat(x.text || []).forEach(t => { out += docxP(t, { size: 20, spacingAfter: 100 }); });
+    if (x.rows && x.rows.length) out += docxTable([x.header || [], ...x.rows], -1);
+  });
+  return out;
+}
 function aspiceFrontBody({ kind, model, meta, doc, title, extraRows = [] }) {
   const D = AE.ASPICE_DOCS[kind];
   const docNo = projectDocNo(meta, doc?.code || D.code);
@@ -6241,6 +6262,7 @@ const ARCH_KIND_STYLE = {
   SYS: { "HW": ["DCEBFA", "2F6DB5"], "SW": ["E2F4E8", "2E8B57"], "HW+SW": ["EEE6F8", "6B4BA3"], "ME": ["F3EEE2", "8A6D3B"], "외부": ["F2F2F2", "777777"] },
   SW: { "자체 개발": ["E2F4E8", "2E8B57"], "BSW·플랫폼": ["DCEBFA", "2F6DB5"], "외부 공급": ["F2F2F2", "777777"], "자동 생성": ["FFF1D6", "B7791F"] },
   HW: { "회로 블록": ["DCEBFA", "2F6DB5"], "주요 부품": ["EEE6F8", "6B4BA3"], "전원": ["FDE4E1", "B5473A"], "커넥터·기구": ["F3EEE2", "8A6D3B"] },
+  STATE: { "운영 모드": ["E8EEF9", "3B5BA9"] },   // 상태 천이도(운영 모드)
 };
 const ARCH_DASHED_KINDS = new Set(["외부", "외부 공급"]);
 const ARCH_FONT = '"Malgun Gothic","맑은 고딕","Apple SD Gothic Neo","Noto Sans KR","Noto Sans CJK KR",sans-serif';
@@ -6250,9 +6272,9 @@ function archDiagramLayout(level, model, projectName) {
   if (!comps.length) return null;
   const sysName = Object.fromEntries((model.comps.SYS || []).map(c => [c.id, c.name]));
   const parentOf = c => (c.sysElem && sysName[c.sysElem] !== undefined ? c.sysElem : "");
-  const parents = level === "SYS" ? [] : [...new Set(comps.map(parentOf))];
+  const parents = (level === "SW" || level === "HW") ? [...new Set(comps.map(parentOf))] : [];
   const single = parents.length === 1 && parents[0];
-  const tagged = level !== "SYS" && !single;            // 박스마다 상위 시스템 요소 표기
+  const tagged = (level === "SW" || level === "HW") && !single;   // 박스마다 상위 시스템 요소 표기
   const BW = level === "SYS" ? 150 : 164, BH = tagged ? 74 : 58, GX = 90, GY = 66;
   const known = new Set(comps.map(c => c.id));
   const ifs = (model.interfaces[level] || []).filter(i => i && known.has(i.from) && known.has(i.to) && i.from !== i.to);
@@ -6368,7 +6390,7 @@ function archDiagramLayout(level, model, projectName) {
     const ox = 30 + PAD, oy = 30 + PAD + LBL;
     const g = place(comps, colsFor(comps.length), ox, oy);
     if (single) frames.push({ x: ox - PAD, y: oy - PAD - LBL, w: g.w + PAD * 2, h: g.h + PAD * 2 + LBL, label: `상위 시스템 요소 — ${single} ${sysName[single]}`, dashed: false });
-    else Object.values(boxes).forEach(b => { const p = parentOf(b.comp); b.tag = p ? `상위: ${p} ${sysName[p]}` : "상위: 미지정"; });
+    else if (tagged) Object.values(boxes).forEach(b => { const p = parentOf(b.comp); b.tag = p ? `상위: ${p} ${sysName[p]}` : "상위: 미지정"; });
     W = ox + g.w + PAD + 30; H = oy + g.h + PAD + 30;
   }
   // 같은 요소 쌍의 인터페이스는 한 선으로 합치고 방향을 함께 표시
@@ -6381,6 +6403,27 @@ function archDiagramLayout(level, model, projectName) {
   return { boxes, frames, edges: Object.values(pairs), W, H: H + 44 /* 범례 */ };
 }
 
+function aeStateFigure(model, pkgOpts) {
+  const tr = (model.modeTransitions || []).filter(t => t && t.from && t.to);
+  if (!model.modes.length || !tr.length) return docxP("[그림] 상태 천이도·시퀀스 다이어그램 — 위 표 기준으로 작성하여 삽입 (TBD)", { italic: true, size: 20, spacingAfter: 120 });
+  try {
+    const ids = Object.fromEntries(model.modes.map((x, i) => [x.name, `M${i + 1}`]));
+    const fake = { comps: { STATE: model.modes.map(x => ({ id: ids[x.name], name: x.name, kind: "운영 모드" })), SYS: [] },
+      interfaces: { STATE: tr.filter(t => ids[t.from] && ids[t.to]).map(t => ({ id: t.id, from: ids[t.from], to: ids[t.to] })) } };
+    const png = archDiagramPng("STATE", fake, "");
+    if (!png) throw new Error("no canvas");
+    const fileName = "arch_state.png", relId = "rIdArch2";
+    pkgOpts.media.push({ fileName, bytes: png.bytes });
+    pkgOpts.bodyImages.push({ relId, fileName });
+    let cx = 5760000, cy = Math.round(cx * png.hPx / png.wPx);
+    if (cy > 7920000) { cx = Math.round(cx * 7920000 / cy); cy = 7920000; }
+    return `<w:p><w:pPr><w:spacing w:after="60"/><w:jc w:val="center"/></w:pPr>${docxImageRun(relId, cx, cy, 102)}</w:p>` +
+      docxP(`[그림 2] 운영 모드 상태 천이도 — 모드 ${model.modes.length}개 · 천이 ${tr.length}건 (추적 모델 기준 자동 생성 · 천이 조건은 아래 표 참조)`, { size: 18, align: "center", spacingAfter: 160 }) +
+      docxTable([["천이 ID", "From", "To", "천이 조건", "근거 요구"], ...tr.map(t => [t.id, t.from, t.to, t.cond || "", (t.reqs || []).join(", ")])], -1);
+  } catch (_) {
+    return docxP("[그림] 상태 천이도·시퀀스 다이어그램 — 위 표 기준으로 작성하여 삽입 (TBD)", { italic: true, size: 20, spacingAfter: 120 });
+  }
+}
 function archDiagramPng(level, model, projectName) {
   if (typeof document === "undefined" || !document.createElement) return null;
   const L = archDiagramLayout(level, model, projectName);
@@ -6392,7 +6435,7 @@ function archDiagramPng(level, model, projectName) {
   const hex = c => "#" + c;
   const font = (px, bold) => `${bold ? "bold " : ""}${px}px ${ARCH_FONT}`;
   // 범례 폭을 먼저 재서 그림 폭보다 길면 두 줄로 나눈다
-  const LEG_ARROW = "인터페이스 방향(From → To) · 라벨 = 인터페이스 ID";
+  const LEG_ARROW = level === "STATE" ? "천이 방향(From → To) · 라벨 = 천이 ID" : "인터페이스 방향(From → To) · 라벨 = 인터페이스 ID";
   g.font = font(11, false);
   const usedKinds = new Set(Object.values(L.boxes).map(b => b.comp.kind));
   const legKinds = Object.keys(ARCH_KIND_STYLE[level] || {}).filter(k => usedKinds.has(k));
@@ -6470,10 +6513,11 @@ function archDiagramPng(level, model, projectName) {
     g.save(); rrect(b.x, b.y, b.w, b.h, 7); g.fillStyle = hex(st[0]); g.fill();
     g.strokeStyle = hex(st[1]); g.lineWidth = 1.6; if (ARCH_DASHED_KINDS.has(c.kind)) g.setLineDash([5, 4]); g.stroke(); g.restore();
     g.textAlign = "center"; g.textBaseline = "top";
-    g.fillStyle = hex(st[1]); g.font = font(10.5, false); g.fillText(id, b.x + b.w / 2, b.y + 6);
+    if (level !== "STATE") { g.fillStyle = hex(st[1]); g.font = font(10.5, false); g.fillText(id, b.x + b.w / 2, b.y + 6); }
     const lines = wrap2(c.name || "", 13, b.w - 14);
     g.fillStyle = "#1E2B33"; g.font = font(13, true);
-    const y0 = b.tag ? (lines.length === 1 ? b.y + 29 : b.y + 22) : (lines.length === 1 ? b.y + 28 : b.y + 21);
+    const y0 = level === "STATE" ? (lines.length === 1 ? b.y + b.h / 2 - 8 : b.y + b.h / 2 - 16)
+      : b.tag ? (lines.length === 1 ? b.y + 29 : b.y + 22) : (lines.length === 1 ? b.y + 28 : b.y + 21);
     lines.forEach((t, k) => g.fillText(t, b.x + b.w / 2, y0 + k * 16));
     if (b.tag) {
       g.font = font(10, false);
@@ -6524,7 +6568,9 @@ function archDiagramPng(level, model, projectName) {
 
 // 시스템 / SW / HW 아키텍처 설계서 (SYS.3 / SWE.2 / HWE.2)
 function makeAspiceArchDocx(level, meta, ctx, doc) {
-  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const fullModel = AE.normalizeModel(ctx?.requirements?.aspice);
+  const model = aeProductModel(fullModel);
+  const info = (fullModel.archInfo || {})[level] || {};
   const kind = level === "SYS" ? "SYS_AD" : level === "SW" ? "SW_AD" : "HW_AD";
   const L = AE.LEVELS[level];
   const title = doc?.name || AE.ASPICE_DOCS[kind].title;
@@ -6550,6 +6596,7 @@ function makeAspiceArchDocx(level, meta, ctx, doc) {
   } catch (_) { /* 그림 생성 실패 시 TBD 안내 유지 */ }
   body += docxP(`${++sec}. 개요`, { bold: true, size: 26, spacingAfter: 120 }) +
     docxP(`본 문서는 ${level === "SYS" ? "시스템" : level} 요구사항을 만족하기 위한 ${L.compLabel}의 정적 구조(요소·인터페이스)와 동적 거동(운영 모드·상태 천이)을 정의하고, 요구사항을 ${L.compLabel}에 할당한다.`) +
+    [].concat(info.overview || []).map(t => docxP(t, { size: 20, spacingAfter: 100 })).join("") +
     (model.version !== "4.0" && level === "HW" ? docxP("※ ASPICE 3.1에는 HWE 프로세스가 없으므로 4.0 HWE.2를 PAM 확장으로 준용한다.", { size: 18, spacingAfter: 120 }) : "");
   body += docxP(`${++sec}. 정적 아키텍처 — ${L.compLabel}`, { bold: true, size: 26, spacingAfter: 120 }) +
     archFigure +
@@ -6561,34 +6608,54 @@ function makeAspiceArchDocx(level, meta, ctx, doc) {
       ["구분", c.kind || ""], ["책임", c.desc || "TBD"], ["개별 거동", c.behavior || "TBD"],
       ["인터페이스", myIf.map(i => `${i.id}(${i.from === c.id ? "→ " + (comp[i.to]?.name || i.to) : "← " + (comp[i.from]?.name || i.from)}, ${i.kind || ""})`).join("; ") || "-"],
       ["할당 요구", assigned.map(r => r.id).join(", ") || "없음"],
-      ...(level !== "SYS" ? [["자원(RAM/ROM/CPU·전력)", "TBD — 플랫폼 사양 확보 후 기재"]] : []),
+      ...(level !== "SYS" ? [["자원(RAM/ROM/CPU·전력)", c.resource || "TBD — 플랫폼 사양 확보 후 기재"]] : []),
     ], 1);
   });
   body += docxP(`${++sec}. 인터페이스 정의`, { bold: true, size: 26, spacingAfter: 120 }) +
     (ifs.length ? docxTable([["ID", "From", "To", "유형", "신호·데이터", "주기(ms)", "설명"], ...ifs.map(i => [i.id, comp[i.from]?.name || i.from, comp[i.to]?.name || i.to, i.kind || "", i.signals || "", String(i.periodMs || ""), i.desc || ""])], -1)
       : docxP("인터페이스 미정의 (TBD)", { size: 20 }));
+  if (ifs.length) {
+    // 요소 간 관계·의존 — 인터페이스 정의에서 결정적으로 도출 (입력을 받는 요소 = 의존 대상)
+    body += docxP(`${L.compLabel} 간 관계·의존 매트릭스 (인터페이스 정의에서 자동 도출)`, { bold: true, size: 22, spacingAfter: 80 }) +
+      docxTable([["요소", "의존(입력 제공 요소 ← 인터페이스)", "제공(출력 대상 요소 → 인터페이스)"], ...comps.map(c => [
+        `${c.id} ${c.name}`,
+        ifs.filter(i => i.to === c.id).map(i => `${comp[i.from]?.name || i.from} (${i.id})`).join(", ") || "-",
+        ifs.filter(i => i.from === c.id).map(i => `${comp[i.to]?.name || i.to} (${i.id})`).join(", ") || "-"])], -1);
+  }
   if (level === "SYS") {
     body += docxP(`${++sec}. 동적 아키텍처 — 운영 모드·상태`, { bold: true, size: 26, spacingAfter: 120 }) +
       (model.modes.length ? docxTable([["모드/상태", "설명", "진입·이탈 조건"], ...model.modes.map(x => [x.name, x.desc || "", x.transition || ""])], -1) : docxP("운영 모드 미정의 (TBD)", { size: 20 })) +
-      docxP("[그림] 상태 천이도·시퀀스 다이어그램 — 위 표 기준으로 작성하여 삽입 (TBD)", { italic: true, size: 20, spacingAfter: 120 });
+      aeStateFigure(model, pkgOpts) +
+      [].concat(info.dynamic?.text || []).map(t => docxP(t, { size: 20, spacingAfter: 100 })).join("") +
+      (info.dynamic?.rows?.length ? docxTable([info.dynamic.header || [], ...info.dynamic.rows], -1) : "");
   } else {
     body += docxP(`${++sec}. 동적 거동`, { bold: true, size: 26, spacingAfter: 120 }) +
-      docxP(level === "SW" ? "태스크 구조(주기·우선순위)·인터럽트·초기화/종료·오류 처리 시퀀스는 플랫폼(OS·BSW) 확정 후 기술한다 (TBD). 컴포넌트별 거동은 2장 참조." : "파워업/다운 시퀀스·전기적 상태 천이·보호 동작은 회로 설계 확정 후 기술한다 (TBD). 컴포넌트별 거동은 2장 참조.", { size: 20 });
+      (info.dynamic ? [].concat(info.dynamic.text || []).map(t => docxP(t, { size: 20, spacingAfter: 100 })).join("") +
+        (info.dynamic.rows?.length ? docxTable([info.dynamic.header || [], ...info.dynamic.rows], -1) : "")
+        : docxP(level === "SW" ? "태스크 구조(주기·우선순위)·인터럽트·초기화/종료·오류 처리 시퀀스는 플랫폼(OS·BSW) 확정 후 기술한다 (TBD). 컴포넌트별 거동은 2장 참조." : "파워업/다운 시퀀스·전기적 상태 천이·보호 동작은 회로 설계 확정 후 기술한다 (TBD). 컴포넌트별 거동은 2장 참조.", { size: 20 }));
   }
   body += docxP(`${++sec}. 요구사항 할당 (${AE.bpLabel(level === "SYS" ? "SYS_ALLOC" : level === "SW" ? "SW_ALLOC" : "HW_ALLOC", model.version)})`, { bold: true, size: 26, spacingAfter: 120 }) +
     docxTable([["요구 ID", "요구사항명", "유형", "할당 요소", "판정"], ...reqs.map(r => {
       const a = (model.alloc[level][r.id] || []).filter(x => comp[x]);
       return [r.id, r.title || "", r.type || "", a.map(x => `${x} ${comp[x].name}`).join(", ") || "-", a.length ? "할당" : "미할당"];
     })], -1);
+  const prj = level === "SYS" ? fullModel.reqs.SYS.filter(aeIsProjectReq) : [];
+  if (prj.length) body += docxP(`※ 프로젝트·프로세스 요구 ${prj.length}건(${prj.map(r => r.id).join(", ")})은 제품 기능이 아닌 인도물·보고·인증·프로세스 요구이므로 시스템 요소에 할당하지 않으며, 요구사항 추적 매트릭스의 '프로젝트·프로세스 요구' 시트에서 관리 프로세스·관리 산출물로 추적한다.`, { size: 18, spacingAfter: 160 });
   body += docxP(`${++sec}. 아키텍처 분석·설계 근거`, { bold: true, size: 26, spacingAfter: 120 }) +
-    docxP(model.rationale[level] || "설계 근거·대안 평가 결과 미작성 (TBD) — 3.1 BP5/BP6(대안 평가), 4.0 04-06/04-04 'justifying rationale' 요구", { size: 20 });
+    docxP(model.rationale[level] || "설계 근거·대안 평가 결과 미작성 (TBD) — 3.1 BP5/BP6(대안 평가), 4.0 04-06/04-04 'justifying rationale' 요구", { size: 20 }) +
+    [].concat(info.analysis?.text || []).map(t => docxP(t, { size: 20, spacingAfter: 100 })).join("") +
+    (info.analysis?.rows?.length ? docxTable([info.analysis.header || [], ...info.analysis.rows], -1) : "");
+  if ((info.sections || []).length) {
+    const n = ++sec;
+    body += docxP(`${n}. 추가 설계 정보 (ASPICE WP 특성)`, { bold: true, size: 26, spacingAfter: 120 }) + aeInfoSections(info.sections, n);
+  }
   body += aspiceCharAppendix(model, kind, ++sec);
   return docxPackage(front + body, pkgOpts);
 }
 
 // 검증 명세서·결과서 (08-50/08-52 · 08-60/08-58/06-50 · 13-50/15-52)
 function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
-  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const model = aeProductModel(AE.normalizeModel(ctx?.requirements?.aspice));
   const D = AE.ASPICE_DOCS[kind];
   const tl = AE.TEST_LEVELS[D.test];
   const tests = model.tests.filter(t => t.level === D.test);
@@ -6633,7 +6700,9 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
 
 // 양방향 추적 매트릭스 (3.1 13-22 / 4.0 13-51) + 일관성 점검 결과
 function makeAspiceRtmXlsx(meta, ctx, doc) {
-  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const fullModel = AE.normalizeModel(ctx?.requirements?.aspice);
+  const model = aeProductModel(fullModel);
+  const prjReqs = fullModel.reqs.SYS.filter(aeIsProjectReq);
   const sc = model.scope;
   const tOf = (L, id) => model.tests.filter(t => t.level === L && (t.targets || []).includes(id)).map(t => t.id);
   const sysComp = Object.fromEntries(model.comps.SYS.map(c => [c.id, c]));
@@ -6671,15 +6740,33 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   const sysIds = new Set(model.reqs.SYS.map(r => r.id));
   ["SW", "HW"].forEach(lv => sc[lv] && model.reqs[lv].forEach(r => swBack.push([r.id, lv, r.title || "", (r.parents || []).join(", "), (r.parents || []).some(p => sysIds.has(p)) ? "예" : "추적 없음"])));
   const F = AE.checkConsistency(model);
+  if (prjReqs.length) F.push({ sev: "info", bp: "SYS_REQ_TRACE", msg: `프로젝트·프로세스 요구 ${prjReqs.length}건은 제품 추적 체인(할당·SW/HW 파생·SYS.5 검증) 대상에서 제외하고 '프로젝트·프로세스 요구' 시트에서 관리 산출물로 추적함`, ids: prjReqs.map(r => r.id) });
   const cons = [["일관성·추적성 점검 결과"], [`점검일: ${new Date().toLocaleString("ko-KR")}`], ["심각도", "관련 BP", "내용", "대상 ID(최대 30)"],
     ...F.map(f => [f.sev === "error" ? "오류" : f.sev === "warn" ? "경고" : "정보", AE.bpLabel(f.bp, model.version), f.msg, (f.ids || []).join(", ")])];
   if (!F.length) cons.push(["-", "-", "발견된 문제 없음", ""]);
+  // 이해관계자 요구 → 시스템 요구 (3.1 SYS.2.BP6 / 4.0 SYS.2.BP5) — 입력 문서의 모든 조항이 어디서 처리되는지
+  const sysAll = Object.fromEntries(fullModel.reqs.SYS.map(r => [r.id, r]));
+  const stk = [["이해관계자 요구 추적 (입력 문서 조항 → 시스템 요구·프로젝트 요구)"], [`정보항목: 3.1 13-22 / 4.0 13-51 — 근거 BP: ${AE.bpLabel("SYS_REQ_TRACE", model.version)}`], ["출처 ID", "입력 문서", "조항 요지", "처리 구분", "연결 요구", "비고"],
+    ...(fullModel.stakeholders || []).map(x => {
+      const miss = (x.reqs || []).filter(id => !sysAll[id]);
+      return [x.id, x.doc || "", x.title || "", x.disposition || "", (x.reqs || []).map(id => `${id} ${sysAll[id]?.title || "(미존재)"}`).join("\n") || "-", [x.note, miss.length ? `참조 오류: ${miss.join(", ")}` : ""].filter(Boolean).join(" / ")];
+    })];
+  const stkCovered = new Set((fullModel.stakeholders || []).flatMap(x => x.reqs || []));
+  const noStk = fullModel.reqs.SYS.filter(r => !stkCovered.has(r.id)).map(r => r.id);
+  if ((fullModel.stakeholders || []).length) stk.push([], [`판정: 입력 조항 ${(fullModel.stakeholders || []).length}건 전부 처리 구분 지정 · 출처가 연결되지 않은 시스템 요구 ${noStk.length}건${noStk.length ? ` (${noStk.join(", ")})` : ""}`]);
+  const prj = [["프로젝트·프로세스 요구 (제품 추적 체인 제외 — 관리 산출물로 추적)"], [], ["요구 ID", "요구사항명", "출처", "관리 프로세스", "관리 산출물(증적)", "확인 방법", "확인 시점"],
+    ...prjReqs.map(r => [r.id, r.title || "", r.source || "", r.process || "", r.evidence || "", r.verifBy || "", r.due || ""])];
+  const oi = [["미결 사항(Open Issues) — 입력자료 확보·고객 합의가 필요한 항목"], [], ["ID", "관련 문서·요구", "내용", "필요 조치", "담당", "목표 시점", "상태"],
+    ...(fullModel.openIssues || []).map(x => [x.id, x.ref || "", x.item || "", x.action || "", x.owner || "", x.due || "", x.status || "Open"])];
   const w = [12, 26, 16, 22, 16, 16, ...(sc.SW ? [16, 14, 16, 16] : []), ...(sc.HW ? [16, 14, 16, 16] : []), 18];
   return makeXlsxBook([
     { name: "순방향 추적", rows: fwd, widths: w, headerRows: [3], titleRows: [0], freezeRow: 4 },
     { name: "역방향(검증→요구)", rows: back, widths: [14, 8, 40, 20, 10, 6], headerRows: [2], titleRows: [0], freezeRow: 3 },
     { name: "역방향(하위→상위)", rows: swBack, widths: [14, 6, 36, 20, 10], headerRows: [2], titleRows: [0], freezeRow: 3 },
     { name: "일관성 점검", rows: cons, widths: [8, 34, 60, 50], headerRows: [2], titleRows: [0], freezeRow: 3 },
+    ...((fullModel.stakeholders || []).length ? [{ name: "이해관계자 요구 추적", rows: stk, widths: [12, 22, 46, 16, 40, 40], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
+    ...(prjReqs.length ? [{ name: "프로젝트·프로세스 요구", rows: prj, widths: [10, 30, 16, 18, 40, 30, 14], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
+    ...((fullModel.openIssues || []).length ? [{ name: "미결 사항", rows: oi, widths: [8, 26, 54, 44, 12, 12, 8], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
   ]);
 }
 
