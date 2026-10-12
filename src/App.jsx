@@ -6539,28 +6539,47 @@ async function docxOutlineText(bytes) {
 
 // 다중 시트 xlsx (머리글 강조·테두리·줄바꿈·열너비·틀고정) — 검증 명세·RTM용
 // sheets: [{ name, rows:[[셀…]], widths:[문자수…], headerRows:[행 인덱스…], titleRows:[행 인덱스…], freezeRow }]
-function makeXlsxBook(sheets) {
+// sheets: [{ name, rows:[[셀…]], widths, headerRows, titleRows, freezeRow, merges:["B4:F4"], rowHeights:{행번호:높이} }]
+//   셀은 문자열 또는 { v, s } (s = 스타일 번호: 4 표지 제목, 5 표지 부제, 6 정보표 라벨, 7 정보표 값, 8 작은 회색(우측), 9 우측 정렬 굵게, 10 좌측 굵게)
+// opts: { header, footer } — 모든 시트의 인쇄 머리말·꼬리말(&L/&C/&R, &P 쪽번호, &N 전체 쪽수)
+function makeXlsxBook(sheets, opts = {}) {
   const stylesXml = XMLH + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
-    '<fonts count="3"><font><sz val="10"/><name val="맑은 고딕"/></font><font><b/><sz val="10"/><name val="맑은 고딕"/></font><font><b/><sz val="13"/><name val="맑은 고딕"/></font></fonts>' +
+    '<fonts count="6"><font><sz val="10"/><name val="맑은 고딕"/></font><font><b/><sz val="10"/><name val="맑은 고딕"/></font><font><b/><sz val="13"/><name val="맑은 고딕"/></font>' +
+    '<font><b/><sz val="22"/><name val="맑은 고딕"/></font><font><b/><i/><sz val="14"/><name val="맑은 고딕"/></font><font><sz val="9"/><color rgb="FF808080"/><name val="맑은 고딕"/></font></fonts>' +
     '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFDCE6F1"/><bgColor indexed="64"/></patternFill></fill></fills>' +
     '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FF999999"/></left><right style="thin"><color rgb="FF999999"/></right><top style="thin"><color rgb="FF999999"/></top><bottom style="thin"><color rgb="FF999999"/></bottom><diagonal/></border></borders>' +
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
-    '<cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+    '<cellXfs count="11"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
     '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>' +
     '<xf numFmtId="49" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>' +
-    '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>' +
+    '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
+    '<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>' +
+    '<xf numFmtId="49" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>' +
+    '<xf numFmtId="0" fontId="5" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf></cellXfs>' +
     '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
   const sheetXml = sh => {
     const hdr = new Set(sh.headerRows || []), ttl = new Set(sh.titleRows || []);
     const firstHdr = Math.min(...(sh.headerRows || [0]));
     const cols = (sh.widths || []).length ? `<cols>${sh.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("")}</cols>` : "";
     const pane = sh.freezeRow ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${sh.freezeRow}" topLeftCell="A${sh.freezeRow + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` : "";
+    const rh = sh.rowHeights || {};
     const rows = (sh.rows || []).map((cells, ri) => {
-      const s = ttl.has(ri) ? 3 : hdr.has(ri) ? 1 : (ri > firstHdr && (sh.headerRows || []).length) ? 2 : 0;
-      return `<row r="${ri + 1}">` + (cells || []).map((c, ci) =>
-        `<c r="${colLetter(ci)}${ri + 1}" s="${s}" t="inlineStr"><is><t xml:space="preserve">${xesc(c)}</t></is></c>`).join("") + "</row>";
+      const base = ttl.has(ri) ? 3 : hdr.has(ri) ? 1 : (ri > firstHdr && (sh.headerRows || []).length) ? 2 : 0;
+      const ht = rh[ri + 1] ? ` ht="${rh[ri + 1]}" customHeight="1"` : "";
+      return `<row r="${ri + 1}"${ht}>` + (cells || []).map((c, ci) => {
+        const v = (c && typeof c === "object") ? c.v : c;
+        const st = (c && typeof c === "object" && c.s != null) ? c.s : base;
+        return `<c r="${colLetter(ci)}${ri + 1}" s="${st}" t="inlineStr"><is><t xml:space="preserve">${xesc(v)}</t></is></c>`;
+      }).join("") + "</row>";
     }).join("");
-    return XMLH + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${pane}${cols}<sheetData>${rows}</sheetData></worksheet>`;
+    const merges = (sh.merges || []).length ? `<mergeCells count="${sh.merges.length}">${sh.merges.map(m => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>` : "";
+    const print = `<pageMargins left="0.6" right="0.6" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="${sh.cover ? "portrait" : "landscape"}" fitToWidth="1" fitToHeight="0"/>` +
+      ((opts.header || opts.footer) && !sh.cover ? `<headerFooter>${opts.header ? `<oddHeader>${xesc(opts.header)}</oddHeader>` : ""}${opts.footer ? `<oddFooter>${xesc(opts.footer)}</oddFooter>` : ""}</headerFooter>` : "");
+    return XMLH + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>${pane}${cols}<sheetData>${rows}</sheetData>${merges}${print}</worksheet>`;
   };
   const safeName = (n, i) => (String(n || `Sheet${i + 1}`).replace(/[\\/?*\[\]:]/g, " ").slice(0, 30).trim() || `Sheet${i + 1}`);
   const names = sheets.map((sh, i) => safeName(sh.name, i));
@@ -6575,6 +6594,47 @@ function makeXlsxBook(sheets) {
   ]);
 }
 
+// ── xlsx 표준 프레임: 표지 시트(문서 제목·프로젝트·문서번호·버전·작성일·문서정보표·서명란·제.개정 이력) + 인쇄 머리말·꼬리말 ──
+// docx 표준양식(docxStdParts)과 같은 항목을 담는다. 로고 이미지는 xlsx 표지에는 넣지 않고 조직명으로 대신한다.
+function xlsxStdParts({ title, docCode, phase, meta, infoRows = [] }) {
+  const code = docCodeWithPrefix(docCode, meta);
+  const ap = docApprovers(meta);
+  const today = new Date().toISOString().slice(0, 10);
+  const L = (v) => ({ v, s: 6 }), V = (v) => ({ v: v || "", s: 7 });
+  const rows = [
+    [], [], [],
+    ["", { v: title, s: 4 }], [],
+    ["", { v: meta.name || "{프로젝트 명}", s: 5 }], [],
+    ["", { v: `문서번호 : ${code}`, s: 9 }],
+    ["", { v: "Version 0.1", s: 5 }],
+    ["", { v: today, s: 9 }], [],
+    ["", { v: ap.org || "", s: 9 }],
+    ["", { v: ap.orgNameEn || "", s: 8 }], [], [],
+    ["", L("프로젝트"), V(meta.name), L("단계"), V(phase)],
+    ["", L("시스템"), V(systemNameOf(meta)), L("문서번호"), V(code)],
+    ["", L("작성자"), V(ap.author), L("작성일자"), V(today)],
+    ["", L("검토자"), V(ap.reviewer), L("승인자"), V(ap.approver)],
+    ["", L("작성조직"), V(ap.org), L("배포구분"), V(ap.distribution)],
+    ...infoRows.map(([k, v]) => ["", L(k), V(v), L(""), V("")]),
+    [],
+    ["", { v: "사용 권한 — 본 문서는 작성·검토·승인하여 승인된 원본을 보관한다.", s: 10 }],
+    ["", L("구분"), L("성명"), L("서명"), L("일자")],
+    ["", V("작성자"), V(ap.author), V(""), V("")],
+    ["", V("검토자"), V(ap.reviewer), V(""), V("")],
+    ["", V("승인자"), V(ap.approver), V(""), V("")],
+    [],
+    ["", { v: "제.개정 이력", s: 10 }],
+    ["", L("버전"), L("변경일자"), L("제.개정 내용"), L("작성자")],
+    ["", V("0.1"), V(today), V("최초 작성 (SPIDer QA Agent 추적 모델에서 생성된 초안)"), V(ap.author)],
+    ["", V(""), V(""), V(""), V("")],
+    ["", V(""), V(""), V(""), V("")],
+  ];
+  const info0 = 15;   // 정보표 시작 행(0-based)
+  const merges = ["B4:E4", "B6:E6", "B8:E8", "B9:E9", "B10:E10", "B12:E12", "B13:E13"];
+  const cover = { name: "표지", rows, widths: [3, 16, 34, 16, 30], merges, cover: true, rowHeights: { 4: 36, 6: 24, 9: 22 } };
+  const footerNote = DOC_SETTINGS.docFooter ? `\n${DOC_SETTINGS.docFooter}` : "";
+  return { cover, opts: { header: `&L&"맑은 고딕,Regular"&8${title}&R&8${ap.org || ""}`, footer: `&L&8${code}&C&8${meta.name || ""}${footerNote}&R&8&P / &N` } };
+}
 const ASPICE_STATUS = ["Draft", "Reviewed", "Agreed", "Rejected"];
 const charStateLabel = { ok: "충족", input: "자료 확보(작성 대기)", gap: "누락(TBD)", na: "해당 없음" };
 
@@ -7087,15 +7147,17 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
   const tgtName = {};
   (model.units.SW || []).forEach(u => { tgtName[u.id] = u.name; });
   ["SYS", "SW", "HW"].forEach(lv => { model.reqs[lv].forEach(r => { tgtName[r.id] = r.title; }); model.comps[lv].forEach(c => { tgtName[c.id] = c.name; }); model.interfaces[lv].forEach(i => { tgtName[i.id] = `${i.kind || "IF"} ${i.signals || ""}`.trim(); }); });
+  const std = xlsxStdParts({ title, docCode: projectDocNo(meta, doc?.code || D.code), phase: tl.proc, meta, infoRows: [["적용 기준", `Automotive SPICE ${AE.ASPICE_VERSIONS.find(v => v.id === model.version)?.label || model.version}`], ["정보항목(WP)", AE.wpLabel(kind, model.version)]] });
   if (D.result) {
     const rows = [...head, ["No", `${term} ID`, "검증 대상", "제목", "결과(Pass/Fail/Not executed)", "수행일", "수행자", "형상(SW/HW 버전)", "결함·문제 ID", "비고"]];
     tests.forEach((t, i) => rows.push([String(i + 1), t.id, (t.targets || []).join(", "), t.title || "", "Not executed", "", "", "", "", ""]));
     const sum = [[`${tl.label} 결과 요약`], [], ["구분", "건수"], ["전체", String(tests.length)], ["Pass", "(결과 입력 후 집계)"], ["Fail", "(결과 입력 후 집계)"], ["Not executed", String(tests.length)],
       [], ["※ 4.0 15-52: 통과·미통과·미수행, 수행 정보(일자·수행자), 결과 요약을 포함해야 한다. 3.1 13-50과 동일 목적."]];
     return makeXlsxBook([
+      std.cover,
       { name: "검증 결과", rows, widths: [5, 13, 18, 36, 20, 11, 10, 16, 12, 18], headerRows: [3], titleRows: [0], freezeRow: 4 },
       { name: "결과 요약", rows: sum, widths: [22, 30], headerRows: [2], titleRows: [0] },
-    ]);
+    ], std.opts);
   }
   const spec = [...head, ["No", `${term} ID`, "검증 대상(ID)", "대상명", "제목", "기법", "사전조건(진입 기준)", "절차", "기대 결과", "합격 기준", "환경", "회귀 대상", "출처"]];
   tests.forEach((t, i) => spec.push([String(i + 1), t.id, (t.targets || []).join(", "), (t.targets || []).map(x => tgtName[x] || "").join(", "), t.title || "", t.technique || "", t.precondition || "", String(t.steps || "").replace(/;\s*/g, "\n"), t.expected || "", t.passCriteria || "", t.env || "", t.regression ? "Y" : "", t.origin === "rule" ? "규칙" : t.origin === "ai" ? "AI 초안" : "수동"]));
@@ -7114,10 +7176,11 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
   const sel = [[`${term} 선택 세트`], [], ["No", `${term} ID`, "제목", "선택", "선택 근거", "회귀 대상"]];
   tests.forEach((t, i) => sel.push([String(i + 1), t.id, t.title || "", "선택", t.origin === "rule" ? `요구 조건(${t.technique || "요구 기반"})에서 결정적으로 도출` : "요구 정상 시나리오", t.regression ? "Y" : ""]));
   return makeXlsxBook([
+    std.cover,
     { name: "검증 명세", rows: spec, widths: [5, 13, 14, 20, 30, 18, 24, 40, 32, 24, 10, 8, 8], headerRows: [3], titleRows: [0], freezeRow: 4 },
     { name: "검증 전략", rows: strategy, widths: [16, 70, 30], headerRows: [2], titleRows: [0] },
     { name: model.version === "3.1" ? "테스트 선택" : "선택 세트(08-58)", rows: sel, widths: [5, 13, 36, 8, 40, 9], headerRows: [2], titleRows: [0], freezeRow: 3 },
-  ]);
+  ], std.opts);
 }
 
 // 이해관계자 요구사항 목록 (SYS.1 · 3.1 17-03 / 4.0 17-00·17-54) — 원문 발췌 + 합의 상태 + 시스템 요구 추적
@@ -7133,10 +7196,12 @@ function makeAspiceStkXlsx(meta, ctx, doc) {
   const sum = [["합의 현황 요약"], [], ["구분", "건수"], ["전체", String(model.reqs.STK.length)], ["합의", String(cnt("합의"))], ["검토 중", String(cnt("검토 중"))], ["보류", String(cnt("보류"))],
     ["시스템 요구 미도출", String(model.reqs.STK.filter(k => !(sysBy[k.id] || []).length).length)], [],
     ["※ 이해관계자 요구는 OEM·법규 원문을 고쳐 쓰지 않고 그대로 발췌한 문장이며, 시스템 요구(SYS.2)는 이를 분석해 검증 가능하게 재기술한 것이다. 합의 상태는 이해관계자와의 합의 증적(4.0 SYS.1.BP5 / 3.1 SYS.1.BP5·BP6)이다."]];
+  const std = xlsxStdParts({ title: doc?.name || D.title, docCode: projectDocNo(meta, doc?.code || D.code), phase: "SYS.1", meta, infoRows: [["적용 기준", `Automotive SPICE ${AE.ASPICE_VERSIONS.find(v => v.id === model.version)?.label || model.version}`], ["정보항목(WP)", AE.wpLabel("STK_LIST", model.version)]] });
   return makeXlsxBook([
+    std.cover,
     { name: "이해관계자 요구", rows, widths: [5, 11, 60, 18, 10, 10, 10, 24, 20], headerRows: [3], titleRows: [0], freezeRow: 4 },
     { name: "합의 현황", rows: sum, widths: [24, 12], headerRows: [2], titleRows: [0] },
-  ]);
+  ], std.opts);
 }
 // SW 상세설계서 골격 (SWE.3 · 3.1 04-05 / 4.0 04-05) — 유닛 분해·요구 추적·인터페이스(헤더 근거)만 채우고 알고리즘·동적 동작은 TBD
 function makeAspiceUnitDesignDocx(meta, ctx, doc) {
@@ -7258,7 +7323,9 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   const unitRows = [["SW 요구 → 유닛 추적 (SWE.3 골격)"], [`근거: ${AE.bpLabel("SW_UNIT", model.version)} · 유닛 ${fullModel.units.SW.length}개 (헤더 근거 ${fullModel.units.SW.filter(u => u.origin === "header").length})`], ["SW 요구", "요구사항명", "할당 유닛", "유닛 검증(SWE.4)", "판정"],
     ...model.reqs.SW.map(r => { const us = fullModel.units.SW.filter(u => (u.reqs || []).includes(r.id)); return [r.id, r.title || "", us.map(u => `${u.id} ${u.name}`).join(", ") || "-", [...new Set(us.flatMap(u => tOf("SWE4", u.id)))].join(", "), us.length ? "할당" : "미할당"]; })];
   const w = [...(hasStk ? [16] : []), 12, 26, 16, 22, 16, 16, ...(sc.SW ? [16, 14, 16, 16] : []), ...(sc.HW ? [16, 14, 16, 16] : []), 18];
+  const std = xlsxStdParts({ title: doc?.name || AE.ASPICE_DOCS.RTM.title, docCode: projectDocNo(meta, doc?.code || "SY2105"), phase: "SYS.2~SWE.6", meta, infoRows: [["적용 기준", `Automotive SPICE ${AE.ASPICE_VERSIONS.find(v => v.id === model.version)?.label || model.version}`], ["정보항목(WP)", AE.wpLabel("RTM", model.version)]] });
   return makeXlsxBook([
+    std.cover,
     { name: "순방향 추적", rows: fwd, widths: w, headerRows: [3], titleRows: [0], freezeRow: 4 },
     { name: "역방향(검증→요구)", rows: back, widths: [14, 8, 40, 20, 10, 6], headerRows: [2], titleRows: [0], freezeRow: 3 },
     { name: "역방향(하위→상위)", rows: swBack, widths: [14, 6, 36, 20, 10], headerRows: [2], titleRows: [0], freezeRow: 3 },
@@ -7269,7 +7336,7 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
     ...((fullModel.stakeholders || []).length ? [{ name: "이해관계자 요구 추적", rows: stk, widths: [12, 22, 46, 16, 40, 40], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...(prjReqs.length ? [{ name: "프로젝트·프로세스 요구", rows: prj, widths: [10, 30, 16, 18, 40, 30, 14], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...((fullModel.openIssues || []).length ? [{ name: "미결 사항", rows: oi, widths: [8, 26, 54, 44, 12, 12, 8], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
-  ]);
+  ], std.opts);
 }
 
 // 산출물명 → ASPICE 문서 생성 가능 여부 (모델에 해당 내용이 있을 때만 — 없으면 기존 템플릿/스켈레톤 경로 유지)
