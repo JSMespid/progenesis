@@ -7728,7 +7728,20 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
 // ── 요구사항 AI 작성 모달: 원문 입력(텍스트·txt·docx 업로드) → AI 도출·명세 → 검토·수정 → 확정 ──
 // 확정된 요구사항은 요구사항 정의서·명세서 docx 생성과 요구사항 추적 매트릭스(xlsx) 자동 채움에 사용됨
 // embedded: ASPICE 과제에서 V-모델 ① 탭 안에 패널로 표시 (오버레이·헤더 없음, 확정 시 onEmbeddedConfirm 호출)
-function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, embedded = false, onEmbeddedConfirm, previewAspice, seedItems }) {
+// 원문·파일 저장 묶음 — 프로젝트 JSON에 들어가므로 용량 상한(파일당 40만 자·전체 150만 자)을 두고 초과분은 잘라 표시한다
+const SRC_FILE_CAP = 400000, SRC_TOTAL_CAP = 1500000;
+function packReqSource(text, files) {
+  let budget = SRC_TOTAL_CAP - Math.min(String(text || "").length, SRC_FILE_CAP);
+  const out = (files || []).map(f => {
+    const full = String(f.text || "");
+    const cap = Math.max(0, Math.min(SRC_FILE_CAP, budget));
+    const t = full.length > cap ? full.slice(0, cap) : full;
+    budget -= t.length;
+    return { name: f.name, text: t, chars: full.length, truncated: full.length > t.length || !!f.truncated };
+  });
+  return { text: String(text || "").slice(0, SRC_FILE_CAP), files: out, updatedAt: new Date().toISOString() };
+}
+function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, embedded = false, onEmbeddedConfirm, previewAspice, seedItems, onSourceChange }) {
   // OSSP별 문구·AI 역할 — 가이드에 reqGen이 없으면 기존(정보공학) 문구 사용
   const RG = getGuideForOSSP(ossp || {})?.reqGen || {};
   const QSTD = RG.qualityStd || { name: "ISO 9126", chars: "기능성/신뢰성/사용성/효율성/유지보수성/이식성" };
@@ -7736,8 +7749,12 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, 
   const FIDELITY = "원문 충실성: 원문에 명시되지 않은 등급·수치(시간·전압·전류·주기·거리), 메시지 ID·주소를 새로 만들지 말 것. 원문에 있는 등급·수치는 표기 그대로 사용. 원문에 근거가 없어 필요한 값은 '원문 확인 필요'로 가정·제약에 기재.";
   const leaves = reqSpecLeaves(wbs);   // WBS 최하위 기능 모듈 (요구사항 배정 후보)
   const leafName = {}; leaves.forEach(l => { leafName[l.wbsNo] = l.name; });
-  const [srcText, setSrcText] = useState("");
-  const [srcFiles, setSrcFiles] = useState([]);   // 업로드된 원문 파일들 [{name, text}]
+  // 원문·업로드 파일은 requirements.source 에 함께 저장되어 다시 열어도 유지된다 (확정 또는 V-모델 저장 시)
+  const [srcText, setSrcText] = useState(() => String(requirements?.source?.text || ""));
+  const [srcFiles, setSrcFiles] = useState(() => ((requirements?.source?.files) || []).map(f => ({ name: f.name, text: String(f.text || ""), truncated: !!f.truncated })));   // 업로드된 원문 파일들 [{name, text}]
+  const srcPack = () => packReqSource(srcText, srcFiles);
+  // V-모델 안(embedded)에서는 원문이 바뀔 때마다 상위에 알려 저장(확정 전이라도 '저장'에 포함)
+  useEffect(() => { if (embedded && onSourceChange) onSourceChange(srcPack()); }, [srcText, srcFiles]);
   const [srcDrag, setSrcDrag] = useState(false);  // 드래그앤드롭 하이라이트
   const [items, setItems] = useState(() => { const src = seedItems || requirements?.items; return src ? src.map(x => ({ ...x })) : []; });
   // ASPICE: 이해관계자 요구(SYS.1) 층 — 원문 그대로의 요구 문장. 시스템 요구(SYS.2)는 여기서 도출되고 stkIds로 연결된다.
@@ -7898,6 +7915,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
     const normed2 = STK_ON ? normed.map(it => ({ ...it, stkIds: (it.stkIds || []).filter(id => stkIdSet.has(id)) })) : normed;
     const meta = { items: normed2, sourceName: srcFiles.length ? srcFiles.map(f => f.name).join(", ") : (requirements?.sourceName || "직접 입력"), specLeaves: leaves, qualityStd: QSTD.name, updatedAt: new Date().toISOString(),
       idRegistry: nextIdRegistry({ ...(requirements || {}), items: [...((requirements || {}).items || []), ...((requirements?.stk?.items) || [])] }, [...normed2, ...stkValid]),
+      source: srcPack(),
       ...(STK_ON ? { stk: { items: stkValid, updatedAt: new Date().toISOString() } } : {}) };
     if (embedded) {
       // V-모델 안: 기준선 등록·동기화·저장은 V-모델이 처리 (편집 중인 추적 모델 기준)
@@ -7930,11 +7948,12 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
               {srcFiles.map(f => (
                 <span key={f.name} style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10.5, color:T.accent, border:`1px solid ${T.accentDim}`, borderRadius:6, padding:"2px 8px", background:T.bg }}>
                   📄 {f.name}
+                  {f.truncated && <span title="용량 상한으로 뒷부분이 잘려 저장됩니다" style={{ fontSize:9.5, color:T.amber }}>잘림</span>}
                   <button onClick={()=>setSrcFiles(fs=>fs.filter(x=>x.name!==f.name))} disabled={busy} title="파일 제거" style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:10.5, padding:0, lineHeight:1 }}>✕</button>
                 </span>
               ))}
               {srcFiles.length > 0 && (
-                <span style={{ fontSize:10, color:T.green }}>✓ 첨부됨 · AI 생성 시 함께 분석됩니다</span>
+                <span style={{ fontSize:10, color:T.green }}>✓ 첨부됨 · AI 생성 시 함께 분석되며, {embedded ? "V-모델 저장" : "확정 저장"} 시 원문과 함께 프로젝트에 보관됩니다</span>
               )}
               <div style={{ flex:1 }} />
               <Btn onClick={generate} disabled={busy} style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ AI 재생성" : "⚡ AI 도출·명세"}</Btn>
@@ -8114,6 +8133,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   // 첫 화면: 지정 탭 → 확정 요구가 없으면 ① 요구 도출·명세 → 저장본이 있으면 추적성 → 설정
   const [tab, setTab] = useState(initTab || (!(requirements?.items || []).length ? "req" : requirements?.aspice ? "trace" : "setup"));
   const [itemsVer, setItemsVer] = useState(0);   // V-모델 쪽에서 요구 목록이 바뀌면(DBC 등) ① 탭 패널을 새 목록으로 다시 연다
+  const srcRef = useRef(requirements?.source || null);   // ① 탭의 원문·파일 (확정 전이라도 저장에 포함)
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState(null);
   const [err, setErr] = useState(null);
@@ -8403,7 +8423,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   function save() {
     // 저장 시: 이번 세션에 새로 생긴 연결만 기준선 등록 (미해결 '변경 검토 필요' 연결은 그대로 유지), 사라진 연결 기록 정리
     const out = { ...AE.baselineLinks({ ...model, reqs: { ...model.reqs, STK: AE.syncStkReqs(requirements?.stk?.items || [], model.reqs.STK), SYS: AE.syncSysReqs(items, model.reqs.SYS) } }), updatedAt: new Date().toISOString() };
-    setRequirements({ ...(requirements || {}), items, aspice: out, idRegistry: nextIdRegistry(requirements, items), updatedAt: requirements?.updatedAt || new Date().toISOString() });
+    setRequirements({ ...(requirements || {}), items, aspice: out, idRegistry: nextIdRegistry(requirements, items), updatedAt: requirements?.updatedAt || new Date().toISOString(),
+      ...(srcRef.current ? { source: srcRef.current, sourceName: srcRef.current.files?.length ? srcRef.current.files.map(f => f.name).join(", ") : (requirements?.sourceName || "직접 입력") } : {}) });
     onClose();
   }
   // ── ① 요구 도출·명세 탭에서 확정: 변경 전 기준선 등록 → 새 요구로 동기화 → 즉시 저장 ──
@@ -8564,7 +8585,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           {/* ① 요구 도출·명세 (SYS.1·2) — 탭을 옮겨도 작성 중인 내용이 유지되도록 항상 마운트하고 숨김 처리 */}
           <div style={{ display: tab === "req" ? "block" : "none" }}>
             <ReqGenModal key={itemsVer} embedded form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={ossp}
-              previewAspice={model} seedItems={itemsVer ? items : undefined} onEmbeddedConfirm={confirmReqs} onClose={() => {}} />
+              previewAspice={model} seedItems={itemsVer ? items : undefined} onEmbeddedConfirm={confirmReqs} onClose={() => {}} onSourceChange={src => { srcRef.current = src; }} />
           </div>
 
           {tab === "setup" && (<>
