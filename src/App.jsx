@@ -7727,7 +7727,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
 
 // ── 요구사항 AI 작성 모달: 원문 입력(텍스트·txt·docx 업로드) → AI 도출·명세 → 검토·수정 → 확정 ──
 // 확정된 요구사항은 요구사항 정의서·명세서 docx 생성과 요구사항 추적 매트릭스(xlsx) 자동 채움에 사용됨
-// embedded: ASPICE 과제에서 V-모델 ① 탭 안에 패널로 표시 (오버레이·헤더 없음, 확정 시 onEmbeddedConfirm 호출)
+// embedded: ASPICE 과제에서 V-모델 ② 탭 안에 패널로 표시 (오버레이·헤더 없음, 확정 시 onEmbeddedConfirm 호출)
 // 원문·파일 저장 묶음 — 프로젝트 JSON에 들어가므로 용량 상한(파일당 40만 자·전체 150만 자)을 두고 초과분은 잘라 표시한다
 const SRC_FILE_CAP = 400000, SRC_TOTAL_CAP = 1500000;
 function packReqSource(text, files) {
@@ -8092,7 +8092,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
 // ASPICE V-모델 엔지니어링 모달 — SYS.2 확정 요구 → SYS.3 → SWE.1/2 · HWE.1/2 → 검증 수단 → 추적·충족도
 // 저장 위치: requirements.aspice (tailoring JSON 내부 — DB 스키마 변경 없음)
 // ═══════════════════════════════════════════════════════════════════════════
-const AE_TABS = [["req", "① 요구 도출·명세"], ["setup", "② 설정·입력자료"], ["SYS", "③ 시스템 (SYS.2·3)"], ["SW", "④ SW (SWE.1·2)"], ["HW", "⑤ HW (HWE.1·2)"], ["verif", "⑥ 검증 수단"], ["trace", "⑦ 추적성·충족도"]];
+const AE_TABS = [["setup", "① 입력자료·설정"], ["req", "② 요구 도출·명세"], ["SYS", "③ 시스템 (SYS.2·3)"], ["SW", "④ SW (SWE.1·2)"], ["HW", "⑤ HW (HWE.1·2)"], ["verif", "⑥ 검증 수단"], ["trace", "⑦ 추적성·충족도"]];
 const AE_SEV = { error: { c: "#FF5B5B", l: "오류" }, warn: { c: "#F5A623", l: "경고" }, info: { c: "#6B7280", l: "정보" } };
 
 // 모달 내부에서 정의하면 렌더마다 컴포넌트가 새로 만들어져 입력 포커스가 사라지므로 최상위에 둔다
@@ -8130,10 +8130,14 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     m.reqs.SYS = AE.syncSysReqs(requirements?.items || [], m.reqs.SYS);
     return m;
   });
-  // 첫 화면: 지정 탭 → 확정 요구가 없으면 ① 요구 도출·명세 → 저장본이 있으면 추적성 → 설정
+  // 첫 화면: 지정 탭 → 확정 요구가 없으면 ② 요구 도출·명세 → 저장본이 있으면 추적성 → 설정 (탭 순서와 무관하게 작업 시작점 기준)
   const [tab, setTab] = useState(initTab || (!(requirements?.items || []).length ? "req" : requirements?.aspice ? "trace" : "setup"));
   const [itemsVer, setItemsVer] = useState(0);   // V-모델 쪽에서 요구 목록이 바뀌면(DBC 등) ① 탭 패널을 새 목록으로 다시 연다
-  const srcRef = useRef(requirements?.source || null);   // ① 탭의 원문·파일 (확정 전이라도 저장에 포함)
+  const srcRef = useRef(requirements?.source || null);   // ② 탭의 원문·파일 (확정 전이라도 저장에 포함)
+  const [srcSig, setSrcSig] = useState(() => ((requirements?.source?.files) || []).map(f => f.name).join("|"));   // 파일명 변경 감지용
+  // 첨부 파일명으로 입력자료 자동 감지 ('확보(자동)'로 표시 — 사용자가 눌러 확정해야 WP 충족도에 반영)
+  const INPUT_HINTS = { in_cust: /요구\s*사양|사양서|RFQ|SOR|견적\s*요청|업무\s*범위|OEM|spec/i, in_reg: /법규|규격|표준|regulation|ISO|SAE|UN\s*R/i, in_diag: /진단|UDS|DTC/i, in_env: /환경|내구|EMC|온도|진동/i, in_mcu: /MCU|플랫폼|BSW|AUTOSAR/i, in_testenv: /HILS|벤치|시험\s*환경|계측/i, in_safety: /HARA|FSC|TSC|기능\s*안전|26262/i, in_cs: /TARA|사이버|21434/i, in_prev: /전대|과거|이슈\s*이력|Lessons/i };
+  const autoInputs = (() => { const names = srcSig.split("|").filter(Boolean); const out = {}; Object.entries(INPUT_HINTS).forEach(([id, re]) => { const hit = names.filter(n => re.test(n)); if (hit.length) out[id] = hit; }); return out; })();
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState(null);
   const [err, setErr] = useState(null);
@@ -8591,12 +8595,12 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               <span style={{ flex: 1 }}>🔎 <b>"{focusOn.q}"</b>에서 빠진 {focusOn.n}건만 표시 중{(() => { const ids = [...focusOn.ids]; return ids.length <= 12 ? ` — ${ids.join(", ")}` : ` — ${ids.slice(0, 12).join(", ")} 외 ${ids.length - 12}건`; })()}</span>
               <button onClick={() => setFocus(null)} style={small}>전체 보기</button>
             </div>)}
-          {!model.reqs.SYS.length && tab !== "req" && <div style={{ color: T.amber, fontSize: 11.5, padding: 9, background: T.amber + "11", borderRadius: 8, marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}><span style={{ flex: 1 }}>확정된 시스템 요구사항이 없습니다. ① 요구 도출·명세 탭에서 SYS.2를 먼저 확정하거나, ② 설정 탭에서 DBC를 가져오세요.</span><button onClick={() => setTab("req")} style={{ ...small, color: T.amber, borderColor: T.amber + "88" }}>① 탭으로</button></div>}
+          {!model.reqs.SYS.length && tab !== "req" && <div style={{ color: T.amber, fontSize: 11.5, padding: 9, background: T.amber + "11", borderRadius: 8, marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}><span style={{ flex: 1 }}>확정된 시스템 요구사항이 없습니다. ② 요구 도출·명세 탭에서 SYS.2를 먼저 확정하거나, ① 입력자료 탭에서 DBC를 가져오세요.</span><button onClick={() => setTab("req")} style={{ ...small, color: T.amber, borderColor: T.amber + "88" }}>② 탭으로</button></div>}
 
-          {/* ① 요구 도출·명세 (SYS.1·2) — 탭을 옮겨도 작성 중인 내용이 유지되도록 항상 마운트하고 숨김 처리 */}
+          {/* ② 요구 도출·명세 (SYS.1·2) — 탭을 옮겨도 작성 중인 내용이 유지되도록 항상 마운트하고 숨김 처리 */}
           <div style={{ display: tab === "req" ? "block" : "none" }}>
             <ReqGenModal key={itemsVer} embedded form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={ossp}
-              previewAspice={model} seedItems={itemsVer ? items : undefined} onEmbeddedConfirm={confirmReqs} onClose={() => {}} onSourceChange={src => { srcRef.current = src; }} focusIds={focusOn ? focusOn.ids : null} />
+              previewAspice={model} seedItems={itemsVer ? items : undefined} onEmbeddedConfirm={confirmReqs} onClose={() => {}} onSourceChange={src => { srcRef.current = src; const sig = (src.files || []).map(f => f.name).join("|"); setSrcSig(v => v === sig ? v : sig); }} focusIds={focusOn ? focusOn.ids : null} />
           </div>
 
           {tab === "setup" && (<>
@@ -8615,11 +8619,14 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </div>
               <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>※ SWE.3(상세설계)·SWE.4(유닛 검증)는 코드가 근거이므로 ④ SW 탭에서 유닛 분해·요구 추적 골격과 헤더(.h) 기반 인터페이스만 생성하고 알고리즘·동적 동작은 TBD로 둡니다. HWE 상세설계는 회로 확정 후 OSSP 템플릿으로 작성합니다.</div>
             </AeSec>
-            <AeSec title="입력자료 체크리스트 — 확보한 자료를 표시하면 WP 충족도에 반영됩니다 (없는 자료는 AI가 지어내지 않고 TBD로 남깁니다)">
+            <AeSec title="입력자료 체크리스트 — 확보한 자료를 표시하면 WP 충족도에 반영됩니다 (없는 자료는 AI가 지어내지 않고 TBD로 남깁니다)"
+              right={(() => { const pend = Object.keys(autoInputs).filter(id => !model.inputs[id]); return pend.length ? <button onClick={() => set(n => { pend.forEach(id => { n.inputs[id] = "have"; }); })} style={{ ...small, color: T.green, borderColor: T.green + "88" }}>감지된 {pend.length}건 모두 확보로 표시</button> : null; })()}>
+              {Object.keys(autoInputs).some(id => !model.inputs[id]) && <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 6 }}>② 탭에 첨부한 파일명에서 자료를 감지했습니다 — <span style={{ color: T.accent }}>확보(자동)</span>는 추정이므로, 내용을 확인한 뒤 '확보'를 눌러 확정하세요. 확정된 것만 WP 충족도에 반영됩니다.</div>}
               <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                 {AE.INPUT_CHECKLIST.map(it => (
                   <div key={it.id} style={{ display: "grid", gridTemplateColumns: "1fr 230px", gap: 8, alignItems: "center", fontSize: 11 }}>
-                    <span>{it.label}{it.optional && <span style={{ color: T.muted }}> (선택)</span>} <span style={{ color: T.muted, fontSize: 9.5 }}>→ {it.feeds.map(f => AE.ASPICE_DOCS[f]?.title || "검증 명세").join(", ")}</span></span>
+                    <span>{it.label}{it.optional && <span style={{ color: T.muted }}> (선택)</span>} <span style={{ color: T.muted, fontSize: 9.5 }}>→ {it.feeds.map(f => AE.ASPICE_DOCS[f]?.title || "검증 명세").join(", ")}</span>
+                      {autoInputs[it.id] && !model.inputs[it.id] && <span title={`감지 파일: ${autoInputs[it.id].join(", ")}`} style={{ marginLeft: 6, fontSize: 9.5, color: T.accent, border: `1px solid ${T.accent}66`, borderRadius: 5, padding: "1px 6px" }}>확보(자동) · {autoInputs[it.id].length}개 파일</span>}</span>
                     <div style={{ display: "flex", gap: 3 }}>
                       {[["have", "확보", T.green], ["", "미확보", T.amber], ["na", "해당 없음", T.muted]].map(([v, l, c]) => { const on = (model.inputs[it.id] || "") === v; return (
                         <button key={v || "none"} onClick={() => set(n => { if (v) n.inputs[it.id] = v; else delete n.inputs[it.id]; })} style={{ ...small, flex: 1, color: on ? "#fff" : T.muted, background: on ? c : "transparent", borderColor: on ? c : T.border }}>{l}</button>); })}
@@ -8907,6 +8914,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             })()}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="이해관계자 요구 목록·아키텍처·요구·상세설계·검증 명세·추적 매트릭스를 한 번에 내려받습니다 (저장 전 편집 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 산출물 ZIP</Btn>
             <Btn variant="outline" onClick={onClose} style={{ fontSize: 12, padding: "7px 14px" }}>취소</Btn>
             <Btn onClick={save} disabled={busy} style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
           </div>
@@ -8964,7 +8972,8 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                   : "먼저 '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2 요구사항을 확정하세요 (DBC만으로 시작할 수도 있습니다)"}
             </div>
           </div>
-          <Btn onClick={()=>{ setAeInitTab(null); setAeModal(true); }} style={{ fontSize:11.5, padding:"6px 14px" }}>{am ? "V-모델 편집" : "V-모델 시작"}</Btn>
+          {am && am.reqs.SYS.length > 0 && <Btn variant="outline" onClick={async()=>{ try { await downloadAspicePackage(form || {}, { requirements }); } catch(e) { alert(e.message); } }} title="V-모델 산출물 전체(이해관계자 요구 목록·아키텍처·요구·상세설계·검증 명세·추적 매트릭스) ZIP" style={{ fontSize:11.5, padding:"6px 12px", marginRight:6 }}>📦 ZIP</Btn>}
+            <Btn onClick={()=>{ setAeInitTab(null); setAeModal(true); }} style={{ fontSize:11.5, padding:"6px 14px" }}>{am ? "V-모델 편집" : "V-모델 시작"}</Btn>
         </div>); })()}
       {deliverablesData && (
         <div style={{ animation:"fadeIn .4s" }}>
@@ -9021,7 +9030,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                     <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
                     {isAspice && aspiceCanBuild(AE.aspiceDocKind(doc.name), pdpCtx) && <span title="ASPICE V-모델 추적 모델에서 실문서로 생성됩니다" style={{ fontSize:10, color:T.green, border:`1px solid ${T.green}55`, borderRadius:6, padding:"3px 7px", flexShrink:0 }}>V모델 ✓</span>}
                     {reqDocKind(doc.name) && !(isAspice && aspiceCanBuild(AE.aspiceDocKind(doc.name), pdpCtx)) && isAspice && (
-                      <button onClick={()=>{ setAeInitTab("req"); setAeModal(true); }} title="ASPICE 과제: 요구 도출·명세는 V-모델 ① 탭에서 작성합니다"
+                      <button onClick={()=>{ setAeInitTab("req"); setAeModal(true); }} title="ASPICE 과제: 요구 도출·명세는 V-모델 ② 탭에서 작성합니다"
                         style={{ background: requirements?.items?.length ? T.green+"14" : "none", border:`1px solid ${T.green}66`, borderRadius:6, color:T.green, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>
                         {requirements?.items?.length ? `V모델 ✓ ${requirements.items.length}건` : "V-모델에서 작성"}
                       </button>
