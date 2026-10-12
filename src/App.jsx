@@ -7550,10 +7550,17 @@ const AE_TABS = [["setup", "① 설정·입력자료"], ["SYS", "② 시스템 (
 const AE_SEV = { error: { c: "#FF5B5B", l: "오류" }, warn: { c: "#F5A623", l: "경고" }, info: { c: "#6B7280", l: "정보" } };
 
 // 모달 내부에서 정의하면 렌더마다 컴포넌트가 새로 만들어져 입력 포커스가 사라지므로 최상위에 둔다
+// 진행률·오류를 '누른 버튼이 있는 섹션' 바로 아래에 표시하기 위한 컨텍스트 (V-모델 모달)
+const AeRunCtx = React.createContext(null);
 function AeSec({ title, right, children }) {
+  const uid = React.useId();
+  const rc = React.useContext(AeRunCtx);
+  const here = !!rc && rc.anchor === uid;
   return (
-    <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+    <div data-aesec={uid} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}><div style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{title}</div>{right}</div>
+      {here && (rc.busy || rc.prog) && <GenProgressBar progress={rc.prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
+      {here && rc.runErr && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 8 }}>{rc.runErr}</div>}
       {children}
     </div>
   );
@@ -7593,11 +7600,17 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const set = fn => setModel(m => { const n = AE.normalizeModel(JSON.parse(JSON.stringify(m))); fn(n); return n; });
 
   // ── 공통: AI 호출 래퍼 (청크 진행률) ──
+  // 진행률 표시 위치: 버튼을 누른 섹션(AeSec) 바로 아래. 탭을 옮기는 등 그 섹션이 화면에 없으면 상단에 표시.
+  const clickSec = useRef(null);
+  const [runAt, setRunAt] = useState(null);     // { anchor: 섹션 id, el: 섹션 DOM, tab }
+  const [runErr, setRunErr] = useState(null);
   async function run(label, fn) {
     if (busy) return;
-    setBusy(true); setErr(null); setNote(null); setProg({ percent: 3, label });
+    const el = clickSec.current;
+    setRunAt(el ? { anchor: el.getAttribute("data-aesec"), el, tab } : null);
+    setBusy(true); setErr(null); setRunErr(null); setNote(null); setProg({ percent: 3, label });
     try { const msg = await fn(); setProg({ percent: 100, label: msg || "완료" }); setTimeout(() => setProg(null), 2500); }
-    catch (e) { setErr(`${label} 실패: ${e.message}`); setProg(null); }
+    catch (e) { setRunErr(`${label} 실패: ${e.message}`); setProg(null); }
     setBusy(false);
   }
   const sysCompName = () => Object.fromEntries(model.comps.SYS.map(c => [c.id, c.name]));
@@ -7940,10 +7953,13 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     </div>
   );
   const errCount = findings.filter(f => f.sev === "error").length;
+  const runHere = !!(runAt && runAt.el && runAt.el.isConnected && runAt.tab === tab);
+  const runCtx = { anchor: runHere ? runAt.anchor : null, busy, prog, runErr };
 
   return (
+    <AeRunCtx.Provider value={runCtx}>
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, width: "100%", maxWidth: 1080, maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
+      <div onClick={e => e.stopPropagation()} onClickCapture={e => { clickSec.current = e.target?.closest ? e.target.closest("[data-aesec]") : null; }} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, width: "100%", maxWidth: 1080, maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700 }}>🚗 ASPICE V-모델 산출물 엔지니어링 <Badge color={T.accent}>{AE.ASPICE_VERSIONS.find(v => v.id === V)?.label}</Badge></div>
@@ -7958,7 +7974,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           ))}
         </div>
         <div style={{ padding: "12px 18px", overflowY: "auto", flex: 1 }}>
-          {(busy || prog) && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
+          {(busy || prog) && !runHere && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
+          {runErr && !runHere && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{runErr}</div>}
           {err && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{err}</div>}
           {note && <div style={{ color: T.green, fontSize: 11.5, padding: 9, background: T.green + "11", borderRadius: 8, marginBottom: 10 }}>{note}</div>}
           {lstat.open.length > 0 && tab !== "trace" && (
@@ -8067,12 +8084,14 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             const cur = lvKeys.includes(vFilter) ? vFilter : lvKeys[0];
             const ts = model.tests.filter(t => t.level === cur);
             return (<>
-              <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+              <div data-aesec="verif-bar" style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
                 {lvKeys.map(k => <button key={k} onClick={() => setVFilter(k)} style={{ ...small, padding: "5px 10px", color: cur === k ? "#fff" : T.muted, background: cur === k ? T.accent : "transparent", borderColor: cur === k ? T.accent : T.border }}>{AE.TEST_LEVELS[k].proc} {AE.TEST_LEVELS[k].label} ({model.tests.filter(t => t.level === k).length})</button>)}
                 <div style={{ flex: 1 }} />
                 <Btn variant="outline" onClick={() => genTests([cur])} disabled={busy} style={{ fontSize: 11, padding: "4px 10px" }}>이 레벨만 생성</Btn>
                 <Btn onClick={() => genTests(lvKeys)} disabled={busy} style={{ fontSize: 11, padding: "4px 12px" }}>{model.useAI ? "⚡ 규칙+AI" : "⚙ 규칙"} 전체 생성</Btn>
               </div>
+              {runCtx.anchor === "verif-bar" && (busy || prog) && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
+              {runCtx.anchor === "verif-bar" && runErr && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{runErr}</div>}
               <div style={{ fontSize: 10, color: T.muted, marginBottom: 8 }}>규칙 엔진: 요구 문장의 수치 조건(이상·이하·초과·미만·범위·이내)에서 경계값·타이밍 TC, 고장·진단 문구에서 결함 주입 TC, 인터페이스에서 연동·주기·통신이상 TC를 결정적으로 생성합니다. {model.useAI ? "AI는 정상 시나리오 절차 서술에만 사용합니다." : ""} 수동 추가·수정한 항목은 재생성 시 보존됩니다.</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {ts.map(t => { const i = model.tests.indexOf(t); return (
@@ -8220,6 +8239,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         </div>
       </div>
     </div>
+    </AeRunCtx.Provider>
   );
 }
 
