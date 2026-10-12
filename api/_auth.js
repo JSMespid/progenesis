@@ -29,6 +29,13 @@ export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;   // 토큰 유효 30일
 export const SESSION_GRACE_MS = 60 * 24 * 60 * 60 * 1000; // 만료 후 60일까지 refresh 허용
 
 export const ROLES = ['admin', 'pm', 'qa', 'viewer'];
+// 엔드포인트 공통 역할 집합
+//   READ_ROLES   : 로그인한 모든 역할 (조회)
+//   WRITE_ROLES  : 프로젝트·작성 가이드 등 업무 데이터 변경 (viewer 제외)
+//   MANAGE_ROLES : OSSP·라이브러리 등 조직 표준 자산 변경 (admin·pm)
+export const READ_ROLES = ['admin', 'pm', 'qa', 'viewer'];
+export const WRITE_ROLES = ['admin', 'pm', 'qa'];
+export const MANAGE_ROLES = ['admin', 'pm'];
 
 export const SETUP_SQL = `
 create table if not exists app_users (

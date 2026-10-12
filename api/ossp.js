@@ -4,6 +4,7 @@
 // ossp_phases: id, ossp_id, code, name, order_num, created_at
 
 import { SEED_TEMPLATES, SEED_DOCX_MIME } from './_seed_assets.js';
+import { requireRole, audit, READ_ROLES, WRITE_ROLES, MANAGE_ROLES } from './_auth.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const ANON_KEY = process.env.SUPABASE_ANON_KEY;
@@ -99,6 +100,11 @@ async function db(path, method = 'GET', body = null) {
 }
 
 export default async function handler(req, res) {
+  // ── 세션 검증 (전 엔드포인트 공통): 조회는 로그인한 모든 역할, 변경은 admin·pm ──
+  //    실패 시 requireRole이 401/403을 직접 응답하고 null을 반환한다.
+  const sess = await requireRole(req, res, req.method === 'GET' ? READ_ROLES : MANAGE_ROLES);
+  if (!sess) return;
+  if (req.method === 'DELETE' || req.method === 'POST' || req.method === 'PATCH') audit(sess.login_id, `ossp.${req.method.toLowerCase()}`, String((req.query && req.query.id) || (req.body && req.body.id) || ''));
   try {
     // 목록: OSSP + 각자의 단계(phases)를 합쳐서 반환
     if (req.method === 'GET') {

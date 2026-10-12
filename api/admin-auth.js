@@ -1,7 +1,10 @@
+import { requireRole } from './_auth.js';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY;
 
 export default async function handler(req, res) {
+  // ── 레거시 /admin 전용 엔드포인트: 관리자 세션만 허용 (프런트에서 더 이상 호출하지 않음 — 제거 예정) ──
+  if (!await requireRole(req, res, ['admin'])) return;
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const { action, email, password, token } = req.body;
 

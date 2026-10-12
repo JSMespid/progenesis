@@ -12,6 +12,7 @@
 //  (구버전 호환) base64 업로드 — POST { ossp_id, category, file_name, file_type, data_base64 }
 //    작은 파일에서만 동작. 큰 파일은 413(FUNCTION_PAYLOAD_TOO_LARGE)로 실패.
 
+import { requireRole, audit, READ_ROLES, WRITE_ROLES, MANAGE_ROLES } from './_auth.js';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || ANON_KEY;
@@ -47,6 +48,11 @@ function makeStoragePath(ossp_id, file_name) {
 }
 
 export default async function handler(req, res) {
+  // ── 세션 검증 (전 엔드포인트 공통): 조회는 로그인한 모든 역할, 변경은 admin·pm ──
+  //    실패 시 requireRole이 401/403을 직접 응답하고 null을 반환한다.
+  const sess = await requireRole(req, res, req.method === 'GET' ? READ_ROLES : MANAGE_ROLES);
+  if (!sess) return;
+  if (req.method === 'DELETE' || req.method === 'POST' || req.method === 'PATCH') audit(sess.login_id, `ossp-files.${req.method.toLowerCase()}`, String((req.query && req.query.id) || (req.body && req.body.id) || ''));
   try {
     // ── 목록: GET ?ossp_id=... (특정 OSSP의 파일들) ────────────────
     if (req.method === 'GET' && !req.query.path) {

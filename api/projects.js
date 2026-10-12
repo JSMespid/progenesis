@@ -1,3 +1,4 @@
+import { requireRole, audit, READ_ROLES, WRITE_ROLES, MANAGE_ROLES } from './_auth.js';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY;
 
@@ -36,6 +37,11 @@ async function supabase(path, method = 'GET', body = null, prefer = null) {
 }
 
 export default async function handler(req, res) {
+  // ── 세션 검증 (전 엔드포인트 공통): 조회는 로그인한 모든 역할, 변경은 admin·pm·qa ──
+  //    실패 시 requireRole이 401/403을 직접 응답하고 null을 반환한다.
+  const sess = await requireRole(req, res, req.method === 'GET' ? READ_ROLES : WRITE_ROLES);
+  if (!sess) return;
+  if (req.method === 'DELETE' || req.method === 'POST' || req.method === 'PATCH') audit(sess.login_id, `projects.${req.method.toLowerCase()}`, String((req.query && req.query.id) || (req.body && req.body.id) || ''));
   try {
     if (req.method === 'GET') {
       const data = await supabase('/projects?order=created_at.desc');
