@@ -24,6 +24,31 @@ function trackGuideId(track, ossp) {
   return null;
 }
 const isAspiceOSSP = o => baseGuideForOSSP(o || {})?.id === "aspice";
+// ASPICE 목표 능력수준 — 테일러링 가이드의 능력수준 값(scale)과 1:1 대응
+//   CL1·CL2: 조직 표준 프로세스 테일러링·PDP 불필요 → [기본정보 → 적용 범위 → WBS → 산출물 → 완료]
+//   CL3    : 테일러링·PDP 필요(PA 3.2 프로세스 전개) → [기본정보 → 테일러링 → PDP → WBS → 산출물 → 완료]
+const ASPICE_CLS = [
+  { id: "CL1", scale: "소형", label: "CL1", desc: "프로세스 결과물(WP) 작성 중심" },
+  { id: "CL2", scale: "중형", label: "CL2", desc: "+ 계획·모니터링, 산출물 검토·관리 (가장 흔함)" },
+  { id: "CL3", scale: "(초)대형", label: "CL3", desc: "+ 조직 표준 프로세스 테일러링·PDP" },
+];
+const aspiceClOf = form => ASPICE_CLS.some(c => c.id === form?.aspiceCL) ? form.aspiceCL : "CL2";
+const clScale = cl => (ASPICE_CLS.find(c => c.id === cl) || ASPICE_CLS[1]).scale;
+// ASPICE 적용 프로세스 범위 — 매트릭스 비고(note)의 프로세스 표기로 산출물을 묶는다 (위에서부터 첫 일치)
+const ASPICE_SCOPE_GROUPS = [
+  { id: "REU",  label: "REU.2 재사용 (파생·Carry-over 개발)", re: /REU\.2/, on: false },
+  { id: "ACQ",  label: "ACQ.4 공급자 모니터링 (협력사 개발)", re: /^ACQ\./, on: false },
+  { id: "VAL",  label: "VAL.1 밸리데이션 (실차 검증)", re: /^VAL\./, on: false },
+  { id: "MAN5", label: "MAN.5 리스크 관리 (VDA 범위 외)", re: /^MAN\.5/, on: false },
+  { id: "MAN3", label: "MAN.3 프로젝트 관리", re: /^MAN\.3/, on: true, lock: true },
+  { id: "SUP",  label: "SUP.1·8·9·10 품질보증·형상·문제·변경", re: /^(SUP\.|PA 2\.2)/, on: true, lock: true },
+  { id: "SYS",  label: "SYS.1~5 시스템 엔지니어링", re: /^SYS\./, on: true, lock: true },
+  { id: "SWE",  label: "SWE.1~6 소프트웨어 엔지니어링", re: /^SWE\./, on: true },
+  { id: "HWE",  label: "HWE.1~4 하드웨어 엔지니어링", re: null, on: false, note: "HW 산출물은 V-모델에서 생성" },
+  { id: "SPL",  label: "SPL.2 제품 릴리즈", re: /^SPL\./, on: true },
+];
+const aspiceScopeDefault = () => Object.fromEntries(ASPICE_SCOPE_GROUPS.map(g => [g.id, g.on]));
+const aspiceRowGroup = d => (ASPICE_SCOPE_GROUPS.find(g => g.re && g.re.test(String(d.note || ""))) || {}).id || null;
 
 const T = {
   bg: "#0A0C10", surface: "#111318", border: "#1E2230",
@@ -856,7 +881,7 @@ export default function SpiderQaAgent() {
       const guide = getGuideForOSSP(selectedOSSP);
       const scaleLabel = guide.scaleOptions?.find(o=>o.value===(tailoring.scale||"중형"))?.label || (tailoring.scale||"중형");
       const pdpNotes = tailoring.notes || {};
-      const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide)
+      const applied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide, tailoring.aspiceScope)
         .filter(d => {
           if (d.required) return true;   // 필수(M) 산출물은 항상 적용 (테일러링 대상 아님)
           const ov = pdpNotes[`${d.phase}:${d.code}`]?.applied;   // PDP 화면에서 수정한 적용 여부 우선
@@ -940,7 +965,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       // 우선순위(필수/선택)·코드 매핑용 참조: 방법론 테일러링 확정 산출물 + 관리 프로세스 산출물
       const guide = getGuideForOSSP(selectedOSSP);
       const pdpNotes = tailoring.notes || {};
-      const methodApplied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide)
+      const methodApplied = classifyDeliverables(tailoring.scale||"중형", tailoring.method||"UML", guide, tailoring.aspiceScope)
         .filter(d => {
           if (d.required) return true;
           const ov = pdpNotes[`${d.phase}:${d.code}`]?.applied;
@@ -997,7 +1022,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       }).filter(c => c.documents.length > 0);
 
       // ── 테일러링결과서(PDP)는 프로젝트 계획수립 산출물에 항상 포함 (필수) ──
-      {
+      //    단, ASPICE CL1·CL2 과제는 조직 표준 프로세스 테일러링을 하지 않으므로 포함하지 않는다
+      if (!(projectForm.track === "aspice" && aspiceClOf(projectForm) !== "CL3")) {
         const PDP_DOC_NAME = "테일러링결과서";
         let planCat = categories.find(c => c.name === "프로젝트 계획수립");
         if (!planCat) {
@@ -1090,7 +1116,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       members: normalizeMembers(p.tailoring?.members),
       ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=dm[k]||""; return o; }, {}),
       clientLogo:p.tailoring?.logos?.client||null, companyLogo:p.tailoring?.logos?.company||null,
-      track:p.tailoring?.track||"", aspiceVersion:p.tailoring?.aspiceVersion||"" });
+      track:p.tailoring?.track||"", aspiceVersion:p.tailoring?.aspiceVersion||"", aspiceCL:p.tailoring?.aspiceCL||"" });
     setSelectedOSSP(p.ossp||null);
     const t = p.tailoring || {};
     setSelectedSDLC(t.sdlc||null);
@@ -1121,7 +1147,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       // sdlc 전용 컬럼 없이 tailoring(JSON)에 함께 보존 → DB 스키마 변경 불필요
       tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors, requirements: requirements||null,
         // 과제 유형(일반 SI / ASPICE)과 ASPICE 적용 기준 — tailoring(JSON)에 보존 (DB 스키마 변경 없음)
-        track: projectForm.track || "", aspiceVersion: projectForm.aspiceVersion || "",
+        track: projectForm.track || "", aspiceVersion: projectForm.aspiceVersion || "", aspiceCL: projectForm.track === "aspice" ? aspiceClOf(projectForm) : "",
         // 시스템명 — 전용 컬럼 없이 tailoring(JSON)에 보존 (DB 스키마 변경 불필요)
         systemName: String(projectForm.systemName || "").trim(),
         // 수행 팀원 명단 — 전용 컬럼 없이 tailoring(JSON)에 보존
@@ -1439,12 +1465,19 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
 }
 
 function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, pbsNoAi, onTogglePbsNoAi, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, requirements, setRequirements, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, saving, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
-  const steps = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
+  const STEP_NAMES = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
+  // 과제 유형·목표 능력수준에 따라 보이는 단계(내부 단계 번호 0~7 중 일부)
+  const isAspiceTrack = form.track === "aspice";
+  const cl = aspiceClOf(form);
+  const seq = !isAspiceTrack ? [0,1,2,3,4,5,6,7] : cl === "CL3" ? [0,3,4,5,6,7] : [0,3,5,6,7];
+  const stepName = i => (isAspiceTrack && i === 3 && cl !== "CL3") ? "적용 범위" : STEP_NAMES[i];
+  const steps = seq.map(stepName);
+  const pos = Math.max(0, seq.indexOf(step));
   const canNext = [
     form.name&&form.client&&form.startDate&&form.endDate&&form.pm,  // 0 기본정보
     !!selectedSDLC,                                                  // 1 SDLC
     !!selectedOSSP,                                                  // 2 OSSP
-    true,                                                           // 3 테일러링
+    true,                                                           // 3 테일러링 / ASPICE CL1·2 적용 범위
     !!pdpData,                                                      // 4 PDP
     !!wbsData,                                                      // 5 WBS
     !!deliverablesData,                                             // 6 산출물
@@ -1457,12 +1490,31 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
     const gid = trackGuideId(form.track, selectedOSSP);
     if ((selectedOSSP.guideId || null) !== gid) setSelectedOSSP({ ...selectedOSSP, guideId: gid || undefined });
   }, [form.track, selectedOSSP]);
-  function chooseTrack(track, aspiceVersion) {
-    setForm(p => ({ ...p, track, aspiceVersion: track === "aspice" ? (aspiceVersion || p.aspiceVersion || "both") : "" }));
+  function chooseTrack(track, aspiceVersion, aspiceCL) {
+    setForm(p => ({ ...p, track, aspiceVersion: track === "aspice" ? (aspiceVersion || p.aspiceVersion || "both") : "",
+      aspiceCL: track === "aspice" ? (aspiceCL || p.aspiceCL || "CL2") : "" }));
     // ASPICE: 규제 수준을 '엄격'으로 두어 SDLC 추천이 V-Model로 가도록 (사용자가 바꾼 값은 유지)
     if (track === "aspice" && sdlcFactors?.regulation === "보통" && !selectedSDLC) setSdlcFactors(f => ({ ...f, regulation: "엄격" }));
   }
   const showTrackPicker = !editing && !form.track && step === 0 && !form.name;
+  // 현재 단계가 시퀀스에 없으면(유형·능력수준 변경, 구버전 임시저장본) 다음 유효 단계로 이동
+  useEffect(() => { if (!seq.includes(step)) setStep(seq.find(i => i > step) ?? seq[seq.length - 1]); }, [seq.join(","), step]);
+  // ASPICE: 건너뛰는 SDLC·OSSP 값을 자동 지정, 목표 능력수준 → 테일러링 능력수준 값, 프로세스 범위 기본값
+  useEffect(() => {
+    if (!isAspiceTrack) return;
+    const vm = SDLC_MODELS.find(m => m.id === "v-model");
+    if (vm && selectedSDLC?.id !== "v-model") setSelectedSDLC(vm);
+    if (!selectedOSSP || getGuideForOSSP(selectedOSSP)?.id !== "aspice") {
+      const cands = [...OSSP_OPTIONS, ...(customOSSP || [])].filter(isAspiceOSSP);
+      const pick = cands[0] || { id: "aspice-std", label: "자동차 SW 개발 표준프로세스(ASPICE)", desc: "내장 ASPICE 표준 프로세스", phases: TAILORING_GUIDES.aspice.phaseOrder };
+      setSelectedOSSP({ ...pick, guideId: "aspice" });
+    }
+    setTailoring(t => {
+      const scale = clScale(cl);
+      if (t.scale === scale && t.aspiceScope) return t;
+      return { ...t, scale, aspiceScope: t.aspiceScope || aspiceScopeDefault() };
+    });
+  }, [isAspiceTrack, cl, selectedOSSP, selectedSDLC]);
   // 진입 시 임시저장본이 있으면 복원 안내. 이미 입력 중이면(폼에 값 있음) 안내 생략.
   const [draftInfo, setDraftInfo] = useState(() => {
     const d = loadDraft ? loadDraft() : null;
@@ -1479,7 +1531,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
     <div style={{ padding:"16px", maxWidth:960, margin:"0 auto" }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
         <button onClick={()=>nav("dashboard")} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:20 }}>←</button>
-        <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>{editing ? "프로젝트 수정" : "새 프로젝트 생성"}</h1><p style={{ fontSize:11, color:T.muted }}>STEP {step+1}/{steps.length} — {steps[step]}</p></div>
+        <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>{editing ? "프로젝트 수정" : "새 프로젝트 생성"}</h1><p style={{ fontSize:11, color:T.muted }}>STEP {pos+1}/{steps.length} — {steps[pos]}{isAspiceTrack ? ` · ASPICE ${cl}` : ""}</p></div>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           {editing && <Badge color={T.amber}>수정 모드</Badge>}
           {saveMsg && <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>✓ {saveMsg}</span>}
@@ -1508,14 +1560,15 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       {/* 진행 표시 */}
       <div style={{ display:"flex", gap:0, marginBottom:24, position:"relative" }}>
         <div style={{ position:"absolute", top:11, left:11, right:11, height:2, background:T.border, zIndex:0 }} />
-        <div style={{ position:"absolute", top:11, left:11, height:2, background:T.accent, zIndex:1, transition:"width .4s", width:`${(step/(steps.length-1))*(100-20/steps.length)}%` }} />
-        {steps.map((s,i)=>{
-          // 이동 허용: 과거/현재 단계는 항상, 미래 단계는 그 직전까지 모든 단계의 완료조건을 만족할 때만
-          const canJump = i <= step || canNext.slice(0, i).every(Boolean);
+        <div style={{ position:"absolute", top:11, left:11, height:2, background:T.accent, zIndex:1, transition:"width .4s", width:`${(pos/(steps.length-1))*(100-20/steps.length)}%` }} />
+        {steps.map((s,k)=>{
+          const i = seq[k];
+          // 이동 허용: 과거/현재 단계는 항상, 미래 단계는 그 직전까지(보이는 단계만) 모든 완료조건을 만족할 때만
+          const canJump = k <= pos || seq.slice(0, k).every(j => canNext[j]);
           return (
             <div key={s} onClick={()=>{ if(i!==step && canJump) setStep(i); }}
               style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4, position:"relative", zIndex:2, cursor:canJump?"pointer":"not-allowed" }}>
-              <div style={{ width:22, height:22, borderRadius:"50%", background:i<=step?T.accent:T.surface, border:`2px solid ${i<=step?T.accent:T.border}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:i<=step?"#fff":T.muted, transition:"all .15s" }}>{i<step?"✓":i+1}</div>
+              <div style={{ width:22, height:22, borderRadius:"50%", background:i<=step?T.accent:T.surface, border:`2px solid ${i<=step?T.accent:T.border}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:i<=step?"#fff":T.muted, transition:"all .15s" }}>{i<step?"✓":k+1}</div>
               <span style={{ fontSize:9, color:i===step?T.accent:T.muted, fontWeight:i===step?600:400, textAlign:"center" }}>{s}</span>
             </div>
           );
@@ -1523,19 +1576,20 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       </div>
       <Card style={{ padding:20, minHeight:300, marginBottom:16 }}>
         {step===0 && <StepInfo form={form} setForm={setForm} onChooseTrack={chooseTrack} osspChosen={!!selectedOSSP} />}
-        {step===1 && form.track === "aspice" && <div style={{ fontSize:11.5, color:T.accent, padding:"8px 12px", background:T.accent+"11", border:`1px solid ${T.accent}44`, borderRadius:8, marginBottom:12 }}>🚗 ASPICE 자동차 과제 — 단계별 검증·확인과 증적을 중시하므로 <b>V-Model</b>을 권장합니다 (규제 요인 '엄격' 반영).</div>}
         {step===1 && <StepSDLC factors={sdlcFactors} setFactors={setSdlcFactors} selected={selectedSDLC} setSelected={setSelectedSDLC} recommendation={sdlcRecommendation} recommending={recommending} genError={genError} onRecommend={onRecommendSDLC} />}
         {step===2 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} sdlc={selectedSDLC} track={form.track} />}
-        {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
+        {step===3 && isAspiceTrack && cl !== "CL3" && <AspiceScopeStep form={form} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} setOssp={setSelectedOSSP} customOSSP={customOSSP} />}
+        {step===3 && isAspiceTrack && cl === "CL3" && <AspiceProcessPanel form={form} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} setOssp={setSelectedOSSP} customOSSP={customOSSP} />}
+        {step===3 && !(isAspiceTrack && cl !== "CL3") && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} genProgress={genProgress} onRecommendPBS={onRecommendPBS} pbsNoAi={pbsNoAi} onTogglePbsNoAi={onTogglePbsNoAi} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} form={form} setForm={setForm} />}
         {step===6 && <StepDeliverables deliverablesData={deliverablesData} generating={generating} genProgress={genProgress} genError={genError} onGenerate={onGenerateDeliverables} form={form} wbs={wbsData} requirements={requirements} setRequirements={setRequirements} pdpCtx={{ ossp:selectedOSSP, sdlc:selectedSDLC, tailoring, pdp:pdpData, requirements }} />}
         {step===7 && <StepReview form={form} sdlc={selectedSDLC} ossp={selectedOSSP} tailoring={tailoring} pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} />}
       </Card>
       <div style={{ display:"flex", justifyContent:"space-between" }}>
-        <Btn variant="ghost" onClick={()=>step>0?setStep(s=>s-1):nav("dashboard")}>← 이전</Btn>
-        {step<steps.length-1
-          ? <Btn disabled={!canNext[step]} onClick={()=>setStep(s=>s+1)}>다음 →</Btn>
+        <Btn variant="ghost" onClick={()=>pos>0?setStep(seq[pos-1]):nav("dashboard")}>← 이전</Btn>
+        {pos<seq.length-1
+          ? <Btn disabled={!canNext[step]} onClick={()=>setStep(seq[pos+1])}>다음 →</Btn>
           : <Btn onClick={onFinish} disabled={saving}>{saving ? "저장 중…" : (editing ? "✓ 수정 저장" : "✓ 완료")}</Btn>}
       </div>
       </>)}
@@ -1546,6 +1600,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
 // ── 새 프로젝트 시작 화면: 과제 유형 선택 (기본정보 이전) ──
 function TrackPicker({ onChoose }) {
   const [ver, setVer] = useState("both");
+  const [cl, setCl] = useState("CL2");
   return (
     <Card style={{ padding:24, marginBottom:16 }}>
       <h2 style={{ fontSize:16, fontWeight:700, marginBottom:4 }}>어떤 과제인가요?</h2>
@@ -1566,16 +1621,102 @@ function TrackPicker({ onChoose }) {
                       style={{ fontSize:11, padding:"4px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${ver === v.id ? T.accent : T.border}`, background: ver === v.id ? T.accent : "transparent", color: ver === v.id ? "#fff" : T.muted }}>{v.label}</button>
                   ))}
                 </div>
+                <div style={{ fontSize:10.5, color:T.muted, margin:"10px 0 5px" }}>목표 능력수준 — CL1·CL2는 테일러링·PDP 단계 없이 진행합니다</div>
+                <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                  {ASPICE_CLS.map(c => (
+                    <button key={c.id} onClick={() => setCl(c.id)} title={c.desc}
+                      style={{ fontSize:11, padding:"4px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${cl === c.id ? T.accent : T.border}`, background: cl === c.id ? T.accent : "transparent", color: cl === c.id ? "#fff" : T.muted }}>{c.label}</button>
+                  ))}
+                </div>
+                <div style={{ fontSize:10.5, color:T.muted, marginTop:5 }}>{ASPICE_CLS.find(c => c.id === cl)?.desc}</div>
               </div>
             )}
             <div style={{ flex:1 }} />
-            <Btn onClick={() => onChoose(t.id, t.id === "aspice" ? ver : "")} style={{ fontSize:12.5, padding:"8px 14px", marginTop:6 }}>이 유형으로 시작 →</Btn>
+            <Btn onClick={() => onChoose(t.id, t.id === "aspice" ? ver : "", t.id === "aspice" ? cl : "")} style={{ fontSize:12.5, padding:"8px 14px", marginTop:6 }}>이 유형으로 시작 →</Btn>
           </div>
         ))}
       </div>
     </Card>
   );
 }
+// ── ASPICE: OSSP 자동 지정 + 적용 프로세스 범위 (CL1·2 '적용 범위' 단계, CL3 테일러링 단계 상단 공통) ──
+function AspiceProcessPanel({ form, tailoring, setTailoring, ossp, setOssp, customOSSP }) {
+  const cands = [...OSSP_OPTIONS, ...(customOSSP || [])].filter(isAspiceOSSP);
+  const scope = tailoring?.aspiceScope || aspiceScopeDefault();
+  const guide = TAILORING_GUIDES.aspice;
+  const scaleKey = { "(초)대형": "large", "중형": "medium", "소형": "small" }[clScale(aspiceClOf(form))];
+  const countOf = gid => guide.matrix.filter(d => aspiceRowGroup(d) === gid && d[scaleKey] && d[scaleKey] !== "-").length;
+  const toggle = gid => setTailoring(t => ({ ...t, aspiceScope: { ...(t.aspiceScope || aspiceScopeDefault()), [gid]: !(t.aspiceScope || aspiceScopeDefault())[gid] } }));
+  return (
+    <div style={{ marginBottom:16 }}>
+      <div style={{ fontSize:12, color:T.muted, marginBottom:10, padding:"8px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+        <span>조직 표준 프로세스:</span>
+        {cands.length > 1
+          ? <select value={ossp?.id || ""} onChange={e => { const o = cands.find(c => c.id === e.target.value); if (o) setOssp({ ...o, guideId: "aspice" }); }} style={{ fontSize:12, padding:"4px 8px", background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, fontFamily:"inherit" }}>
+              {cands.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+          : <b style={{ color:T.accent }}>{ossp?.label || "—"}</b>}
+        <span>· 생명주기 <b style={{ color:T.text }}>V-Model</b> (자동 지정)</span>
+        <span>· 목표 <b style={{ color:T.text }}>{aspiceClOf(form)}</b> · {(AE.ASPICE_VERSIONS.find(v => v.id === (form.aspiceVersion || "both")) || {}).label}</span>
+      </div>
+      <div style={{ fontSize:13, fontWeight:600, marginBottom:4 }}>적용 프로세스 범위</div>
+      <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>VDA 범위가 기본으로 선택되어 있습니다. 해당 없는 프로세스는 해제하면 그 산출물이 목록에서 빠집니다. 여기서 정한 SW·HW 범위는 V-모델 적용 범위의 기본값이 됩니다.</div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(300px, 1fr))", gap:6 }}>
+        {["MAN3","SUP","SYS","SWE","HWE","SPL","ACQ","VAL","REU","MAN5"].map(id => ASPICE_SCOPE_GROUPS.find(g => g.id === id)).map(g => {
+          const on = scope[g.id] !== false && (g.lock || !!scope[g.id]);
+          const n = countOf(g.id);
+          return (
+            <label key={g.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderRadius:8, border:`1px solid ${on ? T.accent+"88" : T.border}`, background: on ? T.accentGlow : T.bg, cursor: g.lock ? "default" : "pointer", fontSize:12, color: on ? T.text : T.muted }}>
+              <input type="checkbox" checked={on} disabled={g.lock} onChange={() => !g.lock && toggle(g.id)} />
+              <span style={{ flex:1 }}>{g.label}{g.lock && <span style={{ color:T.muted, fontSize:10.5 }}> · 필수</span>}</span>
+              <span style={{ fontSize:10.5, color:T.muted }}>{g.note || (n ? `산출물 ${n}종` : "")}</span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+// CL1·CL2 '적용 범위' 단계 — 테일러링·PDP 대신 프로세스 범위와 선택 산출물만 정한다
+function AspiceScopeStep({ form, tailoring, setTailoring, ossp, setOssp, customOSSP }) {
+  const cl = aspiceClOf(form);
+  const guide = TAILORING_GUIDES.aspice;
+  const list = classifyDeliverables(clScale(cl), "UML", guide, tailoring?.aspiceScope || aspiceScopeDefault());
+  const excluded = tailoring?.excluded || {};
+  const req = list.filter(d => d.required), opt = list.filter(d => !d.required);
+  const applied = req.length + opt.filter(d => !excluded[d.code]).length;
+  const toggleEx = code => setTailoring(t => ({ ...t, excluded: { ...(t.excluded || {}), [code]: !(t.excluded || {})[code] } }));
+  const byPhase = {}; list.forEach(d => { (byPhase[d.phase] = byPhase[d.phase] || []).push(d); });
+  return (
+    <div>
+      <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>적용 범위</h2>
+      <p style={{ fontSize:12, color:T.muted, marginBottom:12 }}>목표 {cl}은 조직 표준 프로세스 테일러링과 테일러링 결과서(PDP)가 필요하지 않습니다. 대상 프로세스와 산출물만 정하면 다음 단계에서 WBS를 만듭니다. {cl === "CL1" ? "CL1은 각 프로세스의 결과물(WP) 작성에 집중하며, 검토 기록 등 관리 증적은 선택(O)입니다." : "CL2는 표준 산출물을 전면 적용하며, 계획·모니터링(PA 2.1)과 산출물 검토·관리(PA 2.2) 증적을 포함합니다."}</p>
+      <AspiceProcessPanel form={form} tailoring={tailoring} setTailoring={setTailoring} ossp={ossp} setOssp={setOssp} customOSSP={customOSSP} />
+      <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:8 }}>
+        <div style={{ fontSize:13, fontWeight:600 }}>산출물</div>
+        <div style={{ fontSize:11, color:T.muted }}>적용 {applied}종 = 필수(M) {req.length} + 선택(O) {opt.length - opt.filter(d => excluded[d.code]).length}/{opt.length}{opt.length ? " — 선택 산출물은 눌러서 적용/제외" : ""}</div>
+      </div>
+      {(guide.phaseOrder || Object.keys(byPhase)).filter(ph => byPhase[ph]).map(ph => (
+        <div key={ph} style={{ marginBottom:8 }}>
+          <div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>{ph}</div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+            {byPhase[ph].map(d => {
+              const off = !d.required && excluded[d.code];
+              return (
+                <button key={d.code} onClick={() => !d.required && toggleEx(d.code)} title={d.note || ""}
+                  style={{ fontSize:11, padding:"4px 9px", borderRadius:6, fontFamily:"inherit", cursor: d.required ? "default" : "pointer", border:`1px solid ${d.required ? T.accent+"66" : off ? T.border : T.amber+"88"}`, background: off ? "transparent" : d.required ? T.accent+"14" : T.amber+"14", color: off ? T.muted : T.text, textDecoration: off ? "line-through" : "none" }}>
+                  {d.name} <span style={{ fontSize:9.5, color: d.required ? T.accent : T.amber }}>{d.required ? "M" : "O"}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <div style={{ fontSize:11, color:T.muted, marginTop:10, padding:"8px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>적용 프로세스 범위와 생명주기(V-Model)는 MAN.3 프로젝트 계획서에 기술합니다. 관리활동(품질보증·형상·변경 등) 작업은 표준 기준으로 WBS에 반영됩니다.</div>
+    </div>
+  );
+}
+
 // 기본정보 단계 상단: 과제 유형 확인·변경
 function TrackField({ form, onChooseTrack, osspChosen }) {
   const [warn, setWarn] = useState(false);
@@ -1592,8 +1733,14 @@ function TrackField({ form, onChooseTrack, osspChosen }) {
             {AE.ASPICE_VERSIONS.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
           </select>
         )}
+        {form.track === "aspice" && (
+          <select value={aspiceClOf(form)} onChange={e => { onChooseTrack("aspice", form.aspiceVersion, e.target.value); setWarn(true); }} title="목표 능력수준" style={{ fontSize:11.5, padding:"5px 8px", background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, fontFamily:"inherit" }}>
+            {ASPICE_CLS.map(c => <option key={c.id} value={c.id}>목표 {c.label} — {c.desc}</option>)}
+          </select>
+        )}
       </div>
-      {warn && <div style={{ fontSize:11, color:T.amber, marginTop:6 }}>⚠ 과제 유형이 바뀌면 적용되는 테일러링 가이드가 달라집니다. 이미 진행한 OSSP·테일러링·PDP 단계를 다시 확인해 주세요. 작성한 요구사항과 V-모델 데이터는 그대로 보존됩니다.</div>}
+      {form.track === "aspice" && <div style={{ fontSize:10.5, color:T.muted, marginTop:6 }}>진행 단계: {aspiceClOf(form) === "CL3" ? "기본정보 → 테일러링 → PDP → WBS → 산출물 → 완료" : "기본정보 → 적용 범위 → WBS → 산출물 → 완료 (테일러링·PDP 불필요)"}</div>}
+      {warn && <div style={{ fontSize:11, color:T.amber, marginTop:6 }}>⚠ 과제 유형·능력수준이 바뀌면 적용되는 테일러링 가이드와 진행 단계가 달라집니다. 이미 진행한 OSSP·테일러링·PDP 단계를 다시 확인해 주세요. 작성한 요구사항과 V-모델 데이터는 그대로 보존됩니다.</div>}
     </div>
   );
 }
@@ -2144,8 +2291,13 @@ function StepOSSP({ selected, setSelected, customOSSP=[], sdlc, track }) {
 }
 
 // 규모/설계방식/방법론 가이드에 따라 산출물을 필수(M)/선택(O)/제외로 분류
-function classifyDeliverables(scale, method, guide) {
+function classifyDeliverables(scale, method, guide, aspiceScope) {
   const g = guide || TAILORING_GUIDES.ie;
+  const inScope = d => {
+    if (g.id !== "aspice" || !aspiceScope) return true;
+    const grp = aspiceRowGroup(d);
+    return !grp || aspiceScope[grp] !== false;
+  };
   const scaleKey = scale === "(초)대형" ? "large" : scale === "중형" ? "medium" : "small";
   const result = [];
   for (const d of g.matrix) {
@@ -2153,6 +2305,7 @@ function classifyDeliverables(scale, method, guide) {
     if (g.hasDesignMethod && d.method !== "공통" && d.method !== method) continue;
     const mark = d[scaleKey];
     if (!mark || mark === "-") continue;
+    if (!inScope(d)) continue;   // ASPICE: 적용 범위에서 뺀 프로세스의 산출물 제외
     result.push({ ...d, required: mark === "M" });
   }
   return result;
@@ -2389,7 +2542,7 @@ function MethodologyTailoring({ tailoring, setTailoring, ossp }) {
   const method = tailoring.method || "UML";
   const excluded = tailoring.excluded || {};   // { code: true } = 사용자가 제외한 선택 산출물
 
-  const list = classifyDeliverables(scale, method, guide);
+  const list = classifyDeliverables(scale, method, guide, tailoring?.aspiceScope);
   const required = list.filter(d => d.required);
   const optional = list.filter(d => !d.required);
   const includedOptional = optional.filter(d => !excluded[d.code]);
@@ -2421,7 +2574,12 @@ function MethodologyTailoring({ tailoring, setTailoring, ossp }) {
       {/* 프로젝트 규모 */}
       <div style={{ marginBottom:14 }}>
         <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>{guide.scaleTitle || "프로젝트 규모"}</div>
-        <div style={{ display:"flex", gap:8 }}>
+        {guide.id === "aspice" && (
+          <div style={{ fontSize:12, color:T.text, padding:"8px 12px", background:T.bg, border:`1px solid ${T.accent}55`, borderRadius:8 }}>
+            {guide.scaleOptions.find(o => o.value === scale)?.label || scale} <span style={{ color:T.muted, fontSize:11 }}>— 목표 능력수준은 기본정보 단계에서 변경합니다</span>
+          </div>
+        )}
+        <div style={{ display: guide.id === "aspice" ? "none" : "flex", gap:8 }}>
           {guide.scaleOptions.map(o=>(
             <button key={o.value} onClick={()=>setScale(o.value)}
               style={{ flex:1, padding:"8px 0", borderRadius:8, fontSize:12, fontFamily:"inherit",
@@ -2517,7 +2675,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
   const PHASE_ORDER = guide.phaseOrder;
 
   // 가이드 기준 전체 산출물 — 테일러링결과서 양식에 따라 미적용 산출물도 함께 표시
-  const list = classifyDeliverables(scale, method, guide);
+  const list = classifyDeliverables(scale, method, guide, tailoring?.aspiceScope);
   const grouped = {};
   list.forEach(d => { (grouped[d.phase] = grouped[d.phase] || []).push(d); });
 
@@ -3060,7 +3218,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
     const ov = notes[`${d.phase}:${d.code}`]?.applied;
     return ov !== undefined ? ov : !excluded[d.code];
   };
-  const fbs = classifyDeliverables(scale, method, guide).filter(isApplied);
+  const fbs = classifyDeliverables(scale, method, guide, tailoring?.aspiceScope).filter(isApplied);
   const fbsByPhase = {};
   fbs.forEach(d => { (fbsByPhase[d.phase] = fbsByPhase[d.phase] || []).push(d); });
   const phases = guide.phaseOrder.filter(ph => fbsByPhase[ph]?.length);
@@ -4533,7 +4691,7 @@ function makePdpDocx(meta, ctx, phase) {
   const excluded = tailoring.excluded || {};
   const notes = tailoring.notes || {};
   const scaleLabel = guide.scaleOptions?.find(o => o.value === scale)?.label || scale;
-  const list = classifyDeliverables(scale, method, guide);
+  const list = classifyDeliverables(scale, method, guide, tailoring?.aspiceScope);
   const isApplied = (d) => {
     if (d.required) return true;
     const ov = notes[`${d.phase}:${d.code}`]?.applied;
@@ -7699,7 +7857,7 @@ function AeFlags({ r }) {
   return f.length ? <span title={f.map(x => x.msg).join("\n")} style={{ fontSize: 9.5, color: T.amber, whiteSpace: "nowrap" }}>⚠ {f.length}</span> : <span style={{ fontSize: 9.5, color: T.green }}>✓</span>;
 }
 
-function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, ossp, initTab }) {
+function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, ossp, initTab, tailoring }) {
   const [items, setItems] = useState(() => (requirements?.items || []).map(x => ({ ...x })));
   const [model, setModel] = useState(() => {
     // 기존 연결의 기준선을 현재 저장본 내용으로 먼저 등록한 뒤 확정 요구로 동기화 (변경 감지)
@@ -7707,6 +7865,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     if (!requirements?.aspice) {
       m.useAI = !(() => { try { return localStorage.getItem(PBS_NOAI_KEY) === "1"; } catch { return false; } })();
       if (form?.aspiceVersion && AE.ASPICE_VERSIONS.some(v => v.id === form.aspiceVersion)) m.version = form.aspiceVersion;   // 시작 화면에서 고른 적용 기준
+      if (tailoring?.aspiceScope) { m.scope.SW = tailoring.aspiceScope.SWE !== false; m.scope.HW = !!tailoring.aspiceScope.HWE; }   // 적용 범위 단계의 SW·HW 범위
     }
     m.reqs.SYS = AE.syncSysReqs(requirements?.items || [], m.reqs.SYS);
     return m;
@@ -8525,7 +8684,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
         </div>
       )}
       {reqModal && <ReqGenModal onClose={()=>setReqModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} />}
-      {aeModal && <AspiceEngModal onClose={()=>setAeModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} initTab={aeInitTab} />}
+      {aeModal && <AspiceEngModal onClose={()=>setAeModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} initTab={aeInitTab} tailoring={pdpCtx?.tailoring} />}
     </div>
   );
 }
@@ -8571,7 +8730,7 @@ function PdpDocView({ project }) {
   const excluded = tailoring.excluded || {};
   const notes = tailoring.notes || {};
   const scaleLabel = guide.scaleOptions?.find(o=>o.value===scale)?.label || scale;
-  const list = classifyDeliverables(scale, method, guide);
+  const list = classifyDeliverables(scale, method, guide, tailoring?.aspiceScope);
   const isApplied = (d) => {
     if (d.required) return true;   // 필수(M) 산출물은 항상 적용
     const ov = notes[`${d.phase}:${d.code}`]?.applied;
@@ -8813,7 +8972,7 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
         }
       </div>
       <div style={{ display:"flex", gap:3, marginBottom:16, background:T.surface, borderRadius:10, padding:3, border:`1px solid ${T.border}` }}>
-        {[["overview","개요"],["pdp","PDP"],["wbs","WBS"],["deliverables","산출물"]].map(([id,label])=>(
+        {[["overview","개요"],["pdp","PDP"],["wbs","WBS"],["deliverables","산출물"]].filter(([id]) => !(id === "pdp" && project.tailoring?.track === "aspice" && project.tailoring?.aspiceCL && project.tailoring.aspiceCL !== "CL3")).map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{ flex:1, padding:"7px 0", borderRadius:7, fontSize:12, fontWeight:tab===id?700:400, background:tab===id?T.accent:"transparent", color:tab===id?"#fff":T.muted, border:"none", cursor:"pointer", fontFamily:"inherit" }}>{label}</button>
         ))}
       </div>
