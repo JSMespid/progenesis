@@ -1291,3 +1291,44 @@ export function unitsFromHeader(model, parsed, compId) {
   else out.push({ id: nextId(UNIT_PREFIX, out), reqs: [], ...base });
   return out;
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11) 커버리지 상세 — 각 지표의 비율과 '빠진 항목' 목록 (화면의 "빠짐 N건" 버튼용)
+//    항목: { key, group: req|verif, q: 쉬운 질문, sub: 연결·프로세스, pct, missing:[id], total, tab, level?, kind }
+// ═══════════════════════════════════════════════════════════════════════════
+export function coverageDetail(model) {
+  const m = normalizeModel(model);
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : null);
+  const out = [];
+  const push = (o) => out.push({ ...o, covered: o.total - o.missing.length, pct: pct(o.total - o.missing.length, o.total) });
+  if (m.reqs.STK.length) {
+    const cov = new Set(m.reqs.SYS.flatMap(r => r.parents || []));
+    push({ key: "stkDerive", group: "req", q: "고객(OEM) 요구가 시스템 요구로 분석됐나", sub: "이해관계자 요구 → 시스템 요구 · SYS.1→SYS.2", tab: "req", total: m.reqs.STK.length, missing: m.reqs.STK.filter(k => !cov.has(k.id)).map(k => k.id) });
+  }
+  const ci = new Set(m.comps.SYS.map(c => c.id));
+  const sysP = m.reqs.SYS.filter(r => r?.reqClass !== "project");
+  push({ key: "sysAlloc", group: "req", q: "시스템 요구마다 담당 요소가 정해졌나", sub: "시스템 요구 → 시스템 요소 · SYS.3", tab: "SYS", total: sysP.length, missing: sysP.filter(r => !(m.alloc.SYS[r.id] || []).some(c => ci.has(c))).map(r => r.id) });
+  ["SW", "HW"].forEach(lv => {
+    if (!m.scope[lv]) return;
+    const parents = parentsForLevel(m, lv);
+    const cov = new Set(m.reqs[lv].flatMap(r => r.parents || []));
+    push({ key: lv.toLowerCase() + "Derive", group: "req", q: `${lv} 담당 시스템 요구가 ${lv} 요구로 내려갔나`, sub: `시스템 요구 → ${lv} 요구 · ${LEVELS[lv].reqProc}`, tab: lv, total: parents.length, missing: parents.filter(p => !cov.has(p.id)).map(p => p.id) });
+    const lci = new Set(m.comps[lv].map(c => c.id));
+    push({ key: lv.toLowerCase() + "Alloc", group: "req", q: `${lv} 요구마다 담당 컴포넌트가 정해졌나`, sub: `${lv} 요구 → ${LEVELS[lv].compLabel} · ${LEVELS[lv].archProc}`, tab: lv, total: m.reqs[lv].length, missing: m.reqs[lv].filter(r => !(m.alloc[lv][r.id] || []).some(c => lci.has(c))).map(r => r.id) });
+    if (lv === "SW" && (m.units.SW || []).length) {
+      const cu = new Set(m.units.SW.flatMap(u => u.reqs || []));
+      push({ key: "swUnit", group: "req", q: "SW 요구가 유닛까지 내려갔나", sub: "SW 요구 → 유닛 · SWE.3", tab: "SW", total: m.reqs.SW.length, missing: m.reqs.SW.filter(r => !cu.has(r.id)).map(r => r.id) });
+    }
+  });
+  // 검증 — V 오른쪽 아래에서 위로 (유닛 → SW → 시스템)
+  const ORDER = ["SWE4", "SWE5", "SWE6", "HWE3", "HWE4", "SYS4", "SYS5"];
+  ORDER.forEach(L => {
+    const tl = TEST_LEVELS[L]; if (!tl || !m.scope[tl.level]) return;
+    const targets = tl.targetKind === "req" ? m.reqs[tl.level] : tl.targetKind === "unit" ? (m.units.SW || []) : (m.interfaces[tl.level].length ? m.interfaces[tl.level] : m.comps[tl.level]);
+    const cov = new Set(m.tests.filter(t => t.level === L).flatMap(t => t.targets || []));
+    const what = tl.targetKind === "req" ? `${LEVELS[tl.level].label} 요구` : tl.targetKind === "unit" ? "SW 유닛" : `${LEVELS[tl.level].label} 통합 인터페이스`;
+    push({ key: "t" + L, group: "verif", kind: tl.targetKind, q: `${what}마다 ${tl.targetKind === "if" ? "통합 시험" : "시험"}이 있나`, sub: `${what} → ${tl.label} · ${tl.proc}`, tab: "verif", level: L, total: targets.length, missing: targets.filter(x => !cov.has(x.id)).map(x => x.id) });
+  });
+  return out;
+}

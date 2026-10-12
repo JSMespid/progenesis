@@ -7741,7 +7741,7 @@ function packReqSource(text, files) {
   });
   return { text: String(text || "").slice(0, SRC_FILE_CAP), files: out, updatedAt: new Date().toISOString() };
 }
-function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, embedded = false, onEmbeddedConfirm, previewAspice, seedItems, onSourceChange }) {
+function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, embedded = false, onEmbeddedConfirm, previewAspice, seedItems, onSourceChange, focusIds = null }) {
   // OSSP별 문구·AI 역할 — 가이드에 reqGen이 없으면 기존(정보공학) 문구 사용
   const RG = getGuideForOSSP(ossp || {})?.reqGen || {};
   const QSTD = RG.qualityStd || { name: "ISO 9126", chars: "기능성/신뢰성/사용성/효율성/유지보수성/이식성" };
@@ -7980,7 +7980,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                 <div style={{ display:"grid", gridTemplateColumns:"72px 1fr 90px 92px 90px 84px 44px 24px", gap:6, fontSize:10, color:T.muted, padding:"0 4px" }}>
                   <span>ID</span><span>요구 문장 (원문 발췌)</span><span>출처</span><span>주체</span><span>유형</span><span>합의</span><span>SYS</span><span></span>
                 </div>
-                {stk.map((k, i) => (
+                {stk.map((k, i) => (!focusIds || !stk.some(x => focusIds.has(x.id)) || focusIds.has(k.id)) && (
                   <div key={k.id || i} style={{ display:"grid", gridTemplateColumns:"72px 1fr 90px 92px 90px 84px 44px 24px", gap:6, alignItems:"center", background:T.bg, border:`1px solid ${sysCount[k.id] ? T.border : T.amber + "66"}`, borderRadius:8, padding:"5px 8px" }}>
                     <span style={{ fontFamily:"monospace", fontSize:10, color:T.accent }}>{k.id}</span>
                     <input value={k.text} onChange={e=>updS(i,"text",e.target.value)} placeholder="원문 그대로" style={inp} />
@@ -8005,7 +8005,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                 <div style={{ display:"grid", gridTemplateColumns:"60px 78px 1fr 92px 52px 150px 1fr 44px 24px", gap:6, fontSize:10, color:T.muted, padding:"0 4px" }}>
                   <span>ID</span><span>유형</span><span>요구사항명</span><span>출처</span><span>우선순위</span><span>기능 모듈</span><span>개요</span><span></span><span></span>
                 </div>
-                {items.map((it, i) => (
+                {items.map((it, i) => (!focusIds || !items.some(x => focusIds.has(x.id)) || focusIds.has(it.id)) && (
                   <div key={i} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"6px 8px" }}>
                     <div style={{ display:"grid", gridTemplateColumns:"60px 78px 1fr 92px 52px 150px 1fr 44px 24px", gap:6, alignItems:"center" }}>
                       <span style={{ fontFamily:"monospace", fontSize:10, color:T.accent }}>{it.id}</span>
@@ -8142,6 +8142,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [dbc, setDbc] = useState(null);        // { fileName, parsed, own }
   const [tplGroup, setTplGroup] = useState("SYS_RS");
   const [vFilter, setVFilter] = useState("SYS5");
+  // 커버리지 "빠짐 N건" → 해당 탭으로 이동해 미연결 항목만 표시 ({ tab, level?, ids:Set, q })
+  const [focus, setFocus] = useState(null);
+  const focusOn = tab === focus?.tab ? focus : null;
+  const applyFocus = (list) => (focusOn && list.some(x => focusOn.ids.has(x.id))) ? list.filter(x => focusOn.ids.has(x.id)) : list;
+  const goMissing = (c) => { setFocus({ tab: c.tab, level: c.level || null, ids: new Set(c.missing), q: c.q, n: c.missing.length }); setTab(c.tab); if (c.level) setVFilter(c.level); };
   const [guides, setGuides] = useState([]);
   useEffect(() => { fetchWritingGuides().then(gs => setGuides(gs.filter(g => g.is_active !== false))).catch(() => {}); }, []);
   const guideBlock = buildGuideBlock(guides);
@@ -8470,9 +8475,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   );
   const ReqList = ({ lv }) => {
     const rs = model.reqs[lv];
+    const shown = new Set(applyFocus(rs).map(r => r.id));
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        {rs.map((r, i) => (
+        {rs.map((r, i) => shown.has(r.id) && (
           <div key={r.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", background: T.surface }}>
             <div style={{ display: "grid", gridTemplateColumns: "74px 1fr 104px 96px 30px 40px", gap: 6, alignItems: "center" }}>
               <span style={{ fontFamily: "monospace", fontSize: 10, color: T.accent }}>{r.id}</span>
@@ -8566,7 +8572,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         </div>
         <div style={{ display: "flex", gap: 3, padding: "8px 18px 0", flexShrink: 0, flexWrap: "wrap" }}>
           {AE_TABS.filter(([id]) => !(id === "SW" && !model.scope.SW) && !(id === "HW" && !model.scope.HW)).map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id)} style={{ padding: "6px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: tab === id ? 700 : 400, background: tab === id ? T.accent : "transparent", color: tab === id ? "#fff" : T.muted, border: `1px solid ${tab === id ? T.accent : T.border}`, cursor: "pointer", fontFamily: "inherit" }}>
+            <button key={id} onClick={() => { setTab(id); setFocus(null); }} style={{ padding: "6px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: tab === id ? 700 : 400, background: tab === id ? T.accent : "transparent", color: tab === id ? "#fff" : T.muted, border: `1px solid ${tab === id ? T.accent : T.border}`, cursor: "pointer", fontFamily: "inherit" }}>
               {label}{id === "trace" && errCount ? ` (${errCount})` : ""}</button>
           ))}
         </div>
@@ -8580,12 +8586,17 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               <span style={{ flex: 1 }}>상위 요구 변경으로 검토가 필요한 추적 연결이 있습니다 — 변경 검토 {lstat.suspect}건{lstat.invalid ? ` · 무효(조치 필요) ${lstat.invalid}건` : ""}{lstat.orphan ? ` · 고아 연결 ${lstat.orphan}건` : ""}. 하위 문서는 자동으로 수정되지 않습니다.</span>
               <button onClick={() => setTab("trace")} style={{ ...small, color: T.amber, borderColor: T.amber + "88" }}>변경 영향 검토</button>
             </div>)}
+          {focusOn && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11.5, padding: "7px 10px", background: T.accent + "11", border: `1px solid ${T.accent}55`, borderRadius: 8, marginBottom: 10 }}>
+              <span style={{ flex: 1 }}>🔎 <b>"{focusOn.q}"</b>에서 빠진 {focusOn.n}건만 표시 중{(() => { const ids = [...focusOn.ids]; return ids.length <= 12 ? ` — ${ids.join(", ")}` : ` — ${ids.slice(0, 12).join(", ")} 외 ${ids.length - 12}건`; })()}</span>
+              <button onClick={() => setFocus(null)} style={small}>전체 보기</button>
+            </div>)}
           {!model.reqs.SYS.length && tab !== "req" && <div style={{ color: T.amber, fontSize: 11.5, padding: 9, background: T.amber + "11", borderRadius: 8, marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}><span style={{ flex: 1 }}>확정된 시스템 요구사항이 없습니다. ① 요구 도출·명세 탭에서 SYS.2를 먼저 확정하거나, ② 설정 탭에서 DBC를 가져오세요.</span><button onClick={() => setTab("req")} style={{ ...small, color: T.amber, borderColor: T.amber + "88" }}>① 탭으로</button></div>}
 
           {/* ① 요구 도출·명세 (SYS.1·2) — 탭을 옮겨도 작성 중인 내용이 유지되도록 항상 마운트하고 숨김 처리 */}
           <div style={{ display: tab === "req" ? "block" : "none" }}>
             <ReqGenModal key={itemsVer} embedded form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={ossp}
-              previewAspice={model} seedItems={itemsVer ? items : undefined} onEmbeddedConfirm={confirmReqs} onClose={() => {}} onSourceChange={src => { srcRef.current = src; }} />
+              previewAspice={model} seedItems={itemsVer ? items : undefined} onEmbeddedConfirm={confirmReqs} onClose={() => {}} onSourceChange={src => { srcRef.current = src; }} focusIds={focusOn ? focusOn.ids : null} />
           </div>
 
           {tab === "setup" && (<>
@@ -8724,7 +8735,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           {tab === "verif" && (() => {
             const lvKeys = Object.keys(AE.TEST_LEVELS).filter(k => model.scope[AE.TEST_LEVELS[k].level]);
             const cur = lvKeys.includes(vFilter) ? vFilter : lvKeys[0];
-            const ts = model.tests.filter(t => t.level === cur);
+            const ts = model.tests.filter(t => t.level === cur).filter(t => !focusOn || focusOn.level !== cur || (t.targets || []).some(x => focusOn.ids.has(x)));
             return (<>
               <div data-aesec="verif-bar" style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
                 {lvKeys.map(k => <button key={k} onClick={() => setVFilter(k)} style={{ ...small, padding: "5px 10px", color: cur === k ? "#fff" : T.muted, background: cur === k ? T.accent : "transparent", borderColor: cur === k ? T.accent : T.border }}>{AE.TEST_LEVELS[k].proc} {AE.TEST_LEVELS[k].label} ({model.tests.filter(t => t.level === k).length})</button>)}
@@ -8824,16 +8835,35 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   </div>)}
               </AeSec>); })()}
             <AeSec title="추적·검증 커버리지" right={<Btn onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} style={{ fontSize: 11, padding: "4px 12px" }}>📦 V-모델 산출물 ZIP</Btn>}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                {model.reqs.STK.length > 0 && pctBar("이해관계자 요구(STK) → SYS 도출", metrics.stkDerive)}
-                {pctBar("SYS 요구 → 요소 할당", metrics.sysAlloc)}
-                {model.scope.SW && model.units.SW.length > 0 && pctBar("SW 요구 → 유닛 (SWE.3)", metrics.swUnit)}
-                {model.scope.SW && pctBar("SYS → SW 요구 파생", metrics.swDerive)}
-                {model.scope.SW && pctBar("SW 요구 → 컴포넌트", metrics.swAlloc)}
-                {model.scope.HW && pctBar("SYS → HW 요구 파생", metrics.hwDerive)}
-                {model.scope.HW && pctBar("HW 요구 → 컴포넌트", metrics.hwAlloc)}
-                {Object.keys(AE.TEST_LEVELS).filter(k => model.scope[AE.TEST_LEVELS[k].level]).map(k => pctBar(`${AE.TEST_LEVELS[k].proc} 검증 커버리지`, metrics["t" + k]))}
-              </div>
+              {(() => {
+                const cov = AE.coverageDetail(model);
+                const color = v => v == null ? T.muted : v === 100 ? T.green : v >= 70 ? T.amber : T.red;
+                const row = (c) => (
+                  <div key={c.key} style={{ display: "grid", gridTemplateColumns: "1fr 180px 44px 96px", gap: 10, alignItems: "center", padding: "6px 0", borderTop: `1px solid ${T.border}` }}>
+                    <div><div style={{ fontSize: 11.5, color: T.text }}>{c.q}</div><div style={{ fontSize: 10, color: T.muted }}>{c.sub}{c.total ? ` · ${c.covered}/${c.total}` : ""}</div></div>
+                    <div style={{ height: 6, background: T.subtle, borderRadius: 3 }}><div style={{ width: `${c.pct ?? 0}%`, height: 6, borderRadius: 3, background: color(c.pct) }} /></div>
+                    <span style={{ textAlign: "right", fontSize: 11, color: c.pct == null ? T.muted : T.text }}>{c.pct == null ? "-" : `${c.pct}%`}</span>
+                    {c.missing.length
+                      ? <button onClick={() => goMissing(c)} style={{ ...small, color: color(c.pct), borderColor: color(c.pct) + "88" }}>빠짐 {c.missing.length}건 →</button>
+                      : <span style={{ fontSize: 10, color: c.total ? T.green : T.muted, textAlign: "center" }}>{c.total ? "✓ 빠짐 없음" : "대상 없음"}</span>}
+                  </div>);
+                // 검증: 같은 성격(요구 시험 / 통합 시험 / 유닛)끼리 모두 100%면 한 줄로 합쳐 표시
+                const verif = cov.filter(c => c.group === "verif");
+                const merged = []; const used = new Set();
+                [["req", "요구마다 시험이 있나", "시스템·SW·HW 요구 시험"], ["if", "통합 인터페이스마다 통합 시험이 있나", "시스템·SW·HW 통합 시험"]].forEach(([kind, q, sub]) => {
+                  const g = verif.filter(c => c.kind === kind && c.total);
+                  if (g.length >= 2 && g.every(c => c.pct === 100)) { g.forEach(c => used.add(c.key)); merged.push({ key: "m" + kind, q, sub: `${sub} · ${g.map(c => c.level && AE.TEST_LEVELS[c.level].proc).join(" · ")}`, pct: 100, total: g.reduce((a, c) => a + c.total, 0), covered: g.reduce((a, c) => a + c.total, 0), missing: [] }); }
+                });
+                const verifRows = [...merged, ...verif.filter(c => !used.has(c.key))];
+                return (<div>
+                  <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>각 줄은 <b style={{ color: T.text }}>왼쪽 항목 중 오른쪽으로 연결된 비율</b>입니다. 100%가 아니면 빠진 항목이 있고, "빠짐 N건"을 누르면 그 탭에서 빠진 항목만 보여줍니다.</div>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: T.muted, margin: "4px 0 2px" }}>↘ 요구 분석 — V의 왼쪽 위에서 아래로</div>
+                  {cov.filter(c => c.group === "req").map(row)}
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: T.muted, margin: "12px 0 2px" }}>↗ 검증 — V의 오른쪽 아래에서 위로</div>
+                  {verifRows.map(row)}
+                  <div style={{ fontSize: 10, color: T.muted, marginTop: 8, borderTop: `1px solid ${T.border}`, paddingTop: 6 }}>색 기준: <span style={{ color: T.red }}>■</span> 70% 미만 · <span style={{ color: T.amber }}>■</span> 100% 미만 · <span style={{ color: T.green }}>■</span> 100% · HW 항목은 적용 범위에서 HW를 켰을 때만 표시</div>
+                </div>);
+              })()}
             </AeSec>
             <AeSec title={`일관성·양방향 추적성 점검 — 오류 ${errCount} · 경고 ${findings.filter(f => f.sev === "warn").length} · 정보 ${findings.filter(f => f.sev === "info").length}`}>
               {findings.map((f, i) => (
