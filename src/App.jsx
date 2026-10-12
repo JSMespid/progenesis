@@ -8204,7 +8204,15 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           </>)}
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px", borderTop: `1px solid ${T.border}`, flexShrink: 0, gap: 8 }}>
-          <span style={{ fontSize: 10.5, color: T.muted }}>SYS {model.reqs.SYS.length} · 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW ${model.reqs.SW.length}/${model.comps.SW.length}` : ""}{model.scope.HW ? ` · HW ${model.reqs.HW.length}/${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}{requirements?.aspice?.updatedAt ? ` · 저장본 ${String(requirements.aspice.updatedAt).slice(0, 10)}` : ""}</span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 10.5, color: T.muted }}>SYS {model.reqs.SYS.length} · 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW ${model.reqs.SW.length}/${model.comps.SW.length}` : ""}{model.scope.HW ? ` · HW ${model.reqs.HW.length}/${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}{requirements?.aspice?.updatedAt ? ` · 저장본 ${String(requirements.aspice.updatedAt).slice(0, 10)}` : ""}</div>
+            <div style={{ fontSize: 9.5, color: T.muted, opacity: 0.8, marginTop: 2 }}>SYS = 시스템 요구 수 · 요소 = 시스템 구성요소 수 · SW/HW = 하위 요구 수 / 컴포넌트 수 · 검증 수단 = 시험 항목(TC) 수</div>
+            {(() => {
+              // 규칙 기반 상속 초안(시스템 요구를 그대로 복사한 하위 요구)이 남아 있으면 한 줄로 안내
+              const inh = ["SW", "HW"].filter(lv => model.scope[lv]).map(lv => [lv, model.reqs[lv].filter(r => /관점 구체화 필요/.test(r.text || "")).length]).filter(([, n]) => n > 0);
+              return inh.length ? <div style={{ fontSize: 9.5, color: T.amber, marginTop: 2 }}>⚠ {inh.map(([lv, n]) => `${lv} ${n}건`).join(" · ")}이 시스템 요구를 그대로 복사한 초안입니다 — 요소를 실제 구성(HW/SW)으로 나누고 담당 요소에만 할당한 뒤 다시 파생하세요.</div> : null;
+            })()}
+          </div>
           <div style={{ display: "flex", gap: 8 }}>
             <Btn variant="outline" onClick={onClose} style={{ fontSize: 12, padding: "7px 14px" }}>취소</Btn>
             <Btn onClick={save} disabled={busy} style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
