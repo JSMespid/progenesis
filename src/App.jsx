@@ -264,6 +264,30 @@ function decodeSession(token) {
 
 function getToken() { try { return localStorage.getItem(AUTH_KEY) || ""; } catch { return ""; } }
 
+// ── 전역 fetch 래퍼: /api/* 호출에 세션 토큰(Authorization: Bearer)을 자동으로 붙인다 ──
+// 모든 API 엔드포인트가 세션 검증을 요구하므로, 개별 fetch 호출을 고치지 않아도 인증 헤더가 전달되게 한다.
+// 401(UNAUTHENTICATED)이 오면 'spiderqa:unauth' 이벤트를 발생시켜 화면 안 재인증 카드를 띄운다 (로그아웃시키지 않음).
+(function installAuthFetch() {
+  if (typeof window === "undefined" || !window.fetch || window.fetch.__spiderAuth) return;
+  const orig = window.fetch.bind(window);
+  const wrapped = async (input, init = {}) => {
+    let url = "";
+    try { url = typeof input === "string" ? input : (input && input.url) || ""; } catch { url = ""; }
+    const isApi = /^\/api\//.test(url) || (typeof location !== "undefined" && url.startsWith(location.origin + "/api/"));
+    if (!isApi) return orig(input, init);
+    const headers = new Headers(init.headers || (typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined));
+    const t = getToken();
+    if (t && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${t}`);
+    const res = await orig(input, { ...init, headers });
+    if (res.status === 401 && !/\/api\/login/.test(url)) {
+      try { window.dispatchEvent(new CustomEvent("spiderqa:unauth")); } catch { /* 무시 */ }
+    }
+    return res;
+  };
+  wrapped.__spiderAuth = true;
+  window.fetch = wrapped;
+})();
+
 // 인증 헤더를 붙여 호출하고 JSON을 반환. 실패 시 서버 메시지를 담은 Error를 throw.
 async function apiFetch(url, opts = {}) {
   const headers = { ...(opts.headers || {}) };
@@ -821,6 +845,12 @@ export default function SpiderQaAgent() {
     })();
   }, []);
 
+  // 어떤 API든 401이 오면 세션을 '재인증 필요'로 표시 (전역 fetch 래퍼가 발생시키는 이벤트)
+  useEffect(() => {
+    const onUnauth = () => setSession(p => (p && p.needsReauth ? p : { ...(p || {}), needsReauth: true }));
+    window.addEventListener("spiderqa:unauth", onUnauth);
+    return () => window.removeEventListener("spiderqa:unauth", onUnauth);
+  }, []);
   // 화면 안에서 재로그인 (전체 로그아웃 없이 세션만 교체)
   const reauth = (token) => { try { localStorage.setItem(AUTH_KEY, token || ""); } catch {} setSession(decodeSession(token)); setSettingsErr(null); };
 
@@ -4855,8 +4885,26 @@ const REQ_TYPE_PREFIX = { "기능": "RF", "비기능": "RN", "인터페이스": 
 // ── 요구사항 ID 불변성: 한 번 발급·확정된 ID는 다른 요구에 다시 쓰지 않는다 ──
 // requirements.idRegistry = { max: { RF: n, RN: n, ... }, retired: [폐기된 ID] } — 프로젝트 JSON에 보관(스키마 변경 없음)
 function reqIdBump(floor, id) {
-  const m = /^([A-Z]{2})(\d{4})$/.exec(String(id || ""));
+  const m = /^([A-Z]{2,3})-?(\d{4})$/.exec(String(id || ""));
   if (m) floor[m[1]] = Math.max(floor[m[1]] || 0, Number(m[2]));
+}
+// 이해관계자 요구(STK) ID 채번 — STK-0001 형식, 레지스트리 기준(폐기 번호 재사용 금지)
+function assignStkIds(items, floor = {}) {
+  let n = floor.STK || 0;
+  items.forEach(it => { const m = /^STK-?(\d{4})$/.exec(String(it.id || "")); if (m) n = Math.max(n, Number(m[1])); });
+  return items.map(it => it.id ? it : { ...it, id: `STK-${String(++n).padStart(4, "0")}` });
+}
+// WhyBox — 기능이 왜 이렇게 동작하는지 사용자용 짧은 설명 (접기/펼치기)
+function WhyBox({ title, children, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ border:`1px solid ${T.accent}44`, background:T.accent+"0A", borderRadius:8, padding:"7px 10px", marginBottom:10, fontSize:11.5 }}>
+      <div onClick={() => setOpen(v => !v)} style={{ display:"flex", alignItems:"center", gap:8, cursor:"pointer" }}>
+        <span style={{ color:T.accent, fontWeight:700 }}>💡 {title}</span><span style={{ flex:1 }} /><span style={{ color:T.muted, fontSize:10.5 }}>{open ? "접기 ▲" : "왜 이렇게 하나요? ▼"}</span>
+      </div>
+      {open && <div style={{ marginTop:6, color:T.text, lineHeight:1.6 }}>{children}</div>}
+    </div>
+  );
 }
 function reqIdFloor(reqs, extraIds = []) {
   const floor = { ...((reqs?.idRegistry || {}).max || {}) };
@@ -7037,6 +7085,7 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
   const term = model.version === "3.1" ? "테스트 케이스" : "검증 수단";
   const head = [[title], [`프로젝트: ${meta.name || ""}`, `문서번호: ${docNo}`, `프로세스: ${AE.procLabel(tl.proc, model.version)}`, `정보항목: ${AE.wpLabel(kind, model.version)}`], []];
   const tgtName = {};
+  (model.units.SW || []).forEach(u => { tgtName[u.id] = u.name; });
   ["SYS", "SW", "HW"].forEach(lv => { model.reqs[lv].forEach(r => { tgtName[r.id] = r.title; }); model.comps[lv].forEach(c => { tgtName[c.id] = c.name; }); model.interfaces[lv].forEach(i => { tgtName[i.id] = `${i.kind || "IF"} ${i.signals || ""}`.trim(); }); });
   if (D.result) {
     const rows = [...head, ["No", `${term} ID`, "검증 대상", "제목", "결과(Pass/Fail/Not executed)", "수행일", "수행자", "형상(SW/HW 버전)", "결함·문제 ID", "비고"]];
@@ -7053,7 +7102,7 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
   const techs = [...new Set(tests.map(t => t.technique).filter(Boolean))];
   const strategy = [[`${tl.label} 전략`], [],
     ["항목", "내용", "근거(3.1 / 4.0)"],
-    ["검증 대상", tl.targetKind === "req" ? `${AE.LEVELS[tl.level].label} 요구사항 ${model.reqs[tl.level].length}건` : `${AE.LEVELS[tl.level].compLabel} ${model.comps[tl.level].length}개 · 인터페이스 ${model.interfaces[tl.level].length}건`, "08-52 Context / 08-60"],
+    ["검증 대상", tl.targetKind === "req" ? `${AE.LEVELS[tl.level].label} 요구사항 ${model.reqs[tl.level].length}건` : tl.targetKind === "unit" ? `SW 유닛 ${model.units.SW.length}개 (골격 — 구체 케이스는 코드 확정 후 작성)` : `${AE.LEVELS[tl.level].compLabel} ${model.comps[tl.level].length}개 · 인터페이스 ${model.interfaces[tl.level].length}건`, "08-52 Context / 08-60"],
     ["검증 기법", techs.join(", ") || "-", "08-52 Test strategy / 08-60 Techniques"],
     ["진입 기준", "검증 대상 형상(SW·HW 버전) 확정 및 형상 식별 기록, 검증 환경 준비 완료", "08-52 / 08-60 entry criteria"],
     ["종료 기준", "선택된 검증 수단 전부 수행, Fail 항목은 문제 보고 등록(SUP.9)", "08-52 / 08-60 exit criteria"],
@@ -7071,6 +7120,61 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
   ]);
 }
 
+// 이해관계자 요구사항 목록 (SYS.1 · 3.1 17-03 / 4.0 17-00·17-54) — 원문 발췌 + 합의 상태 + 시스템 요구 추적
+function makeAspiceStkXlsx(meta, ctx, doc) {
+  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const D = AE.ASPICE_DOCS.STK_LIST;
+  const docNo = projectDocNo(meta, doc?.code || D.code);
+  const sysBy = {}; model.reqs.SYS.forEach(r => (r.parents || []).forEach(p => { (sysBy[p] = sysBy[p] || []).push(r.id); }));
+  const rows = [[doc?.name || D.title], [`프로젝트: ${meta.name || ""}`, `문서번호: ${docNo}`, `프로세스: ${AE.procLabel("SYS.1", model.version)}`, `정보항목: ${AE.wpLabel("STK_LIST", model.version)}`], [],
+    ["No", "요구 ID", "요구사항 내용 (원문 발췌)", "출처(사양서·조항)", "요구 주체", "유형", "합의 상태", "도출 시스템 요구 ID", "비고"],
+    ...model.reqs.STK.map((k, i) => [String(i + 1), k.id, k.text || "", k.source || "", k.stakeholder || "", k.type || "", k.status || "검토 중", (sysBy[k.id] || []).join(", ") || "미도출", k.note || ""])];
+  const cnt = st => model.reqs.STK.filter(k => (k.status || "검토 중") === st).length;
+  const sum = [["합의 현황 요약"], [], ["구분", "건수"], ["전체", String(model.reqs.STK.length)], ["합의", String(cnt("합의"))], ["검토 중", String(cnt("검토 중"))], ["보류", String(cnt("보류"))],
+    ["시스템 요구 미도출", String(model.reqs.STK.filter(k => !(sysBy[k.id] || []).length).length)], [],
+    ["※ 이해관계자 요구는 OEM·법규 원문을 고쳐 쓰지 않고 그대로 발췌한 문장이며, 시스템 요구(SYS.2)는 이를 분석해 검증 가능하게 재기술한 것이다. 합의 상태는 이해관계자와의 합의 증적(4.0 SYS.1.BP5 / 3.1 SYS.1.BP5·BP6)이다."]];
+  return makeXlsxBook([
+    { name: "이해관계자 요구", rows, widths: [5, 11, 60, 18, 10, 10, 10, 24, 20], headerRows: [3], titleRows: [0], freezeRow: 4 },
+    { name: "합의 현황", rows: sum, widths: [24, 12], headerRows: [2], titleRows: [0] },
+  ]);
+}
+// SW 상세설계서 골격 (SWE.3 · 3.1 04-05 / 4.0 04-05) — 유닛 분해·요구 추적·인터페이스(헤더 근거)만 채우고 알고리즘·동적 동작은 TBD
+function makeAspiceUnitDesignDocx(meta, ctx, doc) {
+  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const kind = "SW_DD";
+  const title = doc?.name || AE.ASPICE_DOCS[kind].title;
+  const { front, pkgOpts } = docxStdParts({ title, docCode: projectDocNo(meta, doc?.code || AE.ASPICE_DOCS[kind].code), phase: "SWE.3", meta });
+  const units = model.units.SW, comp = Object.fromEntries(model.comps.SW.map(c => [c.id, c])), req = Object.fromEntries(model.reqs.SW.map(r => [r.id, r]));
+  const hdr = units.filter(u => u.origin === "header").length;
+  let body = aspiceFrontBody({ kind, model, meta, doc, title, extraRows: [["SW 유닛", `${units.length}개 (헤더 근거 ${hdr} · 규칙 골격 ${units.filter(u => u.origin === "rule").length} · 수동 ${units.filter(u => u.origin === "manual").length})`], ["할당 SW 요구", `${new Set(units.flatMap(u => u.reqs || [])).size}건 / ${model.reqs.SW.length}건`]] });
+  let sec = 0;
+  body += docxP(`${++sec}. 개요 및 작성 원칙`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxP("본 문서는 SW 아키텍처(SWE.2)의 컴포넌트를 유닛으로 분해하고, SW 요구사항을 유닛에 할당하며(요구 ↔ 유닛 추적), 유닛 인터페이스·자료형·상수를 정의한다.") +
+    docxP("작성 원칙: 유닛의 알고리즘·자료구조·동적 동작(호출 순서·상태)은 실제 코드가 있어야 정확히 기술할 수 있으므로, 착수 단계에서는 근거가 있는 부분(유닛 분해·요구 추적·헤더 파일에서 읽은 인터페이스)만 채우고 나머지는 TBD로 둔다. 코드가 확정되면 TBD 항목을 채워 설계와 코드의 일관성(SWE.3 BP 양방향 추적·일관성)을 확보한다.", { size: 20, spacingAfter: 120 }) +
+    docxP(`유닛 출처 표기: '헤더' = C 헤더 파일에서 함수 원형·자료형·상수를 추출(코드가 근거) / '규칙' = SW 요구 → 유닛 1:1 골격(AI 미사용) / '수동' = 직접 작성.`, { size: 18, spacingAfter: 120 });
+  body += docxP(`${++sec}. 유닛 분해 (컴포넌트 → 유닛)`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxTable([["유닛 ID", "유닛명", "SW 컴포넌트", "할당 SW 요구", "출처", "설계 상태"], ...units.map(u => [u.id, u.name || "", u.comp ? `${u.comp} ${comp[u.comp]?.name || ""}` : "-", (u.reqs || []).join(", ") || "-", u.origin === "header" ? `헤더 (${u.file})` : u.origin === "manual" ? "수동" : "규칙 골격", u.designDone ? "작성" : "TBD"])], -1);
+  body += docxP(`${++sec}. 유닛별 상세설계`, { bold: true, size: 26, spacingAfter: 120 });
+  units.forEach(u => {
+    body += docxP(`${u.id} · ${u.name}`, { bold: true, size: 22, spacingAfter: 80 }) + docxTable([
+      ["SW 컴포넌트", u.comp ? `${u.comp} ${comp[u.comp]?.name || ""}` : "TBD"],
+      ["책임·설명", u.desc || "TBD"],
+      ["할당 요구", (u.reqs || []).map(id => `${id} ${req[id]?.title || ""}`).join("; ") || "TBD"],
+      ["인터페이스(함수)", (u.funcs || []).length ? u.funcs.map(f => `${f.ret} ${f.name}(${f.params || "void"})`).join("; ") : "TBD — 코드·헤더 확정 후 기재"],
+      ["자료형", (u.types || []).join(", ") || "TBD"],
+      ["상수·설정값", (u.macros || []).map(x => `${x.name} = ${x.value}`).join("; ") || "TBD"],
+      ["알고리즘·처리 흐름", "TBD — 코드 확정 후 기술 (의사코드·흐름도)"],
+      ["동적 동작(호출 순서·상태·타이밍)", "TBD — 플랫폼(OS·BSW)·코드 확정 후 기술"],
+      ["오류 처리·진단", "TBD"],
+    ], 1);
+  });
+  body += docxP(`${++sec}. SW 요구 ↔ 유닛 추적 (${AE.bpLabel("SW_UNIT", model.version)})`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxTable([["SW 요구 ID", "요구사항명", "할당 유닛", "판정"], ...model.reqs.SW.map(r => { const us = units.filter(u => (u.reqs || []).includes(r.id)); return [r.id, r.title || "", us.map(u => `${u.id} ${u.name}`).join(", ") || "-", us.length ? "할당" : "미할당"]; })], -1);
+  body += docxP(`${++sec}. 유닛 검증 연계 (SWE.4)`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxP(`유닛별 검증 수단은 SW 유닛 검증 명세서(${AE.ASPICE_DOCS.V_SWE4.code})에 정의한다. 현재 ${model.tests.filter(t => t.level === "SWE4").length}건의 검증 틀(정적 검증·구조적 커버리지)이 생성되어 있으며, 구체 테스트 케이스와 커버리지 기준 등급은 코드 확정 후 확정한다.`, { size: 20 });
+  body += docxP(`${++sec}. 설계 근거`, { bold: true, size: 26, spacingAfter: 120 }) + docxP(model.rationale.SW || "설계 근거 미작성 (TBD)", { size: 20 });
+  return docxPackage(front + body, pkgOpts);
+}
 // 양방향 추적 매트릭스 (3.1 13-22 / 4.0 13-51) + 일관성 점검 결과
 function makeAspiceRtmXlsx(meta, ctx, doc) {
   const fullModel = AE.normalizeModel(ctx?.requirements?.aspice);
@@ -7084,7 +7188,8 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   const openUp = new Set(lst.open.filter(l => l.state !== "orphan").map(l => l.up));
   const openDown = new Set(lst.open.map(l => l.down));
   const fwd = [["요구사항 추적 매트릭스 — 순방향"], [`프로젝트: ${meta.name || ""}`, `문서번호: ${projectDocNo(meta, doc?.code || "SY2105")}`, `정보항목: ${AE.wpLabel("RTM", model.version)}`], []];
-  const hdr = ["시스템 요구", "요구사항명", "출처(이해관계자)", "할당 시스템 요소", "시스템 검증(SYS.5)", "시스템 통합 검증(SYS.4)"];
+  const hasStk = fullModel.reqs.STK.length > 0;
+  const hdr = [...(hasStk ? ["이해관계자 요구(STK)"] : []), "시스템 요구", "요구사항명", "출처(이해관계자)", "할당 시스템 요소", "시스템 검증(SYS.5)", "시스템 통합 검증(SYS.4)"];
   if (sc.SW) hdr.push("SW 요구", "SW 컴포넌트", "SW 검증(SWE.6)", "SW 통합 검증(SWE.5)");
   if (sc.HW) hdr.push("HW 요구", "HW 컴포넌트", "HW 요구 검증(HWE.4)", "HW 설계 검증(HWE.3)");
   hdr.push("판정");
@@ -7093,8 +7198,9 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
     const el = (model.alloc.SYS[r.id] || []).filter(e => sysComp[e]);
     const sifs = model.interfaces.SYS.filter(i => el.includes(i.from) || el.includes(i.to)).map(i => i.id);
     const sit = [...new Set(sifs.flatMap(i => tOf("SYS4", i)))];
-    const row = [r.id, r.title || "", r.source || "", el.map(e => `${e} ${sysComp[e].name}`).join("\n"), tOf("SYS5", r.id).join(", "), sit.join(", ")];
+    const row = [...(hasStk ? [(r.parents || []).join(", ")] : []), r.id, r.title || "", r.source || "", el.map(e => `${e} ${sysComp[e].name}`).join("\n"), tOf("SYS5", r.id).join(", "), sit.join(", ")];
     const gaps = [];
+    if (hasStk && !(r.parents || []).length) gaps.push("STK 근거 없음");
     if (!el.length) gaps.push("미할당");
     if (!tOf("SYS5", r.id).length) gaps.push("SYS.5 없음");
     ["SW", "HW"].forEach(lv => {
@@ -7113,7 +7219,7 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
     fwd.push(row);
   });
   const back = [["요구사항 추적 매트릭스 — 역방향 (검증 수단 → 요구)"], [], ["검증 수단 ID", "레벨", "제목", "대상 ID", "대상 존재", "회귀"]];
-  const known = new Set(["SYS", "SW", "HW"].flatMap(lv => [...model.reqs[lv].map(x => x.id), ...model.comps[lv].map(x => x.id), ...model.interfaces[lv].map(x => x.id)]));
+  const known = new Set([...["SYS", "SW", "HW"].flatMap(lv => [...model.reqs[lv].map(x => x.id), ...model.comps[lv].map(x => x.id), ...model.interfaces[lv].map(x => x.id)]), ...model.units.SW.map(u => u.id)]);
   model.tests.forEach(t => back.push([t.id, AE.TEST_LEVELS[t.level]?.proc || t.level, t.title || "", (t.targets || []).join(", "), !(t.targets || []).every(x => known.has(x)) ? "참조 오류" : openDown.has(t.id) ? "예 (변경 검토 필요)" : "예", t.regression ? "Y" : ""]));
   const swBack = [["하위 요구 역추적 (SW/HW 요구 → 시스템 요구)"], [], ["하위 요구", "레벨", "요구사항명", "상위 시스템 요구", "상위 존재"]];
   const sysIds = new Set(model.reqs.SYS.map(r => r.id));
@@ -7144,13 +7250,22 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
     ...prjReqs.map(r => [r.id, r.title || "", r.source || "", r.process || "", r.evidence || "", r.verifBy || "", r.due || ""])];
   const oi = [["미결 사항(Open Issues) — 입력자료 확보·고객 합의가 필요한 항목"], [], ["ID", "관련 문서·요구", "내용", "필요 조치", "담당", "목표 시점", "상태"],
     ...(fullModel.openIssues || []).map(x => [x.id, x.ref || "", x.item || "", x.action || "", x.owner || "", x.due || "", x.status || "Open"])];
-  const w = [12, 26, 16, 22, 16, 16, ...(sc.SW ? [16, 14, 16, 16] : []), ...(sc.HW ? [16, 14, 16, 16] : []), 18];
+  // 이해관계자 요구(STK) → 시스템 요구 (SYS.1 → SYS.2) — 원문 발췌 기준 추적
+  const stk2 = [["이해관계자 요구(STK) → 시스템 요구 추적"], [`근거: ${AE.bpLabel("STK_TRACE", model.version)} · STK ${fullModel.reqs.STK.length}건 · 시스템 요구 미도출 ${fullModel.reqs.STK.filter(k => !fullModel.reqs.SYS.some(r => (r.parents || []).includes(k.id))).length}건`],
+    ["STK ID", "요구 문장(원문 발췌)", "출처", "주체", "합의 상태", "도출 시스템 요구", "판정"],
+    ...fullModel.reqs.STK.map(k => { const ds = fullModel.reqs.SYS.filter(r => (r.parents || []).includes(k.id)); return [k.id, k.text || "", k.source || "", k.stakeholder || "", k.status || "", ds.map(r => `${r.id} ${r.title || ""}`).join("\n") || "-", ds.length ? (openUp.has(k.id) ? "변경 검토 필요" : "OK") : "미도출"]; })];
+  // SW 요구 → 유닛 (SWE.3) — 골격 추적
+  const unitRows = [["SW 요구 → 유닛 추적 (SWE.3 골격)"], [`근거: ${AE.bpLabel("SW_UNIT", model.version)} · 유닛 ${fullModel.units.SW.length}개 (헤더 근거 ${fullModel.units.SW.filter(u => u.origin === "header").length})`], ["SW 요구", "요구사항명", "할당 유닛", "유닛 검증(SWE.4)", "판정"],
+    ...model.reqs.SW.map(r => { const us = fullModel.units.SW.filter(u => (u.reqs || []).includes(r.id)); return [r.id, r.title || "", us.map(u => `${u.id} ${u.name}`).join(", ") || "-", [...new Set(us.flatMap(u => tOf("SWE4", u.id)))].join(", "), us.length ? "할당" : "미할당"]; })];
+  const w = [...(hasStk ? [16] : []), 12, 26, 16, 22, 16, 16, ...(sc.SW ? [16, 14, 16, 16] : []), ...(sc.HW ? [16, 14, 16, 16] : []), 18];
   return makeXlsxBook([
     { name: "순방향 추적", rows: fwd, widths: w, headerRows: [3], titleRows: [0], freezeRow: 4 },
     { name: "역방향(검증→요구)", rows: back, widths: [14, 8, 40, 20, 10, 6], headerRows: [2], titleRows: [0], freezeRow: 3 },
     { name: "역방향(하위→상위)", rows: swBack, widths: [14, 6, 36, 20, 10], headerRows: [2], titleRows: [0], freezeRow: 3 },
     { name: "일관성 점검", rows: cons, widths: [8, 34, 60, 50], headerRows: [2], titleRows: [0], freezeRow: 3 },
     ...((lst.open.length || fullModel.reviewLog.length) ? [{ name: "변경 영향·판정 이력", rows: chg, widths: [12, 14, 16, 30, 18, 18, 44, 16], headerRows: [2, chg.length - fullModel.reviewLog.length - 1], titleRows: [0], freezeRow: 3 }] : []),
+    ...(hasStk ? [{ name: "STK→시스템 요구", rows: stk2, widths: [11, 56, 14, 10, 10, 40, 14], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
+    ...((sc.SW && fullModel.units.SW.length) ? [{ name: "SW 요구→유닛", rows: unitRows, widths: [12, 30, 40, 24, 10], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...((fullModel.stakeholders || []).length ? [{ name: "이해관계자 요구 추적", rows: stk, widths: [12, 22, 46, 16, 40, 40], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...(prjReqs.length ? [{ name: "프로젝트·프로세스 요구", rows: prj, widths: [10, 30, 16, 18, 40, 30, 14], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...((fullModel.openIssues || []).length ? [{ name: "미결 사항", rows: oi, widths: [8, 26, 54, 44, 12, 12, 8], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
@@ -7163,7 +7278,8 @@ function aspiceCanBuild(kind, ctx) {
   if (!kind || !raw) return false;
   const m = AE.normalizeModel(raw);
   const has = { SYS_AD: m.comps.SYS.length > 0, SW_RS: m.scope.SW && m.reqs.SW.length > 0, HW_RS: m.scope.HW && m.reqs.HW.length > 0,
-    SW_AD: m.scope.SW && m.comps.SW.length > 0, HW_AD: m.scope.HW && m.comps.HW.length > 0, RTM: m.reqs.SYS.length > 0 };
+    SW_AD: m.scope.SW && m.comps.SW.length > 0, HW_AD: m.scope.HW && m.comps.HW.length > 0, RTM: m.reqs.SYS.length > 0,
+    STK_LIST: m.reqs.STK.length > 0, SW_DD: m.scope.SW && m.units.SW.length > 0 };
   if (kind in has) return has[kind];
   const D = AE.ASPICE_DOCS[kind];
   if (D?.test) return m.scope[AE.TEST_LEVELS[D.test].level] && m.tests.some(t => t.level === D.test);
@@ -7173,12 +7289,14 @@ function buildAspiceDoc(kind, meta, ctx, doc) {
   if (kind === "SW_RS" || kind === "HW_RS") return { ext: "docx", bytes: makeAspiceReqDocx(kind === "SW_RS" ? "SW" : "HW", meta, ctx, doc) };
   if (kind === "SYS_AD" || kind === "SW_AD" || kind === "HW_AD") return { ext: "docx", bytes: makeAspiceArchDocx(kind === "SYS_AD" ? "SYS" : kind === "SW_AD" ? "SW" : "HW", meta, ctx, doc) };
   if (kind === "RTM") return { ext: "xlsx", bytes: makeAspiceRtmXlsx(meta, ctx, doc) };
+  if (kind === "STK_LIST") return { ext: "xlsx", bytes: makeAspiceStkXlsx(meta, ctx, doc) };
+  if (kind === "SW_DD") return { ext: "docx", bytes: makeAspiceUnitDesignDocx(meta, ctx, doc) };
   return { ext: "xlsx", bytes: makeAspiceVerifXlsx(kind, meta, ctx, doc) };
 }
 // ASPICE V-모델 산출물 패키지 ZIP — 범위 내 생성 가능한 문서 전부 + 일관성 점검 보고
 async function downloadAspicePackage(meta, ctx) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
-  const order = ["SYS_AD", "SW_RS", "SW_AD", "HW_RS", "HW_AD", "V_SYS5", "V_SYS4", "V_SWE6", "V_SWE5", "V_HWE4", "V_HWE3", "R_SYS5", "R_SYS4", "R_SWE6", "R_SWE5", "RTM"];
+  const order = ["STK_LIST", "SYS_AD", "SW_RS", "SW_AD", "SW_DD", "HW_RS", "HW_AD", "V_SYS5", "V_SYS4", "V_SWE6", "V_SWE5", "V_SWE4", "V_HWE4", "V_HWE3", "R_SYS5", "R_SYS4", "R_SWE6", "R_SWE5", "R_SWE4", "RTM"];
   const files = [];
   order.forEach((k, i) => {
     if (!aspiceCanBuild(k, ctx)) return;
@@ -7622,6 +7740,9 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, 
   const [srcFiles, setSrcFiles] = useState([]);   // 업로드된 원문 파일들 [{name, text}]
   const [srcDrag, setSrcDrag] = useState(false);  // 드래그앤드롭 하이라이트
   const [items, setItems] = useState(() => { const src = seedItems || requirements?.items; return src ? src.map(x => ({ ...x })) : []; });
+  // ASPICE: 이해관계자 요구(SYS.1) 층 — 원문 그대로의 요구 문장. 시스템 요구(SYS.2)는 여기서 도출되고 stkIds로 연결된다.
+  const STK_ON = getGuideForOSSP(ossp || {})?.id === "aspice";
+  const [stk, setStk] = useState(() => ((requirements?.stk?.items) || []).map(x => ({ ...x })));
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState(null);
   const [error, setError] = useState(null);
@@ -7661,16 +7782,25 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, 
       const chunks = [];
       for (let i = 0; i < srcAll.length; i += 6000) chunks.push(srcAll.slice(i, i + 6000));
       let raw = [];
+      const stkRaw = [];
       for (let i = 0; i < chunks.length; i++) {
-        setProg({ percent: 5 + (i / chunks.length) * 35, label: `요구사항 도출 중… (${i + 1}/${chunks.length})` });
+        setProg({ percent: 5 + (i / chunks.length) * 35, label: `${STK_ON ? "이해관계자 요구 발췌·시스템 " : ""}요구사항 도출 중… (${i + 1}/${chunks.length})` });
         const r = await callClaudeJson(`${RG.roleDerive || "당신은 정보공학 방법론 요구정의 단계(RD1200 요구사항 정의)에 정통한 SI 품질보증 전문가입니다. 아래 이해관계자 요구사항 원문에서 기능·비기능·인터페이스 요구사항을 도출하세요."}
 프로젝트: ${form?.name || ""} (${form?.type || ""}) / 고객사: ${form?.client || ""}
 규칙: 요구사항 단위로 중복 없이 분할. 비기능은 ${QSTD.name} 품질특성(${QSTD.chars}) 관점으로 식별. 최대 30건.
 ${FIDELITY}
-JSON만 출력: {"items":[{"type":"기능|비기능|인터페이스","name":"요구사항명(25자 이내)","source":"원문 내 근거(15자 이내)","priority":"상|중|하","summary":"개요 1문장(50자 이내)"}]}
+${STK_ON ? `먼저 원문에서 이해관계자 요구 문장을 고쳐 쓰지 말고 그대로 발췌해 stk 목록으로 만드세요(요구 주체: OEM|법규·표준|내부|기타, 유형: 기능|비기능|규제|인터페이스, 문장당 100자 이내). 그 다음 각 stk에서 시스템 요구(items)를 도출하고, 각 item의 stk에 근거가 된 stk의 k 값을 배열로 적으세요(한 stk가 여러 item으로 나뉘거나 여러 stk가 한 item이 될 수 있음).
+JSON만 출력: {"stk":[{"k":"s1","text":"원문 발췌","source":"조항·위치","stakeholder":"OEM","type":"기능"}],"items":[{"type":"기능|비기능|인터페이스","name":"요구사항명(25자 이내)","source":"원문 내 근거(15자 이내)","priority":"상|중|하","summary":"개요 1문장(50자 이내)","stk":["s1"]}]}` :
+`JSON만 출력: {"items":[{"type":"기능|비기능|인터페이스","name":"요구사항명(25자 이내)","source":"원문 내 근거(15자 이내)","priority":"상|중|하","summary":"개요 1문장(50자 이내)"}]}`}
 ${guideBlock}--- 원문 ---
 ${chunks[i]}`, 6000);
-        raw = raw.concat(Array.isArray(r?.items) ? r.items : []);
+        const its = Array.isArray(r?.items) ? r.items : [];
+        if (STK_ON) {
+          // 청크별 임시 키(s1…)를 전역 키(i:s1)로 바꿔 충돌 방지
+          (Array.isArray(r?.stk) ? r.stk : []).forEach(k => { if (k && String(k.text || "").trim()) stkRaw.push({ _k: `${i}:${k.k}`, text: String(k.text).slice(0, 300), source: String(k.source || ""), stakeholder: ["OEM", "법규·표준", "내부", "기타"].includes(k.stakeholder) ? k.stakeholder : "OEM", type: ["기능", "비기능", "규제", "인터페이스"].includes(k.type) ? k.type : "기능", status: "검토 중" }); });
+          its.forEach(it => { it._stk = (Array.isArray(it.stk) ? it.stk : []).map(k => `${i}:${k}`); });
+        }
+        raw = raw.concat(its);
       }
       if (!raw.length) throw new Error("도출된 요구사항이 없습니다. 원문을 확인해 주세요.");
       const freshRaw = raw.map(it => ({
@@ -7679,10 +7809,19 @@ ${chunks[i]}`, 6000);
         priority: ["상", "중", "하"].includes(it.priority) ? it.priority : "중",
         summary: String(it.summary || ""), detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통",
         actors: "", basicFlow: "", subFlow: "", exceptionFlow: "", precondition: "", postcondition: "",
+        _stk: it._stk || [],
       }));
       // 재생성 시 ID 무결성: 기존 요구와 매칭되면 기존 ID 유지, 신규만 ID 레지스트리 기준으로 새 번호 (폐기·기존 번호 재사용 금지)
       const idMatch = matchPrevReqIds(freshRaw, items);
       let list = assignReqIds(idMatch.list, reqIdFloor(requirements, items.map(x => x.id)));
+      // 이해관계자 요구(STK): 기존 STK와 문장 매칭 → 기존 ID 유지, 신규만 새 번호. 시스템 요구의 stkIds를 전역 키 → STK ID로 변환
+      if (STK_ON) {
+        const stkMatch = matchPrevReqIds(stkRaw.map(k => ({ ...k, name: k.text })), stk.map(k => ({ ...k, name: k.text })));
+        const stkList = assignStkIds(stkMatch.list.map(k => { const { name, ...rest } = k; return rest; }), reqIdFloor(requirements, [...stk.map(x => x.id), ...(requirements?.stk?.items || []).map(x => x.id)]));
+        const keyToId = Object.fromEntries(stkList.map(k => [k._k, k.id]));
+        setStk(stkList.map(k => { const { _k, ...rest } = k; return rest; }));
+        list = list.map(it => { const { _stk, ...rest } = it; return { ...rest, stkIds: [...new Set((_stk || []).map(k => keyToId[k]).filter(Boolean))] }; });
+      } else list = list.map(it => { const { _stk, ...rest } = it; return rest; });
       const idNote = items.some(x => x.id) ? ` · 기존 ID 유지 ${idMatch.kept}건 · 신규 ${list.length - idMatch.kept}건${idMatch.missing.length ? ` · 이번 결과에 없는 기존 요구 ${idMatch.missing.length}건(${idMatch.missing.slice(0, 8).join(", ")}${idMatch.missing.length > 8 ? " …" : ""}) — 확정 시 폐기` : ""}` : "";
       // 2차(RD1300): 4건씩 상세 명세 — 상세설명·인수기준·품질특성·가정/제약 + 기능은 유스케이스 항목(관련 액터~사후 조건)
       const B = 4;
@@ -7754,11 +7893,16 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
     const normed = assignReqIds(valid, reqIdFloor(requirements)).map(it => ({ ...it, wbsNo: it.wbsNo && (it.wbsNo === "공통" || leafName[it.wbsNo] !== undefined) ? it.wbsNo : "공통" }));
     // ASPICE V-모델 추적 모델 보존 — 기존 연결의 기준선을 '변경 전' 내용으로 먼저 등록한 뒤 새 내용으로 동기화한다.
     // 이렇게 해야 내용이 바뀐 요구의 하위 연결(할당·파생·검증)이 '변경 검토 필요'로 표시된다 (자동 수정은 하지 않음).
-    const meta = { items: normed, sourceName: srcFiles.length ? srcFiles.map(f => f.name).join(", ") : (requirements?.sourceName || "직접 입력"), specLeaves: leaves, qualityStd: QSTD.name, updatedAt: new Date().toISOString(),
-      idRegistry: nextIdRegistry(requirements, normed) };
+    const stkValid = STK_ON ? assignStkIds(stk.filter(k => String(k.text || "").trim()).map(k => ({ ...k })), reqIdFloor(requirements)) : [];
+    const stkIdSet = new Set(stkValid.map(k => k.id));
+    const normed2 = STK_ON ? normed.map(it => ({ ...it, stkIds: (it.stkIds || []).filter(id => stkIdSet.has(id)) })) : normed;
+    const meta = { items: normed2, sourceName: srcFiles.length ? srcFiles.map(f => f.name).join(", ") : (requirements?.sourceName || "직접 입력"), specLeaves: leaves, qualityStd: QSTD.name, updatedAt: new Date().toISOString(),
+      idRegistry: nextIdRegistry({ ...(requirements || {}), items: [...((requirements || {}).items || []), ...((requirements?.stk?.items) || [])] }, [...normed2, ...stkValid]),
+      ...(STK_ON ? { stk: { items: stkValid, updatedAt: new Date().toISOString() } } : {}) };
     if (embedded) {
       // V-모델 안: 기준선 등록·동기화·저장은 V-모델이 처리 (편집 중인 추적 모델 기준)
-      setItems(normed.map(x => ({ ...x })));
+      setItems(normed2.map(x => ({ ...x })));
+      if (STK_ON) setStk(stkValid.map(x => ({ ...x })));
       setError(null);
       onEmbeddedConfirm && onEmbeddedConfirm(meta);
       return;
@@ -7798,10 +7942,44 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
           </div>
           {(busy || prog) && <GenProgressBar progress={prog || { percent:3, label:"요구사항 분석 준비 중…" }} subText="원문 분량·요구사항 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
           {error && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9, marginBottom:10 }}>{error}</div>}
+          {STK_ON && (items.length > 0 || stk.length > 0) && (() => {
+            const sysCount = {}; items.forEach(it => (it.stkIds || []).forEach(id => { sysCount[id] = (sysCount[id] || 0) + 1; }));
+            const updS = (i, k, v) => setStk(l => l.map((x, j) => j === i ? { ...x, [k]: v } : x));
+            const delS = i => { const id = stk[i]?.id; setStk(l => l.filter((_, j) => j !== i)); if (id) setItems(l => l.map(it => ({ ...it, stkIds: (it.stkIds || []).filter(x => x !== id) }))); };
+            const addS = () => setStk(l => assignStkIds([...l, { id: "", text: "", source: "", stakeholder: "OEM", type: "기능", status: "검토 중" }], reqIdFloor(requirements, l.map(x => x.id))));
+            return (
+            <div style={{ marginTop:8 }}>
+              <WhyBox title="이해관계자 요구(SYS.1)와 시스템 요구(SYS.2)를 왜 나누나요?">
+                이해관계자 요구는 <b>고객(OEM)·법규가 말한 그대로의 문장</b>이고, 시스템 요구는 그것을 <b>우리 시스템이 검증 가능하게 다시 쓴 문장</b>입니다. 둘을 같은 목록으로 두면 "고객 요구를 분석했다"는 근거가 남지 않고, 고객 사양서가 개정됐을 때 어느 시스템 요구를 다시 봐야 하는지도 알 수 없습니다.
+                그래서 SPIDer는 원문 발췌(STK)를 따로 두고, 각 시스템 요구에 <b>근거 STK</b>를 연결합니다. STK 문장이 바뀌면 연결된 시스템 요구가 "변경 검토 필요"로 표시되고, 추적 매트릭스에 STK → SYS가 함께 출력됩니다. 합의 상태(검토 중·합의·보류)는 고객과의 합의 증적입니다.
+              </WhyBox>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+                <div style={{ fontSize:12, fontWeight:600 }}>이해관계자 요구 (SYS.1) <span style={{ color:T.accent }}>{stk.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 원문 그대로. 합의 {stk.filter(k => k.status === "합의").length} · 검토 중 {stk.filter(k => k.status !== "합의" && k.status !== "보류").length} · 보류 {stk.filter(k => k.status === "보류").length} · 시스템 요구 미도출 {stk.filter(k => !sysCount[k.id]).length}</span></div>
+                <button onClick={addS} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>+ 행 추가</button>
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:14 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"72px 1fr 90px 92px 90px 84px 44px 24px", gap:6, fontSize:10, color:T.muted, padding:"0 4px" }}>
+                  <span>ID</span><span>요구 문장 (원문 발췌)</span><span>출처</span><span>주체</span><span>유형</span><span>합의</span><span>SYS</span><span></span>
+                </div>
+                {stk.map((k, i) => (
+                  <div key={k.id || i} style={{ display:"grid", gridTemplateColumns:"72px 1fr 90px 92px 90px 84px 44px 24px", gap:6, alignItems:"center", background:T.bg, border:`1px solid ${sysCount[k.id] ? T.border : T.amber + "66"}`, borderRadius:8, padding:"5px 8px" }}>
+                    <span style={{ fontFamily:"monospace", fontSize:10, color:T.accent }}>{k.id}</span>
+                    <input value={k.text} onChange={e=>updS(i,"text",e.target.value)} placeholder="원문 그대로" style={inp} />
+                    <input value={k.source || ""} onChange={e=>updS(i,"source",e.target.value)} placeholder="조항" style={inp} />
+                    <select value={k.stakeholder || "OEM"} onChange={e=>updS(i,"stakeholder",e.target.value)} style={inp}>{["OEM","법규·표준","내부","기타"].map(x=><option key={x}>{x}</option>)}</select>
+                    <select value={k.type || "기능"} onChange={e=>updS(i,"type",e.target.value)} style={inp}>{["기능","비기능","규제","인터페이스"].map(x=><option key={x}>{x}</option>)}</select>
+                    <select value={k.status || "검토 중"} onChange={e=>updS(i,"status",e.target.value)} style={{ ...inp, color: k.status === "합의" ? T.green : k.status === "보류" ? T.amber : T.text }}>{["검토 중","합의","보류"].map(x=><option key={x}>{x}</option>)}</select>
+                    <span title={sysCount[k.id] ? "도출된 시스템 요구 수" : "도출된 시스템 요구 없음"} style={{ fontSize:11, color: sysCount[k.id] ? T.green : T.amber, textAlign:"center" }}>{sysCount[k.id] || 0}건</span>
+                    <button onClick={()=>delS(i)} title="삭제" style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:12 }}>✕</button>
+                  </div>
+                ))}
+                {!stk.length && <div style={{ fontSize:11, color:T.muted, padding:6 }}>AI 도출을 실행하면 원문에서 이해관계자 요구가 먼저 발췌됩니다. 직접 입력하려면 '+ 행 추가'.</div>}
+              </div>
+            </div>); })()}
           {items.length > 0 && (
             <div style={{ marginTop:8 }}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
-                <div style={{ fontSize:12, fontWeight:600 }}>도출된 요구사항 <span style={{ color:T.accent }}>{items.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 수정·추가·삭제 후 확정하세요. '상세'에서 명세 내용을 편집합니다.</span></div>
+                <div style={{ fontSize:12, fontWeight:600 }}>{STK_ON ? "시스템 요구 (SYS.2)" : "도출된 요구사항"} <span style={{ color:T.accent }}>{items.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 수정·추가·삭제 후 확정하세요. '상세'에서 명세 내용을 편집합니다.</span></div>
                 <button onClick={add} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>＋ 행 추가</button>
               </div>
               <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
@@ -7835,6 +8013,8 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                         <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>인수 기준</div><textarea value={it.acceptance} onChange={e=>upd(i,"acceptance",e.target.value)} style={ta} /></div>
                         <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>품질특성 (비기능 · {QSTD.name})</div><input value={it.quality} onChange={e=>upd(i,"quality",e.target.value)} placeholder="예: 효율성" style={inp} /></div>
                         <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>가정·제약</div><input value={it.assumptions} onChange={e=>upd(i,"assumptions",e.target.value)} style={inp} /></div>
+                        {STK_ON && <div style={{ gridColumn:"1 / -1" }}><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>근거 이해관계자 요구 (STK ID, 쉼표 구분) {(it.stkIds || []).length ? "" : <span style={{ color:T.amber }}>— 미지정</span>}</div>
+                          <input value={(it.stkIds || []).join(", ")} onChange={e=>upd(i,"stkIds",e.target.value.split(/[,\s]+/).map(x=>x.trim().toUpperCase()).filter(Boolean))} placeholder="예: STK-0001, STK-0003" style={inp} /></div>}
                         {it.type === "기능" && (<>
                           <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>관련 액터</div><input value={it.actors || ""} onChange={e=>upd(i,"actors",e.target.value)} placeholder="예: 영업담당자, 관리자" style={inp} /></div>
                           <div><div style={{ fontSize:10, color:T.muted, marginBottom:2 }}>사전 조건</div><input value={it.precondition || ""} onChange={e=>upd(i,"precondition",e.target.value)} style={inp} /></div>
@@ -7855,7 +8035,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
   const aeForPreview = embedded ? previewAspice : requirements?.aspice;
   const footerEl = (
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, padding: embedded ? "10px 0" : "12px 18px", borderTop:`1px solid ${T.border}`, flexShrink:0, ...(embedded ? { position:"sticky", bottom:-16, background:T.surface, zIndex:3 } : {}) }}>
-          {(() => { const imp = aeForPreview ? AE.previewImpact(aeForPreview, assignReqIds(items.filter(it => String(it.name || "").trim()), reqIdFloor(requirements))) : null; return (
+          {(() => { const imp = aeForPreview ? AE.previewImpact(aeForPreview, assignReqIds(items.filter(it => String(it.name || "").trim()), reqIdFloor(requirements)), STK_ON ? stk.filter(k => k.id && String(k.text || "").trim()) : undefined) : null; return (
           <span style={{ fontSize:10.5, color:T.muted }}>{requirements?.items?.length ? `현재 확정본: ${requirements.items.length}건 (${(requirements.updatedAt||"").slice(0,10)})` : "확정된 요구사항 없음"}
             {imp && (imp.suspect || imp.orphan) ? <span style={{ color:T.amber, marginLeft:8 }}>⚠ 확정하면 V-모델 추적 연결 {imp.suspect ? `${imp.suspect}건이 '변경 검토 필요'(변경 요구 ${imp.changedReqs}건)` : ""}{imp.suspect && imp.orphan ? ", " : ""}{imp.orphan ? `${imp.orphan}건이 고아 연결(삭제 요구 ${imp.removedReqs}건)` : ""}로 표시됩니다</span> : null}
           </span>); })()}
@@ -7927,6 +8107,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       if (form?.aspiceVersion && AE.ASPICE_VERSIONS.some(v => v.id === form.aspiceVersion)) m.version = form.aspiceVersion;   // 시작 화면에서 고른 적용 기준
       if (tailoring?.aspiceScope) { m.scope.SW = tailoring.aspiceScope.SWE !== false; m.scope.HW = !!tailoring.aspiceScope.HWE; }   // 적용 범위 단계의 SW·HW 범위
     }
+    m.reqs.STK = AE.syncStkReqs(requirements?.stk?.items || [], m.reqs.STK);
     m.reqs.SYS = AE.syncSysReqs(requirements?.items || [], m.reqs.SYS);
     return m;
   });
@@ -8130,6 +8311,36 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       setDbc({ fileName: f.name, parsed, own: parsed.nodes[0] || "" });
     } catch (x) { setErr(`DBC 해석 실패: ${x.message}`); }
   }
+  // ── SWE.3 유닛 골격 (AI 미사용): 규칙 분해 / C 헤더 가져오기 ──
+  function genUnits() {
+    return run("SW 유닛 골격 생성", async () => {
+      const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
+      n.units.SW = AE.ruleUnits(n);
+      n.tests = AE.generateRuleTests(n, ["SWE4"]);
+      setModel(n);
+      return `규칙 기반 유닛 골격 ${n.units.SW.length}개 · SWE.4 유닛 검증 틀 ${n.tests.filter(t => t.level === "SWE4").length}건 — 알고리즘·동적 동작은 TBD (코드 확정 후 작성)`;
+    });
+  }
+  async function onHeaders(e) {
+    const files = [...(e.target.files || [])]; e.target.value = "";
+    if (!files.length) return;
+    try {
+      const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
+      let fn = 0;
+      for (const f of files) {
+        const parsed = AE.parseCHeader(await f.text(), f.name);
+        if (!parsed.funcs.length && !parsed.types.length) continue;
+        // 컴포넌트 자동 매칭: 파일명 토큰이 컴포넌트명에 포함되면 그 컴포넌트, 아니면 첫 컴포넌트
+        const tok = parsed.name.toLowerCase().split(/[_\-\s]+/).filter(t => t.length > 2);
+        const comp = n.comps.SW.find(c => tok.some(t => String(c.name || "").toLowerCase().includes(t))) || n.comps.SW[0];
+        n.units.SW = AE.unitsFromHeader(n, parsed, comp?.id || "");
+        fn += parsed.funcs.length;
+      }
+      n.tests = AE.generateRuleTests(n, ["SWE4"]);
+      setModel(n); setErr(null);
+      setNote(`헤더 ${files.length}개에서 유닛 인터페이스를 가져왔습니다 — 함수 ${fn}개 (코드가 근거 · AI 미사용). 컴포넌트·할당 요구를 확인하세요.`);
+    } catch (x) { setErr(`헤더 해석 실패: ${x.message}`); }
+  }
   function applyDbc() {
     if (!dbc?.own) return;
     const { reqs, itfs } = AE.dbcToInterfaces(dbc.parsed, dbc.own, { fileName: dbc.fileName });
@@ -8191,20 +8402,20 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
 
   function save() {
     // 저장 시: 이번 세션에 새로 생긴 연결만 기준선 등록 (미해결 '변경 검토 필요' 연결은 그대로 유지), 사라진 연결 기록 정리
-    const out = { ...AE.baselineLinks({ ...model, reqs: { ...model.reqs, SYS: AE.syncSysReqs(items, model.reqs.SYS) } }), updatedAt: new Date().toISOString() };
+    const out = { ...AE.baselineLinks({ ...model, reqs: { ...model.reqs, STK: AE.syncStkReqs(requirements?.stk?.items || [], model.reqs.STK), SYS: AE.syncSysReqs(items, model.reqs.SYS) } }), updatedAt: new Date().toISOString() };
     setRequirements({ ...(requirements || {}), items, aspice: out, idRegistry: nextIdRegistry(requirements, items), updatedAt: requirements?.updatedAt || new Date().toISOString() });
     onClose();
   }
   // ── ① 요구 도출·명세 탭에서 확정: 변경 전 기준선 등록 → 새 요구로 동기화 → 즉시 저장 ──
   function confirmReqs(meta) {
     const base = AE.baselineLinks(model);
-    const next = { ...base, reqs: { ...base.reqs, SYS: AE.syncSysReqs(meta.items, base.reqs.SYS) }, updatedAt: new Date().toISOString() };
+    const next = { ...base, reqs: { ...base.reqs, STK: AE.syncStkReqs(meta.stk?.items || requirements?.stk?.items || [], base.reqs.STK), SYS: AE.syncSysReqs(meta.items, base.reqs.SYS) }, updatedAt: new Date().toISOString() };
     const st = AE.linkStatus(next);
     setModel(next);
     setItems(meta.items);
     setRequirements({ ...(requirements || {}), ...meta, aspice: next });
     setErr(null);
-    setNote(`시스템 요구 ${meta.items.length}건을 확정·저장했습니다.${st.open.length ? ` 변경된 요구의 하위 연결 ${st.open.length}건은 ⑦ 추적성 탭 '변경 영향 검토'에서 확인하세요.` : " 다음은 ③ 시스템 탭에서 아키텍처를 작성하세요."}`);
+    setNote(`${meta.stk?.items?.length ? `이해관계자 요구 ${meta.stk.items.length}건 · ` : ""}시스템 요구 ${meta.items.length}건을 확정·저장했습니다.${st.open.length ? ` 변경된 요구의 하위 연결 ${st.open.length}건은 ⑦ 추적성 탭 '변경 영향 검토'에서 확인하세요.` : " 다음은 ③ 시스템 탭에서 아키텍처를 작성하세요."}`);
   }
   // ── 변경 영향 검토: 유효/무효 판정 · 고아 연결 제거 ──
   const [reviewNote, setReviewNote] = useState({});   // { 상위ID: 판정 의견 }
@@ -8370,7 +8581,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 <label title={V === "3.1" ? "3.1 PRM에는 HWE가 없어 4.0 HWE를 PAM 확장으로 준용합니다" : ""}><input type="checkbox" checked={model.scope.HW} onChange={e => set(n => { n.scope.HW = e.target.checked; })} /> HW (HWE.1~4){V === "3.1" ? " · PAM 확장" : ""}</label>
                 <label style={{ marginLeft: "auto" }} title="해제 시 /api/chat 호출 없이 규칙 기반 초안만 생성 (폐쇄망·재현성)"><input type="checkbox" checked={model.useAI} onChange={e => set(n => { n.useAI = e.target.checked; })} /> AI 사용 (해제 = 규칙 기반만)</label>
               </div>
-              <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>※ SWE.3(상세설계)·SWE.4(유닛 검증)·HWE 상세설계는 코드·회로가 있어야 의미가 있으므로 자동 생성하지 않습니다 (OSSP 템플릿 제공).</div>
+              <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>※ SWE.3(상세설계)·SWE.4(유닛 검증)는 코드가 근거이므로 ④ SW 탭에서 유닛 분해·요구 추적 골격과 헤더(.h) 기반 인터페이스만 생성하고 알고리즘·동적 동작은 TBD로 둡니다. HWE 상세설계는 회로 확정 후 OSSP 템플릿으로 작성합니다.</div>
             </AeSec>
             <AeSec title="입력자료 체크리스트 — 확보한 자료를 표시하면 WP 충족도에 반영됩니다 (없는 자료는 AI가 지어내지 않고 TBD로 남깁니다)">
               <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -8447,6 +8658,45 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               {CompList({ lv: lv })}
             </AeSec>
             <AeSec title={`${lv} 인터페이스 ${model.interfaces[lv].length}건`}>{IfList({ lv: lv })}</AeSec>
+            {lv === "SW" && (
+              <AeSec title={`SW 유닛·상세설계 골격 ${model.units.SW.length}개 (${AE.procLabel("SWE.3", V)})`}
+                right={<div style={{ display: "flex", gap: 6 }}>
+                  <label style={{ ...small, display: "inline-block", padding: "4px 10px" }}>📎 .h 헤더 가져오기<input type="file" accept=".h,.hpp,.txt" multiple onChange={onHeaders} style={{ display: "none" }} /></label>
+                  <Btn onClick={genUnits} disabled={busy || !model.comps.SW.length} style={{ fontSize: 11, padding: "4px 12px" }}>⚙ 규칙 골격 생성</Btn>
+                </div>}>
+                <WhyBox title="상세설계는 왜 '골격'까지만 만들고, 헤더 파일로 채우나요?">
+                  상세설계서(SWE.3)의 핵심은 <b>유닛의 알고리즘·자료구조·동적 동작</b>인데, 이것은 실제 코드가 있어야 맞게 쓸 수 있습니다. 착수 단계에서 AI가 지어내면 나중에 코드와 다른 "그럴듯한 설계서"가 되고, 심사에서는 설계와 코드의 일관성을 보기 때문에 오히려 불리합니다.
+                  그래서 SPIDer는 <b>근거가 있는 것만</b> 만듭니다. ① SW 요구를 담당 컴포넌트별 유닛으로 나누고 요구↔유닛 추적을 잡는 골격(규칙 기반, AI 미사용), ② 기존 코드가 있으면 C 헤더(.h)에서 함수 원형·자료형·상수를 읽어 유닛 인터페이스를 채우는 것(코드가 근거)입니다. 알고리즘·동적 동작은 <b>TBD</b>로 남겨 코드 확정 후 채우게 하고, SWE.4 유닛 검증 명세는 정적 검증·커버리지 기준의 틀만 만듭니다.
+                </WhyBox>
+                {!model.comps.SW.length && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 6 }}>SW 컴포넌트를 먼저 설계하세요. 유닛은 컴포넌트 아래에 만들어집니다.</div>}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {model.units.SW.map((u, i) => (
+                    <div key={u.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", background: T.bg }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr 150px 1fr 70px 52px 24px", gap: 6, alignItems: "center" }}>
+                        <span style={{ fontFamily: "monospace", fontSize: 10, color: T.accent }}>{u.id}</span>
+                        <input value={u.name || ""} onChange={e => set(n => { n.units.SW[i] = { ...n.units.SW[i], name: e.target.value }; })} style={inp} />
+                        <select value={u.comp || ""} onChange={e => set(n => { n.units.SW[i] = { ...n.units.SW[i], comp: e.target.value }; })} style={inp}>
+                          <option value="">(컴포넌트 미지정)</option>{model.comps.SW.map(c => <option key={c.id} value={c.id}>{c.id} {c.name}</option>)}
+                        </select>
+                        <input value={(u.reqs || []).join(", ")} onChange={e => set(n => { n.units.SW[i] = { ...n.units.SW[i], reqs: e.target.value.split(/[,\s]+/).map(x => x.trim()).filter(Boolean) }; })} placeholder="할당 SW 요구 ID (쉼표)" style={inp} />
+                        <span style={{ fontSize: 9.5, color: u.origin === "header" ? T.green : u.origin === "manual" ? T.amber : T.muted }}>{u.origin === "header" ? `헤더 ${(u.funcs || []).length}fn` : u.origin === "manual" ? "수동" : "규칙·TBD"}</span>
+                        <button onClick={() => setOpen(o => ({ ...o, [u.id]: !o[u.id] }))} style={{ ...small, color: T.muted, padding: "2px 0" }}>{open[u.id] ? "접기" : "상세"}</button>
+                        <button onClick={() => set(n => { n.units.SW.splice(i, 1); })} style={{ background: "none", border: "none", color: T.red, cursor: "pointer", fontSize: 12 }}>✕</button>
+                      </div>
+                      {open[u.id] && (
+                        <div style={{ marginTop: 6, fontSize: 10.5 }}>
+                          <div style={{ fontSize: 10, color: T.muted }}>책임·설명</div>
+                          <textarea value={u.desc || ""} onChange={e => set(n => { n.units.SW[i] = { ...n.units.SW[i], desc: e.target.value, designDone: !/TBD/.test(e.target.value) }; })} style={ta} />
+                          {(u.funcs || []).length > 0 && <div style={{ marginTop: 4 }}><div style={{ fontSize: 10, color: T.muted }}>인터페이스 (헤더 {u.file})</div>{u.funcs.map((f, k) => <div key={k} style={{ fontFamily: "monospace", fontSize: 10 }}>{f.ret} <b>{f.name}</b>({f.params})</div>)}</div>}
+                          {(u.types || []).length > 0 && <div style={{ marginTop: 4, color: T.muted }}>자료형: {u.types.join(", ")}</div>}
+                          {(u.macros || []).length > 0 && <div style={{ color: T.muted }}>상수: {u.macros.slice(0, 12).map(x => `${x.name}=${x.value}`).join(" · ")}{u.macros.length > 12 ? " …" : ""}</div>}
+                        </div>)}
+                    </div>))}
+                  {!model.units.SW.length && <div style={{ fontSize: 11, color: T.muted, padding: 6 }}>유닛 없음 — '규칙 골격 생성' 또는 '.h 헤더 가져오기'를 누르세요.</div>}
+                </div>
+                <button onClick={() => set(n => { n.units.SW.push({ id: AE.nextId(AE.UNIT_PREFIX, n.units.SW), comp: n.comps.SW[0]?.id || "", name: "", desc: "", reqs: [], funcs: [], types: [], macros: [], origin: "manual", file: "", designDone: false }); })} style={{ ...small, marginTop: 6 }}>+ 유닛 추가</button>
+              </AeSec>
+            )}
             <AeSec title="설계 근거"><textarea value={model.rationale[lv]} onChange={e => set(n => { n.rationale[lv] = e.target.value; })} style={{ ...ta, minHeight: 50 }} /></AeSec>
           </>); })()}
 
@@ -8554,7 +8804,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </AeSec>); })()}
             <AeSec title="추적·검증 커버리지" right={<Btn onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} style={{ fontSize: 11, padding: "4px 12px" }}>📦 V-모델 산출물 ZIP</Btn>}>
               <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {model.reqs.STK.length > 0 && pctBar("이해관계자 요구(STK) → SYS 도출", metrics.stkDerive)}
                 {pctBar("SYS 요구 → 요소 할당", metrics.sysAlloc)}
+                {model.scope.SW && model.units.SW.length > 0 && pctBar("SW 요구 → 유닛 (SWE.3)", metrics.swUnit)}
                 {model.scope.SW && pctBar("SYS → SW 요구 파생", metrics.swDerive)}
                 {model.scope.SW && pctBar("SW 요구 → 컴포넌트", metrics.swAlloc)}
                 {model.scope.HW && pctBar("SYS → HW 요구 파생", metrics.hwDerive)}
@@ -8595,8 +8847,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px", borderTop: `1px solid ${T.border}`, flexShrink: 0, gap: 8 }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 10.5, color: T.muted }}>SYS {model.reqs.SYS.length} · 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW ${model.reqs.SW.length}/${model.comps.SW.length}` : ""}{model.scope.HW ? ` · HW ${model.reqs.HW.length}/${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}{requirements?.aspice?.updatedAt ? ` · 저장본 ${String(requirements.aspice.updatedAt).slice(0, 10)}` : ""}</div>
-            <div style={{ fontSize: 9.5, color: T.muted, opacity: 0.8, marginTop: 2 }}>SYS = 시스템 요구 수 · 요소 = 시스템 구성요소 수 · SW/HW = 하위 요구 수 / 컴포넌트 수 · 검증 수단 = 시험 항목(TC) 수</div>
+            <div style={{ fontSize: 10.5, color: T.muted }}>SYS {model.reqs.SYS.length} · 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW ${model.reqs.SW.length}/${model.comps.SW.length}${model.units.SW.length ? `/유닛 ${model.units.SW.length}` : ""}` : ""}{model.scope.HW ? ` · HW ${model.reqs.HW.length}/${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}{requirements?.aspice?.updatedAt ? ` · 저장본 ${String(requirements.aspice.updatedAt).slice(0, 10)}` : ""}</div>
+            <div style={{ fontSize: 9.5, color: T.muted, opacity: 0.8, marginTop: 2 }}>SYS = 시스템 요구 수 · 요소 = 시스템 구성요소 수 · SW/HW = 하위 요구 수 / 컴포넌트 수 (/ SW 유닛 수) · 검증 수단 = 시험 항목(TC) 수</div>
             {(() => {
               // 규칙 기반 상속 초안(시스템 요구를 그대로 복사한 하위 요구)이 남아 있으면 한 줄로 안내
               const inh = ["SW", "HW"].filter(lv => model.scope[lv]).map(lv => [lv, model.reqs[lv].filter(r => /관점 구체화 필요/.test(r.text || "")).length]).filter(([, n]) => n > 0);

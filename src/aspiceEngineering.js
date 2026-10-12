@@ -38,6 +38,9 @@ export const PROC_NAMES = {
   "SYS.5": { "3.1": "System Qualification Test", "4.0": "System Verification" },
   "SWE.1": { "3.1": "Software Requirements Analysis", "4.0": "Software Requirements Analysis" },
   "SWE.2": { "3.1": "Software Architectural Design", "4.0": "Software Architectural Design" },
+  "SWE.3": { "3.1": "Software Detailed Design and Unit Construction", "4.0": "Software Detailed Design and Unit Construction" },
+  "SWE.4": { "3.1": "Software Unit Verification", "4.0": "Software Unit Verification" },
+  "SYS.1": { "3.1": "Requirements Elicitation", "4.0": "Requirements Elicitation" },
   "SWE.5": { "3.1": "Software Integration and Integration Test", "4.0": "Software Component Verification and Integration Verification" },
   "SWE.6": { "3.1": "Software Qualification Test", "4.0": "Software Verification" },
   "HWE.1": { "3.1": "Hardware Requirements Analysis (PAM 확장)", "4.0": "Hardware Requirements Analysis" },
@@ -58,6 +61,7 @@ export const TEST_LEVELS = {
   SYS5: { proc: "SYS.5", level: "SYS", targetKind: "req", label: "시스템 검증(적격성)", prefix: "SQT-" },
   SYS4: { proc: "SYS.4", level: "SYS", targetKind: "if",  label: "시스템 통합 검증", prefix: "SIT-" },
   SWE6: { proc: "SWE.6", level: "SW",  targetKind: "req", label: "SW 검증(적격성)", prefix: "SWQT-" },
+  SWE4: { proc: "SWE.4", level: "SW",  targetKind: "unit", label: "SW 유닛 검증", prefix: "SWUT-" },
   SWE5: { proc: "SWE.5", level: "SW",  targetKind: "if",  label: "SW 통합·컴포넌트 검증", prefix: "SWIT-" },
   HWE4: { proc: "HWE.4", level: "HW",  targetKind: "req", label: "HW 요구사항 검증", prefix: "HWQT-" },
   HWE3: { proc: "HWE.3", level: "HW",  targetKind: "if",  label: "HW 설계 검증", prefix: "HWDT-" },
@@ -82,6 +86,10 @@ export const ASPICE_DOCS = {
   R_SYS4: { title: "시스템 통합 검증 결과서", proc: "SYS.4", test: "SYS4", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SY6101" },
   R_SWE6: { title: "SW 검증 결과서", proc: "SWE.6", test: "SWE6", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SW5102" },
   R_SWE5: { title: "SW 통합 검증 결과서", proc: "SWE.5", test: "SWE5", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SW5101" },
+  STK_LIST: { title: "이해관계자 요구사항 목록", proc: "SYS.1", wp: { "3.1": "17-03", "4.0": "17-00, 17-54" }, code: "SY2101" },
+  SW_DD:  { title: "SW 상세설계서", proc: "SWE.3", wp: { "3.1": "04-05, 11-05", "4.0": "04-05, 15-51" }, code: "SW4101" },
+  V_SWE4: { title: "SW 유닛 검증 명세서", proc: "SWE.4", test: "SWE4", wp: { "3.1": "08-50, 08-52", "4.0": "08-60, 08-58" }, code: "SW4103" },
+  R_SWE4: { title: "SW 유닛 검증 결과서", proc: "SWE.4", test: "SWE4", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SW4106" },
   RTM:    { title: "요구사항 추적 매트릭스", proc: "SYS.2~SWE.6", wp: { "3.1": "13-22", "4.0": "13-51" }, code: "SY2105" },
 };
 export function wpLabel(docKind, version) {
@@ -94,7 +102,13 @@ export function aspiceDocKind(name) {
   const n = String(name || "").replace(/\s|\(|\)|·|-/g, "").toUpperCase()
     .replace(/소프트웨어/g, "SW").replace(/하드웨어/g, "HW");
   if (!n) return null;
-  if (n.includes("유닛") || n.includes("단위")) return null;            // SWE.4·SWE.3 — 코드 없이 생성하지 않음
+  if (n.includes("이해관계자") && n.includes("요구")) return "STK_LIST";   // SYS.1
+  if (n.includes("유닛") || n.includes("단위")) {                          // SWE.3·SWE.4 — 골격(유닛 분해·추적·검증 틀)만 생성, 내용은 코드 확정 후
+    if (n.includes("검증") || n.includes("시험") || n.includes("테스트")) return n.includes("결과서") ? "R_SWE4" : "V_SWE4";
+    if (n.includes("설계")) return "SW_DD";
+    return null;
+  }
+  if (n.startsWith("SW") && n.includes("상세설계")) return "SW_DD";
   if (n.includes("추적") && (n.includes("매트릭스") || n.includes("MATRIX"))) return "RTM";
   const isResult = n.includes("결과서");
   const isSpec = n.includes("명세서");
@@ -529,13 +543,14 @@ export function emptyModel() {
   return {
     schema: 1, version: "both", scope: { SYS: true, SW: true, HW: false }, useAI: true,
     inputs: {}, charOverride: {}, templateChecks: {},
-    reqs: { SYS: [], SW: [], HW: [] },
+    reqs: { STK: [], SYS: [], SW: [], HW: [] },   // STK = 이해관계자 요구(SYS.1), SYS 요구의 상위
     comps: { SYS: [], SW: [], HW: [] },
     interfaces: { SYS: [], SW: [], HW: [] },
     alloc: { SYS: {}, SW: {}, HW: {} },
     modes: [], rationale: { SYS: "", SW: "", HW: "" },
     tests: [], updatedAt: null,
     linkReview: {}, reqSnaps: {}, reviewLog: [],   // 변경 영향 분석(링크 단위 의심 표시) — 9절
+    units: { SW: [] },                              // SWE.3 유닛 골격 — 10절
   };
 }
 export function normalizeModel(m) {
@@ -546,11 +561,12 @@ export function normalizeModel(m) {
     ...e, ...x,
     scope: { ...e.scope, ...(x.scope || {}) },
     inputs: { ...(x.inputs || {}) }, charOverride: { ...(x.charOverride || {}) }, templateChecks: { ...(x.templateChecks || {}) },
-    reqs: lv("reqs"), comps: lv("comps"), interfaces: lv("interfaces"),
+    reqs: { STK: [...((x.reqs || {}).STK || [])], ...lv("reqs") }, comps: lv("comps"), interfaces: lv("interfaces"),
     alloc: { SYS: { ...((x.alloc || {}).SYS || {}) }, SW: { ...((x.alloc || {}).SW || {}) }, HW: { ...((x.alloc || {}).HW || {}) } },
     modes: [...(x.modes || [])], rationale: { ...e.rationale, ...(x.rationale || {}) },
     tests: [...(x.tests || [])],
     linkReview: { ...(x.linkReview || {}) }, reqSnaps: { ...(x.reqSnaps || {}) }, reviewLog: [...(x.reviewLog || [])],
+    units: { SW: [...((x.units || {}).SW || [])] },
   };
 }
 
@@ -564,6 +580,7 @@ export function syncSysReqs(items, prev) {
     const base = {
       id: it.id, level: "SYS", title: it.name || "", text, type: it.type || "기능",
       source: it.source || "", priority: it.priority || "중", stkId: it.stkId || "",
+      parents: Array.isArray(it.stkIds) ? it.stkIds.filter(Boolean) : (it.stkId ? [it.stkId] : []),   // 이해관계자 요구(STK) 추적
     };
     const merged = { ...base,
       verifMethod: o.verifMethod || defaultVerifMethod(base),
@@ -572,6 +589,18 @@ export function syncSysReqs(items, prev) {
       safety: o.safety || "", security: !!o.security, special: !!o.special,
       status: o.status || "Draft", release: o.release || "", rationale: o.rationale || "" };
     return merged;
+  });
+}
+
+// 확정된 이해관계자 요구(requirements.stk.items) → STK 레벨 요구로 동기화 (원문 그대로 — 변경 감지 대상: 제목·내용·유형)
+export function syncStkReqs(items, prev) {
+  const old = Object.fromEntries((prev || []).map(r => [r.id, r]));
+  return (items || []).filter(it => it && it.id).map(it => {
+    const o = old[it.id] || {};
+    const text = String(it.text || "");
+    return { id: it.id, level: "STK", title: String(it.title || text).slice(0, 60), text, type: it.type || "기능",
+      source: it.source || "", stakeholder: it.stakeholder || "", status: it.status || "검토 중", verifCriteria: "",
+      note: o.note || "" };
   });
 }
 
@@ -662,6 +691,15 @@ export function generateRuleTests(model, onlyLevels) {
         const merged = aiCover.length ? [...aiCover, ...rules.slice(1)] : rules;
         if (!manualCover) fresh.push(...merged);
       });
+    } else if (tl.targetKind === "unit") {
+      // SWE.4 유닛 검증 골격 — 유닛마다 정적 검증 + 구조적 커버리지 틀 1건. 구체 케이스는 코드 확정 후 작성(TBD)
+      ((model.units || {}).SW || []).forEach(u => {
+        if (kept.some(t => t.level === L && (t.targets || []).includes(u.id))) return;
+        fresh.push({ level: L, targets: [u.id], origin: "rule", regression: false, title: `${u.name} 유닛 검증`,
+          technique: "정적 검증(코딩 가이드라인·정적분석) + 유닛 테스트(구조적 커버리지)", precondition: `${u.name} 유닛 구현 완료 · 유닛 테스트 하네스 준비`, env: "",
+          steps: `1) 코딩 가이드라인 준수 여부를 정적분석으로 확인한다; 2) 할당 요구(${(u.reqs || []).join(", ") || "-"})별 입력·경계값 케이스를 작성·수행한다 (TBD — 코드 확정 후); 3) 구조적 커버리지를 측정한다`,
+          expected: "정적분석 위반 0건(허용 편차는 사유 기록) · 할당 요구 동작 확인", passCriteria: "구조적 커버리지 목표 달성 — 기준 등급 TBD (Statement / Branch / MC/DC 중 프로젝트 기준 선택)" });
+      });
     } else {
       const names = Object.fromEntries((model.comps[tl.level] || []).map(c => [c.id, c.name]));
       (model.interfaces[tl.level] || []).forEach(itf => {
@@ -703,6 +741,8 @@ const BP = {
   T_HWE4: { "3.1": "HWE.4 (PAM 확장)", "4.0": "HWE.4.BP5" }, T_HWE3: { "3.1": "HWE.3 (PAM 확장)", "4.0": "HWE.3.BP5" },
   REVIEW: { "3.1": "GP 2.2.4 (13-19)", "4.0": "GP 2.2.4 · 13-52" },
   CHANGE: { "3.1": "SUP.10 변경 영향 분석 · 추적 일관성", "4.0": "SUP.10 변경 영향 분석 · 추적 일관성" },
+  STK_TRACE: { "3.1": "SYS.2.BP6 (이해관계자 요구 ↔ 시스템 요구)", "4.0": "SYS.2.BP5 (이해관계자 요구 ↔ 시스템 요구)" },
+  SW_UNIT: { "3.1": "SWE.3.BP1·BP5", "4.0": "SWE.3.BP1·BP3" },
 };
 export const bpLabel = (key, version) => versionsOf(version).map(v => `${v}: ${(BP[key] || {})[v] || "-"}`).join(" / ");
 
@@ -771,11 +811,11 @@ export function checkConsistency(model) {
     if (!scope[tl.level]) return;
     const ts = m.tests.filter(t => t.level === L);
     const bpk = "T_" + L;
-    const targets = tl.targetKind === "req" ? m.reqs[tl.level] : (m.interfaces[tl.level].length ? m.interfaces[tl.level] : m.comps[tl.level]);
+    const targets = tl.targetKind === "req" ? m.reqs[tl.level] : tl.targetKind === "unit" ? (m.units.SW || []) : (m.interfaces[tl.level].length ? m.interfaces[tl.level] : m.comps[tl.level]);
     if (!targets.length) return;
     const covered = new Set(ts.flatMap(t => t.targets || []));
     const unc = targets.filter(x => !covered.has(x.id)).map(x => x.id);
-    if (unc.length) add(tl.targetKind === "req" ? "error" : "warn", bpk, `${tl.label} 검증 수단이 없는 ${tl.targetKind === "req" ? "요구" : "인터페이스·컴포넌트"} ${unc.length}건`, unc);
+    if (unc.length) add(tl.targetKind === "req" ? "error" : "warn", bpk, `${tl.label} 검증 수단이 없는 ${tl.targetKind === "req" ? "요구" : tl.targetKind === "unit" ? "유닛" : "인터페이스·컴포넌트"} ${unc.length}건`, unc);
     const known = new Set([...targets.map(x => x.id), ...m.comps[tl.level].map(c => c.id)]);
     const dangling = ts.filter(t => !(t.targets || []).some(x => known.has(x))).map(t => t.id);
     if (dangling.length) add("error", bpk, `존재하지 않는 대상을 참조하는 ${tl.label} 검증 수단 ${dangling.length}건`, dangling);
@@ -783,6 +823,25 @@ export function checkConsistency(model) {
     if (noPass.length) add("warn", bpk, `합격 기준이 없는 ${tl.label} 검증 수단 ${noPass.length}건 (08-60)`, noPass);
   });
 
+  // 이해관계자 요구(STK) ↔ 시스템 요구 추적 (SYS.1 → SYS.2)
+  if (m.reqs.STK.length) {
+    const covStk = new Set(m.reqs.SYS.flatMap(r => r.parents || []));
+    const noDerive = m.reqs.STK.filter(k => covStk.has(k.id) ? false : true).map(k => k.id);
+    if (noDerive.length) add("warn", "STK_TRACE", `시스템 요구가 도출되지 않은 이해관계자 요구 ${noDerive.length}건 — 분석·합의 후 도출하거나 '해당 없음' 사유 기록`, noDerive);
+    const stkIds = new Set(m.reqs.STK.map(k => k.id));
+    const noStk = m.reqs.SYS.filter(r => r?.reqClass !== "project" && !(r.parents || []).some(p => stkIds.has(p))).map(r => r.id);
+    if (noStk.length) add("info", "STK_TRACE", `근거 이해관계자 요구가 지정되지 않은 시스템 요구 ${noStk.length}건`, noStk);
+    const pending = m.reqs.STK.filter(k => k.status !== "합의").length;
+    if (pending) add("info", "STK_TRACE", `합의되지 않은 이해관계자 요구 ${pending}건 (합의 상태: 검토 중·보류)`, m.reqs.STK.filter(k => k.status !== "합의").map(k => k.id));
+  }
+  // SWE.3 유닛 골격 — SW 요구 ↔ 유닛
+  if (m.scope.SW && (m.units.SW || []).length) {
+    const covU = new Set(m.units.SW.flatMap(u => u.reqs || []));
+    const noUnit = m.reqs.SW.filter(r => !covU.has(r.id)).map(r => r.id);
+    if (noUnit.length) add("warn", "SW_UNIT", `유닛에 할당되지 않은 SW 요구 ${noUnit.length}건`, noUnit);
+    const tbd = m.units.SW.filter(u => u.origin !== "header" && !u.designDone).length;
+    if (tbd) add("info", "SW_UNIT", `상세설계 내용이 골격(TBD) 상태인 유닛 ${tbd}건 — 코드·헤더 확정 후 작성`, m.units.SW.filter(u => u.origin !== "header" && !u.designDone).map(u => u.id));
+  }
   // 변경 영향 — 상위 요구 변경으로 의심(suspect) 상태가 된 추적 연결 (9절)
   changeFindings(m).forEach(f => F.push(f));
 
@@ -799,6 +858,8 @@ export function coverageMetrics(model) {
   const out = {};
   const ci = new Set(m.comps.SYS.map(c => c.id));
   out.sysAlloc = pct(m.reqs.SYS.filter(r => (m.alloc.SYS[r.id] || []).some(c => ci.has(c))).length, m.reqs.SYS.length);
+  if (m.reqs.STK.length) { const covStk = new Set(m.reqs.SYS.flatMap(r => r.parents || [])); out.stkDerive = pct(m.reqs.STK.filter(k => covStk.has(k.id)).length, m.reqs.STK.length); }
+  if (m.scope.SW && (m.units.SW || []).length) { const covU = new Set(m.units.SW.flatMap(u => u.reqs || [])); out.swUnit = pct(m.reqs.SW.filter(r => covU.has(r.id)).length, m.reqs.SW.length); }
   ["SW", "HW"].forEach(lv => {
     if (!m.scope[lv]) return;
     const parents = parentsForLevel(m, lv);
@@ -809,7 +870,7 @@ export function coverageMetrics(model) {
   });
   Object.entries(TEST_LEVELS).forEach(([L, tl]) => {
     if (!m.scope[tl.level]) return;
-    const targets = tl.targetKind === "req" ? m.reqs[tl.level] : (m.interfaces[tl.level].length ? m.interfaces[tl.level] : m.comps[tl.level]);
+    const targets = tl.targetKind === "req" ? m.reqs[tl.level] : tl.targetKind === "unit" ? (m.units.SW || []) : (m.interfaces[tl.level].length ? m.interfaces[tl.level] : m.comps[tl.level]);
     const cov = new Set(m.tests.filter(t => t.level === L).flatMap(t => t.targets || []));
     out["t" + L] = pct(targets.filter(x => cov.has(x.id)).length, targets.length);
   });
@@ -1037,7 +1098,10 @@ export function listLinks(model) {
   const out = [];
   const lvOn = lv => lv === "SYS" || !!(m.scope || {})[lv];
   const reqById = {};
-  ["SYS", "SW", "HW"].forEach(lv => (m.reqs[lv] || []).forEach(r => { reqById[r.id] = { ...r, _lv: lv }; }));
+  ["STK", "SYS", "SW", "HW"].forEach(lv => (m.reqs[lv] || []).forEach(r => { reqById[r.id] = { ...r, _lv: lv }; }));
+  // 이해관계자 요구(STK) → 시스템 요구 파생 (SYS 요구의 parents)
+  if ((m.reqs.STK || []).length) (m.reqs.SYS || []).forEach(r => [...new Set(r.parents || [])].forEach(p =>
+    out.push({ key: `${p}>derive>${r.id}`, up: p, kind: "derive", down: r.id, downLevel: "SYS", downTitle: r.title || "", dh: reqHash(r) })));
   ["SYS", "SW", "HW"].forEach(lv => {
     if (!lvOn(lv)) return;
     const comps = Object.fromEntries((m.comps[lv] || []).map(c => [c.id, c]));
@@ -1154,14 +1218,76 @@ export function changeFindings(model) {
 }
 
 // 요구사항 확정 전 미리보기: 지금 확정하면 어떤 연결이 의심·고아가 되는가
-export function previewImpact(aspice, items) {
+export function previewImpact(aspice, items, stkItems) {
   if (!aspice) return null;
   const base = baselineLinks(aspice);
-  const next = { ...base, reqs: { ...base.reqs, SYS: syncSysReqs(items, base.reqs.SYS) } };
+  const next = { ...base, reqs: { ...base.reqs, ...(Array.isArray(stkItems) ? { STK: syncStkReqs(stkItems, base.reqs.STK) } : {}), SYS: syncSysReqs(items, base.reqs.SYS) } };
   const before = Object.fromEntries(linkStatus(base).links.map(l => [l.key, l.state]));
   const st = linkStatus(next);
   // 이번 확정으로 '새로' 의심·고아가 되는 연결만 (이미 미해결인 연결은 제외)
   const sus = st.links.filter(l => l.state === "suspect" && before[l.key] !== "suspect");
   const orp = st.links.filter(l => l.state === "orphan" && before[l.key] !== "orphan");
   return { changedReqs: new Set(sus.map(l => l.up)).size, suspect: sus.length, orphan: orp.length, removedReqs: new Set(orp.map(l => l.up)).size };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10) SWE.3 유닛 골격 — 근거가 있는 부분만 결정적으로 생성
+//    · 규칙 골격: SW 컴포넌트에 할당된 SW 요구 → 유닛 1개(요구↔유닛 추적). 알고리즘·동적 동작은 TBD.
+//    · 헤더 가져오기: C 헤더(.h)의 함수 원형·자료형·상수를 읽어 유닛 인터페이스를 채운다 (AI 미사용, 코드가 근거).
+//    unit = { id, comp, name, desc, reqs:[SW 요구 ID], funcs:[{ret,name,params}], types:[], macros:[{name,value}], origin: rule|header|manual, file, designDone }
+// ═══════════════════════════════════════════════════════════════════════════
+export const UNIT_PREFIX = "SWU-";
+export function ruleUnits(model) {
+  const m = normalizeModel(model);
+  const keep = (m.units.SW || []).filter(u => u.origin !== "rule");
+  const out = [...keep];
+  const covered = new Set(keep.flatMap(u => u.reqs || []));
+  m.comps.SW.forEach(c => {
+    const reqs = m.reqs.SW.filter(r => (m.alloc.SW[r.id] || []).includes(c.id));
+    const fn = reqs.filter(r => r.type !== "비기능" && !covered.has(r.id));
+    const nf = reqs.filter(r => r.type === "비기능").map(r => r.id);
+    if (!reqs.length && !keep.some(u => u.comp === c.id)) {
+      out.push({ id: nextId(UNIT_PREFIX, out), comp: c.id, name: `${c.name} 메인`, desc: `[상세설계 TBD] ${c.name}의 기본 유닛 — 할당 요구 없음`, reqs: [], funcs: [], types: [], macros: [], origin: "rule", file: "", designDone: false });
+      return;
+    }
+    fn.forEach(r => {
+      out.push({ id: nextId(UNIT_PREFIX, out), comp: c.id, name: r.title || r.id,
+        desc: `[상세설계 TBD] ${r.title} 처리 — 할당 요구 ${r.id}${nf.length ? ` · 제약 ${nf.join(", ")}` : ""}. 알고리즘·자료구조·동적 동작은 코드·플랫폼 확정 후 기술`,
+        reqs: [r.id, ...nf], funcs: [], types: [], macros: [], origin: "rule", file: "", designDone: false });
+    });
+  });
+  return out;
+}
+// C 헤더(.h) 해석 — 함수 원형·typedef·#define (주석 제거 후 정규식)
+export function parseCHeader(text, fileName) {
+  const src = String(text || "").replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+  const funcs = [];
+  const fre = /(?:^|[;\n}])\s*(?:extern\s+)?(?:static\s+)?(?:inline\s+)?((?:const\s+|unsigned\s+|signed\s+|struct\s+|enum\s+)?[A-Za-z_]\w*(?:\s*\*+)?(?:\s+const)?)\s+\*?\s*([A-Za-z_]\w*)\s*\(([^()]*)\)\s*;/g;
+  let mm;
+  while ((mm = fre.exec(src))) {
+    const ret = mm[1].replace(/\s+/g, " ").trim(), name = mm[2], params = mm[3].replace(/\s+/g, " ").trim();
+    if (/^(if|for|while|switch|return|sizeof|typedef)$/.test(name) || /^(typedef|define)$/.test(ret)) continue;
+    if (!funcs.some(f => f.name === name)) funcs.push({ ret, name, params: params === "void" ? "" : params });
+  }
+  const types = [];
+  const tre = /typedef\s+(?:struct|enum|union)\s*\w*\s*\{[\s\S]*?\}\s*([A-Za-z_]\w*)\s*;|typedef\s+[^;{]+?\s([A-Za-z_]\w*)\s*;/g;
+  while ((mm = tre.exec(src))) { const t = mm[1] || mm[2]; if (t && !types.includes(t)) types.push(t); }
+  const macros = [];
+  const dre = /^[ \t]*#define[ \t]+([A-Za-z_]\w*)(?:\(([^)]*)\))?[ \t]+([^\n\\]+)/gm;
+  while ((mm = dre.exec(String(text || "")))) { if (macros.length < 60) macros.push({ name: mm[1] + (mm[2] !== undefined ? `(${mm[2]})` : ""), value: mm[3].trim() }); }
+  const base = String(fileName || "unit.h").replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+  return { name: base, file: String(fileName || ""), funcs, types, macros };
+}
+// 헤더 해석 결과 → 유닛 (같은 파일명 유닛이 있으면 인터페이스만 갱신, 없으면 추가)
+export function unitsFromHeader(model, parsed, compId) {
+  const m = normalizeModel(model);
+  const out = [...(m.units.SW || [])];
+  const idx = out.findIndex(u => u.origin === "header" && u.file === parsed.file);
+  const base = { comp: compId || "", name: parsed.name, file: parsed.file, origin: "header", designDone: false,
+    funcs: parsed.funcs, types: parsed.types, macros: parsed.macros,
+    desc: `헤더 파일 ${parsed.file}에서 추출 — 함수 ${parsed.funcs.length}개 · 자료형 ${parsed.types.length}개 · 상수 ${parsed.macros.length}개 (코드가 근거). 동적 동작·알고리즘은 소스 확정 후 기술` };
+  if (idx >= 0) out[idx] = { ...out[idx], ...base, reqs: out[idx].reqs || [] };
+  else out.push({ id: nextId(UNIT_PREFIX, out), reqs: [], ...base });
+  return out;
 }
