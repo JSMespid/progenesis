@@ -2,9 +2,28 @@ import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { SDLC_FACTOR_CRITERIA } from './sdlcFactorCriteria';
 import TailoringGuideModal from './TailoringGuideModal';
-import { TAILORING_GUIDES, getGuideForOSSP, mapMgmtOutput } from './tailoringGuides';
+import { TAILORING_GUIDES, getGuideForOSSP as baseGuideForOSSP, mapMgmtOutput } from './tailoringGuides';
 import { PROCESS_TAILORING_GUIDE, processMark, processKey, resolveProcessTailoring } from './processTailoringGuide';
 import * as AE from './aspiceEngineering';
+
+// ── 과제 유형(track) — 새 프로젝트 시작 화면에서 결정, ASPICE 여부의 유일한 기준 ──
+// 선택한 OSSP에는 guideId가 붙어 저장되어, 이후 모든 테일러링 가이드 판정이 과제 유형을 따른다.
+// track이 없는 기존 프로젝트는 종전처럼 OSSP(이름에 ASPICE·자동차 포함 여부)로 판정한다.
+const PROJECT_TRACKS = [
+  { id: "standard", icon: "🏢", label: "일반 SI 과제", desc: "공공·금융·기업 정보시스템 구축 — PMBOK 기반, 정보공학/UML·Agile·DevOps 등", note: "요구사항은 산출물 단계의 시스템 요구사항 명세서 행에서 AI로 작성" },
+  { id: "aspice", icon: "🚗", label: "ASPICE 자동차 과제", desc: "차량 전장 시스템·SW 개발 — Automotive SPICE 3.1 / 4.0", note: "요구 도출·명세부터 설계·검증·추적성까지 V-모델에서 작성" },
+];
+function getGuideForOSSP(ossp) {
+  if (ossp && ossp.guideId && TAILORING_GUIDES[ossp.guideId]) return TAILORING_GUIDES[ossp.guideId];
+  return baseGuideForOSSP(ossp);
+}
+// 과제 유형에 맞춰 OSSP에 붙일 가이드 ID (null = OSSP 고유 가이드 그대로)
+function trackGuideId(track, ossp) {
+  if (track === "aspice") return "aspice";
+  if (track === "standard" && baseGuideForOSSP(ossp || {})?.id === "aspice") return "ie";
+  return null;
+}
+const isAspiceOSSP = o => baseGuideForOSSP(o || {})?.id === "aspice";
 
 const T = {
   bg: "#0A0C10", surface: "#111318", border: "#1E2230",
@@ -1070,7 +1089,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       startDate:p.startDate||"", endDate:p.endDate||"", pm:p.pm||"",
       members: normalizeMembers(p.tailoring?.members),
       ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=dm[k]||""; return o; }, {}),
-      clientLogo:p.tailoring?.logos?.client||null, companyLogo:p.tailoring?.logos?.company||null });
+      clientLogo:p.tailoring?.logos?.client||null, companyLogo:p.tailoring?.logos?.company||null,
+      track:p.tailoring?.track||"", aspiceVersion:p.tailoring?.aspiceVersion||"" });
     setSelectedOSSP(p.ossp||null);
     const t = p.tailoring || {};
     setSelectedSDLC(t.sdlc||null);
@@ -1100,6 +1120,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       status:"진행중", ossp:selectedOSSP,
       // sdlc 전용 컬럼 없이 tailoring(JSON)에 함께 보존 → DB 스키마 변경 불필요
       tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors, requirements: requirements||null,
+        // 과제 유형(일반 SI / ASPICE)과 ASPICE 적용 기준 — tailoring(JSON)에 보존 (DB 스키마 변경 없음)
+        track: projectForm.track || "", aspiceVersion: projectForm.aspiceVersion || "",
         // 시스템명 — 전용 컬럼 없이 tailoring(JSON)에 보존 (DB 스키마 변경 불필요)
         systemName: String(projectForm.systemName || "").trim(),
         // 수행 팀원 명단 — 전용 컬럼 없이 tailoring(JSON)에 보존
@@ -1429,6 +1451,18 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
     true,                                                           // 7 완료
   ];
   const [saveMsg, setSaveMsg] = useState("");
+  // 과제 유형이 정해지면 선택한 OSSP에 해당 가이드를 붙인다 (유형이 ASPICE 판정의 유일한 기준)
+  useEffect(() => {
+    if (!selectedOSSP || !form.track) return;
+    const gid = trackGuideId(form.track, selectedOSSP);
+    if ((selectedOSSP.guideId || null) !== gid) setSelectedOSSP({ ...selectedOSSP, guideId: gid || undefined });
+  }, [form.track, selectedOSSP]);
+  function chooseTrack(track, aspiceVersion) {
+    setForm(p => ({ ...p, track, aspiceVersion: track === "aspice" ? (aspiceVersion || p.aspiceVersion || "both") : "" }));
+    // ASPICE: 규제 수준을 '엄격'으로 두어 SDLC 추천이 V-Model로 가도록 (사용자가 바꾼 값은 유지)
+    if (track === "aspice" && sdlcFactors?.regulation === "보통" && !selectedSDLC) setSdlcFactors(f => ({ ...f, regulation: "엄격" }));
+  }
+  const showTrackPicker = !editing && !form.track && step === 0 && !form.name;
   // 진입 시 임시저장본이 있으면 복원 안내. 이미 입력 중이면(폼에 값 있음) 안내 생략.
   const [draftInfo, setDraftInfo] = useState(() => {
     const d = loadDraft ? loadDraft() : null;
@@ -1469,6 +1503,8 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
           </div>
         </Card>
       )}
+      {showTrackPicker && <TrackPicker onChoose={chooseTrack} />}
+      {!showTrackPicker && (<>
       {/* 진행 표시 */}
       <div style={{ display:"flex", gap:0, marginBottom:24, position:"relative" }}>
         <div style={{ position:"absolute", top:11, left:11, right:11, height:2, background:T.border, zIndex:0 }} />
@@ -1486,9 +1522,10 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         })}
       </div>
       <Card style={{ padding:20, minHeight:300, marginBottom:16 }}>
-        {step===0 && <StepInfo form={form} setForm={setForm} />}
+        {step===0 && <StepInfo form={form} setForm={setForm} onChooseTrack={chooseTrack} osspChosen={!!selectedOSSP} />}
+        {step===1 && form.track === "aspice" && <div style={{ fontSize:11.5, color:T.accent, padding:"8px 12px", background:T.accent+"11", border:`1px solid ${T.accent}44`, borderRadius:8, marginBottom:12 }}>🚗 ASPICE 자동차 과제 — 단계별 검증·확인과 증적을 중시하므로 <b>V-Model</b>을 권장합니다 (규제 요인 '엄격' 반영).</div>}
         {step===1 && <StepSDLC factors={sdlcFactors} setFactors={setSdlcFactors} selected={selectedSDLC} setSelected={setSelectedSDLC} recommendation={sdlcRecommendation} recommending={recommending} genError={genError} onRecommend={onRecommendSDLC} />}
-        {step===2 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} sdlc={selectedSDLC} />}
+        {step===2 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} sdlc={selectedSDLC} track={form.track} />}
         {step===3 && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} genProgress={genProgress} onRecommendPBS={onRecommendPBS} pbsNoAi={pbsNoAi} onTogglePbsNoAi={onTogglePbsNoAi} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} form={form} setForm={setForm} />}
@@ -1501,6 +1538,62 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
           ? <Btn disabled={!canNext[step]} onClick={()=>setStep(s=>s+1)}>다음 →</Btn>
           : <Btn onClick={onFinish} disabled={saving}>{saving ? "저장 중…" : (editing ? "✓ 수정 저장" : "✓ 완료")}</Btn>}
       </div>
+      </>)}
+    </div>
+  );
+}
+
+// ── 새 프로젝트 시작 화면: 과제 유형 선택 (기본정보 이전) ──
+function TrackPicker({ onChoose }) {
+  const [ver, setVer] = useState("both");
+  return (
+    <Card style={{ padding:24, marginBottom:16 }}>
+      <h2 style={{ fontSize:16, fontWeight:700, marginBottom:4 }}>어떤 과제인가요?</h2>
+      <p style={{ fontSize:12, color:T.muted, marginBottom:18 }}>과제 유형에 따라 추천 SDLC·OSSP와 요구사항 작성 위치가 달라집니다. 기본정보 단계에서 언제든 바꿀 수 있습니다.</p>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(280px, 1fr))", gap:14 }}>
+        {PROJECT_TRACKS.map(t => (
+          <div key={t.id} style={{ padding:18, borderRadius:12, border:`2px solid ${T.border}`, background:T.bg, display:"flex", flexDirection:"column", gap:8 }}>
+            <div style={{ fontSize:28 }}>{t.icon}</div>
+            <div style={{ fontSize:15, fontWeight:700 }}>{t.label}</div>
+            <div style={{ fontSize:12, color:T.muted, lineHeight:1.5 }}>{t.desc}</div>
+            <div style={{ fontSize:11.5, color:T.accent, lineHeight:1.5 }}>→ {t.note}</div>
+            {t.id === "aspice" && (
+              <div style={{ marginTop:4 }}>
+                <div style={{ fontSize:10.5, color:T.muted, marginBottom:5 }}>적용 기준 (고객사 심사 버전) — 나중에 V-모델에서 변경 가능</div>
+                <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                  {AE.ASPICE_VERSIONS.map(v => (
+                    <button key={v.id} onClick={() => setVer(v.id)} title={v.desc}
+                      style={{ fontSize:11, padding:"4px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${ver === v.id ? T.accent : T.border}`, background: ver === v.id ? T.accent : "transparent", color: ver === v.id ? "#fff" : T.muted }}>{v.label}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div style={{ flex:1 }} />
+            <Btn onClick={() => onChoose(t.id, t.id === "aspice" ? ver : "")} style={{ fontSize:12.5, padding:"8px 14px", marginTop:6 }}>이 유형으로 시작 →</Btn>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+// 기본정보 단계 상단: 과제 유형 확인·변경
+function TrackField({ form, onChooseTrack, osspChosen }) {
+  const [warn, setWarn] = useState(false);
+  return (
+    <div style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
+      <div style={{ fontSize:11, color:T.muted, marginBottom:6 }}>과제 유형 {!form.track && <span style={{ color:T.amber }}>— 미지정 (선택한 OSSP로 자동 판정 중)</span>}</div>
+      <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
+        {PROJECT_TRACKS.map(t => (
+          <button key={t.id} onClick={() => { if (form.track !== t.id) { onChooseTrack(t.id); if (osspChosen) setWarn(true); } }}
+            style={{ fontSize:12, padding:"6px 12px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${form.track === t.id ? T.accent : T.border}`, background: form.track === t.id ? T.accent : "transparent", color: form.track === t.id ? "#fff" : T.text }}>{t.icon} {t.label}</button>
+        ))}
+        {form.track === "aspice" && (
+          <select value={form.aspiceVersion || "both"} onChange={e => onChooseTrack("aspice", e.target.value)} style={{ fontSize:11.5, padding:"5px 8px", background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, fontFamily:"inherit" }}>
+            {AE.ASPICE_VERSIONS.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+          </select>
+        )}
+      </div>
+      {warn && <div style={{ fontSize:11, color:T.amber, marginTop:6 }}>⚠ 과제 유형이 바뀌면 적용되는 테일러링 가이드가 달라집니다. 이미 진행한 OSSP·테일러링·PDP 단계를 다시 확인해 주세요. 작성한 요구사항과 V-모델 데이터는 그대로 보존됩니다.</div>}
     </div>
   );
 }
@@ -1665,7 +1758,7 @@ function TeamMembersEditor({ form, setForm }) {
   );
 }
 
-function StepInfo({ form, setForm }) {
+function StepInfo({ form, setForm, onChooseTrack, osspChosen }) {
   const f = k => v => setForm(p=>({...p,[k]:v}));
   // 로고 업로드: dataURL + 원본 크기(폭/높이) 저장 — docx 임베드 시 비율 유지에 사용
   const readLogo = k => e => {
@@ -1687,6 +1780,7 @@ function StepInfo({ form, setForm }) {
     <div>
       <h2 style={{ fontSize:15, fontWeight:600, marginBottom:16 }}>프로젝트 기본 정보</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+        {onChooseTrack && <TrackField form={form} onChooseTrack={onChooseTrack} osspChosen={osspChosen} />}
         <Input label="프로젝트명 *" value={form.name} onChange={f("name")} placeholder="예: 스마트팩토리 MES 고도화" />
         <div>
           <Input label="시스템명" value={form.systemName} onChange={f("systemName")}
@@ -2005,9 +2099,15 @@ function StepSDLC({ factors, setFactors, selected, setSelected, recommendation, 
   );
 }
 
-function StepOSSP({ selected, setSelected, customOSSP=[], sdlc }) {
+function StepOSSP({ selected, setSelected, customOSSP=[], sdlc, track }) {
   // SDLC와 같은 접근(또는 같은 모델 id)을 가진 OSSP를 상단으로 정렬
-  const base = [...OSSP_OPTIONS, ...customOSSP];
+  const all = [...OSSP_OPTIONS, ...customOSSP];
+  // 과제 유형별 필터: ASPICE → ASPICE로 식별되는 OSSP, 일반 SI → 그 외. 해당 OSSP가 없거나 '모두 보기'면 전체 표시
+  const [showAll, setShowAll] = useState(false);
+  const fits = o => track === "aspice" ? isAspiceOSSP(o) : track === "standard" ? !isAspiceOSSP(o) : true;
+  const fitting = all.filter(fits);
+  const base = (showAll || !fitting.length) ? all : fitting;
+  const hidden = all.length - base.length;
   const matchesSDLC = (o) => sdlc && (o.id === sdlc.id || (o.approach && o.approach === sdlc.approach));
   const options = [...base].sort((a,b)=> (matchesSDLC(b)?1:0) - (matchesSDLC(a)?1:0));
   return (
@@ -2020,9 +2120,15 @@ function StepOSSP({ selected, setSelected, customOSSP=[], sdlc }) {
           {sdlc.approach && <span> ({sdlc.approach})</span>} — 이 방식에 어울리는 OSSP를 위쪽에 정렬했습니다.
         </div>
       )}
+      {track && (
+        <div style={{ fontSize:11, color:T.muted, marginBottom:12, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+          <span>{track === "aspice" ? "🚗 ASPICE 자동차 과제" : "🏢 일반 SI 과제"}에 맞는 OSSP만 표시합니다{track === "aspice" && !fitting.length ? " — ASPICE로 식별되는 OSSP가 없어 전체를 표시합니다. 고른 OSSP에는 ASPICE 테일러링 가이드가 적용됩니다." : ""}</span>
+          {(hidden > 0 || showAll) && fitting.length > 0 && <button onClick={()=>setShowAll(v=>!v)} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"2px 8px", fontFamily:"inherit" }}>{showAll ? "유형에 맞는 OSSP만" : `다른 OSSP ${hidden}개도 보기`}</button>}
+        </div>
+      )}
       <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
         {options.map(o=>(
-          <div key={o.id} onClick={()=>setSelected(o)} style={{ padding:16, borderRadius:12, border:`2px solid ${selected?.id===o.id?T.accent:T.border}`, background:selected?.id===o.id?T.accentGlow:T.bg, cursor:"pointer", transition:"all .2s" }}>
+          <div key={o.id} onClick={()=>setSelected(track ? { ...o, guideId: trackGuideId(track, o) || undefined } : o)} style={{ padding:16, borderRadius:12, border:`2px solid ${selected?.id===o.id?T.accent:T.border}`, background:selected?.id===o.id?T.accentGlow:T.bg, cursor:"pointer", transition:"all .2s" }}>
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
               <span style={{ fontWeight:700, fontSize:14, color:selected?.id===o.id?T.accent:T.text }}>{o.label}</span>
               {o.custom && <Badge color={T.green}>사내</Badge>}
@@ -7285,7 +7391,8 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
 
 // ── 요구사항 AI 작성 모달: 원문 입력(텍스트·txt·docx 업로드) → AI 도출·명세 → 검토·수정 → 확정 ──
 // 확정된 요구사항은 요구사항 정의서·명세서 docx 생성과 요구사항 추적 매트릭스(xlsx) 자동 채움에 사용됨
-function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp }) {
+// embedded: ASPICE 과제에서 V-모델 ① 탭 안에 패널로 표시 (오버레이·헤더 없음, 확정 시 onEmbeddedConfirm 호출)
+function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, embedded = false, onEmbeddedConfirm, previewAspice, seedItems }) {
   // OSSP별 문구·AI 역할 — 가이드에 reqGen이 없으면 기존(정보공학) 문구 사용
   const RG = getGuideForOSSP(ossp || {})?.reqGen || {};
   const QSTD = RG.qualityStd || { name: "ISO 9126", chars: "기능성/신뢰성/사용성/효율성/유지보수성/이식성" };
@@ -7296,7 +7403,7 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp }
   const [srcText, setSrcText] = useState("");
   const [srcFiles, setSrcFiles] = useState([]);   // 업로드된 원문 파일들 [{name, text}]
   const [srcDrag, setSrcDrag] = useState(false);  // 드래그앤드롭 하이라이트
-  const [items, setItems] = useState(requirements?.items ? requirements.items.map(x => ({ ...x })) : []);
+  const [items, setItems] = useState(() => { const src = seedItems || requirements?.items; return src ? src.map(x => ({ ...x })) : []; });
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState(null);
   const [error, setError] = useState(null);
@@ -7429,24 +7536,23 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
     const normed = assignReqIds(valid, reqIdFloor(requirements)).map(it => ({ ...it, wbsNo: it.wbsNo && (it.wbsNo === "공통" || leafName[it.wbsNo] !== undefined) ? it.wbsNo : "공통" }));
     // ASPICE V-모델 추적 모델 보존 — 기존 연결의 기준선을 '변경 전' 내용으로 먼저 등록한 뒤 새 내용으로 동기화한다.
     // 이렇게 해야 내용이 바뀐 요구의 하위 연결(할당·파생·검증)이 '변경 검토 필요'로 표시된다 (자동 수정은 하지 않음).
+    const meta = { items: normed, sourceName: srcFiles.length ? srcFiles.map(f => f.name).join(", ") : (requirements?.sourceName || "직접 입력"), specLeaves: leaves, qualityStd: QSTD.name, updatedAt: new Date().toISOString(),
+      idRegistry: nextIdRegistry(requirements, normed) };
+    if (embedded) {
+      // V-모델 안: 기준선 등록·동기화·저장은 V-모델이 처리 (편집 중인 추적 모델 기준)
+      setItems(normed.map(x => ({ ...x })));
+      setError(null);
+      onEmbeddedConfirm && onEmbeddedConfirm(meta);
+      return;
+    }
     const aeBase = requirements?.aspice ? AE.baselineLinks(requirements.aspice) : null;
-    setRequirements({ items: normed, sourceName: srcFiles.length ? srcFiles.map(f => f.name).join(", ") : "직접 입력", specLeaves: leaves, qualityStd: QSTD.name, updatedAt: new Date().toISOString(),
-      idRegistry: nextIdRegistry(requirements, normed),
+    setRequirements({ ...meta,
       ...(aeBase ? { aspice: { ...aeBase, reqs: { ...aeBase.reqs, SYS: AE.syncSysReqs(normed, aeBase.reqs.SYS) } } } : {}) });
     onClose();
   }
 
-  return (
-    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.72)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
-      <div onClick={e=>e.stopPropagation()} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:14, width:"100%", maxWidth:980, maxHeight:"90vh", display:"flex", flexDirection:"column" }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 18px", borderBottom:`1px solid ${T.border}`, flexShrink:0 }}>
-          <div>
-            <div style={{ fontSize:14, fontWeight:700 }}>🤖 요구사항 정의서·명세서 AI 작성</div>
-            <div style={{ fontSize:10.5, color:T.muted, marginTop:2 }}>{RG.desc || "이해관계자 요구사항 원문 → 도출(RD1200)·명세(RD1300) → 검토·확정 시 OSSP 템플릿 기반 정의서(xlsx)·명세서(docx)와 요구사항 추적 매트릭스에 자동 반영"}</div>
-          </div>
-          <button onClick={onClose} style={{ background:"none", border:"none", color:T.muted, fontSize:18, cursor:"pointer" }}>✕</button>
-        </div>
-        <div style={{ padding:"14px 18px", overflowY:"auto" }}>
+  const bodyEl = (
+        <div style={embedded ? {} : { padding:"14px 18px", overflowY:"auto" }}>
           <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} />
           <div onDragOver={e=>{ e.preventDefault(); if (!busy) setSrcDrag(true); }} onDragLeave={()=>setSrcDrag(false)}
             onDrop={e=>{ e.preventDefault(); setSrcDrag(false); addSrcFiles(Array.from(e.dataTransfer.files || [])); }}
@@ -7527,16 +7633,39 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
             </div>
           )}
         </div>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 18px", borderTop:`1px solid ${T.border}`, flexShrink:0 }}>
-          {(() => { const imp = requirements?.aspice ? AE.previewImpact(requirements.aspice, assignReqIds(items.filter(it => String(it.name || "").trim()), reqIdFloor(requirements))) : null; return (
+  );
+  const aeForPreview = embedded ? previewAspice : requirements?.aspice;
+  const footerEl = (
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, padding: embedded ? "10px 0" : "12px 18px", borderTop:`1px solid ${T.border}`, flexShrink:0, ...(embedded ? { position:"sticky", bottom:-16, background:T.surface, zIndex:3 } : {}) }}>
+          {(() => { const imp = aeForPreview ? AE.previewImpact(aeForPreview, assignReqIds(items.filter(it => String(it.name || "").trim()), reqIdFloor(requirements))) : null; return (
           <span style={{ fontSize:10.5, color:T.muted }}>{requirements?.items?.length ? `현재 확정본: ${requirements.items.length}건 (${(requirements.updatedAt||"").slice(0,10)})` : "확정된 요구사항 없음"}
             {imp && (imp.suspect || imp.orphan) ? <span style={{ color:T.amber, marginLeft:8 }}>⚠ 확정하면 V-모델 추적 연결 {imp.suspect ? `${imp.suspect}건이 '변경 검토 필요'(변경 요구 ${imp.changedReqs}건)` : ""}{imp.suspect && imp.orphan ? ", " : ""}{imp.orphan ? `${imp.orphan}건이 고아 연결(삭제 요구 ${imp.removedReqs}건)` : ""}로 표시됩니다</span> : null}
           </span>); })()}
-          <div style={{ display:"flex", gap:8 }}>
-            <Btn variant="outline" onClick={onClose} style={{ fontSize:12, padding:"7px 14px" }}>취소</Btn>
-            <Btn onClick={confirmSave} disabled={busy || !items.length} style={{ fontSize:12, padding:"7px 14px" }}>✓ 확정 저장 ({items.length}건)</Btn>
+          <div style={{ display:"flex", gap:8, flexShrink:0 }}>
+            {!embedded && <Btn variant="outline" onClick={onClose} style={{ fontSize:12, padding:"7px 14px" }}>취소</Btn>}
+            <Btn onClick={confirmSave} disabled={busy || !items.length} style={{ fontSize:12, padding:"7px 14px" }}>{embedded ? `✓ 요구사항 확정 (${items.length}건)` : `✓ 확정 저장 (${items.length}건)`}</Btn>
           </div>
         </div>
+  );
+  if (embedded) return (
+    <div>
+      <div style={{ fontSize:11, color:T.muted, marginBottom:10 }}>이해관계자 요구 원문(OEM 사양서·RFQ·SOR·법규) → 요구 도출(SYS.1)·시스템 요구 명세(SYS.2) → <b>확정</b>하면 ③ 시스템 이후 단계와 추적 모델에 반영됩니다. 이미 연결된 요구의 내용이 바뀌면 하위 연결이 '변경 검토 필요'로 표시됩니다.</div>
+      {bodyEl}
+      {footerEl}
+    </div>
+  );
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.72)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div onClick={e=>e.stopPropagation()} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:14, width:"100%", maxWidth:980, maxHeight:"90vh", display:"flex", flexDirection:"column" }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 18px", borderBottom:`1px solid ${T.border}`, flexShrink:0 }}>
+          <div>
+            <div style={{ fontSize:14, fontWeight:700 }}>🤖 요구사항 정의서·명세서 AI 작성</div>
+            <div style={{ fontSize:10.5, color:T.muted, marginTop:2 }}>{RG.desc || "이해관계자 요구사항 원문 → 도출(RD1200)·명세(RD1300) → 검토·확정 시 OSSP 템플릿 기반 정의서(xlsx)·명세서(docx)와 요구사항 추적 매트릭스에 자동 반영"}</div>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:T.muted, fontSize:18, cursor:"pointer" }}>✕</button>
+        </div>
+        {bodyEl}
+        {footerEl}
       </div>
     </div>
   );
@@ -7546,7 +7675,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
 // ASPICE V-모델 엔지니어링 모달 — SYS.2 확정 요구 → SYS.3 → SWE.1/2 · HWE.1/2 → 검증 수단 → 추적·충족도
 // 저장 위치: requirements.aspice (tailoring JSON 내부 — DB 스키마 변경 없음)
 // ═══════════════════════════════════════════════════════════════════════════
-const AE_TABS = [["setup", "① 설정·입력자료"], ["SYS", "② 시스템 (SYS.2·3)"], ["SW", "③ SW (SWE.1·2)"], ["HW", "④ HW (HWE.1·2)"], ["verif", "⑤ 검증 수단"], ["trace", "⑥ 추적성·충족도"]];
+const AE_TABS = [["req", "① 요구 도출·명세"], ["setup", "② 설정·입력자료"], ["SYS", "③ 시스템 (SYS.2·3)"], ["SW", "④ SW (SWE.1·2)"], ["HW", "⑤ HW (HWE.1·2)"], ["verif", "⑥ 검증 수단"], ["trace", "⑦ 추적성·충족도"]];
 const AE_SEV = { error: { c: "#FF5B5B", l: "오류" }, warn: { c: "#F5A623", l: "경고" }, info: { c: "#6B7280", l: "정보" } };
 
 // 모달 내부에서 정의하면 렌더마다 컴포넌트가 새로 만들어져 입력 포커스가 사라지므로 최상위에 둔다
@@ -7570,16 +7699,21 @@ function AeFlags({ r }) {
   return f.length ? <span title={f.map(x => x.msg).join("\n")} style={{ fontSize: 9.5, color: T.amber, whiteSpace: "nowrap" }}>⚠ {f.length}</span> : <span style={{ fontSize: 9.5, color: T.green }}>✓</span>;
 }
 
-function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, ossp }) {
+function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, ossp, initTab }) {
   const [items, setItems] = useState(() => (requirements?.items || []).map(x => ({ ...x })));
   const [model, setModel] = useState(() => {
     // 기존 연결의 기준선을 현재 저장본 내용으로 먼저 등록한 뒤 확정 요구로 동기화 (변경 감지)
     const m = requirements?.aspice ? AE.baselineLinks(requirements.aspice) : AE.normalizeModel(null);
-    if (!requirements?.aspice) { m.useAI = !(() => { try { return localStorage.getItem(PBS_NOAI_KEY) === "1"; } catch { return false; } })(); }
+    if (!requirements?.aspice) {
+      m.useAI = !(() => { try { return localStorage.getItem(PBS_NOAI_KEY) === "1"; } catch { return false; } })();
+      if (form?.aspiceVersion && AE.ASPICE_VERSIONS.some(v => v.id === form.aspiceVersion)) m.version = form.aspiceVersion;   // 시작 화면에서 고른 적용 기준
+    }
     m.reqs.SYS = AE.syncSysReqs(requirements?.items || [], m.reqs.SYS);
     return m;
   });
-  const [tab, setTab] = useState(requirements?.aspice ? "trace" : "setup");
+  // 첫 화면: 지정 탭 → 확정 요구가 없으면 ① 요구 도출·명세 → 저장본이 있으면 추적성 → 설정
+  const [tab, setTab] = useState(initTab || (!(requirements?.items || []).length ? "req" : requirements?.aspice ? "trace" : "setup"));
+  const [itemsVer, setItemsVer] = useState(0);   // V-모델 쪽에서 요구 목록이 바뀌면(DBC 등) ① 탭 패널을 새 목록으로 다시 연다
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState(null);
   const [err, setErr] = useState(null);
@@ -7786,6 +7920,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     const add = reqs.filter(r => !exists.has(`${r._dbc.msg}|${r._dbc.tx}`));
     const newItems = assignReqIds([...items, ...add], reqIdFloor(requirements));
     setItems(newItems);
+    setItemsVer(v => v + 1);
     set(n => {
       n.reqs.SYS = AE.syncSysReqs(newItems, n.reqs.SYS);
       let comm = n.comps.SYS.find(c => c.origin === "dbc" && c.kind !== "외부");
@@ -7840,6 +7975,17 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     const out = { ...AE.baselineLinks({ ...model, reqs: { ...model.reqs, SYS: AE.syncSysReqs(items, model.reqs.SYS) } }), updatedAt: new Date().toISOString() };
     setRequirements({ ...(requirements || {}), items, aspice: out, idRegistry: nextIdRegistry(requirements, items), updatedAt: requirements?.updatedAt || new Date().toISOString() });
     onClose();
+  }
+  // ── ① 요구 도출·명세 탭에서 확정: 변경 전 기준선 등록 → 새 요구로 동기화 → 즉시 저장 ──
+  function confirmReqs(meta) {
+    const base = AE.baselineLinks(model);
+    const next = { ...base, reqs: { ...base.reqs, SYS: AE.syncSysReqs(meta.items, base.reqs.SYS) }, updatedAt: new Date().toISOString() };
+    const st = AE.linkStatus(next);
+    setModel(next);
+    setItems(meta.items);
+    setRequirements({ ...(requirements || {}), ...meta, aspice: next });
+    setErr(null);
+    setNote(`시스템 요구 ${meta.items.length}건을 확정·저장했습니다.${st.open.length ? ` 변경된 요구의 하위 연결 ${st.open.length}건은 ⑦ 추적성 탭 '변경 영향 검토'에서 확인하세요.` : " 다음은 ③ 시스템 탭에서 아키텍처를 작성하세요."}`);
   }
   // ── 변경 영향 검토: 유효/무효 판정 · 고아 연결 제거 ──
   const [reviewNote, setReviewNote] = useState({});   // { 상위ID: 판정 의견 }
@@ -7983,7 +8129,13 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               <span style={{ flex: 1 }}>상위 요구 변경으로 검토가 필요한 추적 연결이 있습니다 — 변경 검토 {lstat.suspect}건{lstat.invalid ? ` · 무효(조치 필요) ${lstat.invalid}건` : ""}{lstat.orphan ? ` · 고아 연결 ${lstat.orphan}건` : ""}. 하위 문서는 자동으로 수정되지 않습니다.</span>
               <button onClick={() => setTab("trace")} style={{ ...small, color: T.amber, borderColor: T.amber + "88" }}>변경 영향 검토</button>
             </div>)}
-          {!model.reqs.SYS.length && <div style={{ color: T.amber, fontSize: 11.5, padding: 9, background: T.amber + "11", borderRadius: 8, marginBottom: 10 }}>확정된 시스템 요구사항이 없습니다. '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2를 먼저 확정하거나, ① 탭에서 DBC를 가져오세요.</div>}
+          {!model.reqs.SYS.length && tab !== "req" && <div style={{ color: T.amber, fontSize: 11.5, padding: 9, background: T.amber + "11", borderRadius: 8, marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}><span style={{ flex: 1 }}>확정된 시스템 요구사항이 없습니다. ① 요구 도출·명세 탭에서 SYS.2를 먼저 확정하거나, ② 설정 탭에서 DBC를 가져오세요.</span><button onClick={() => setTab("req")} style={{ ...small, color: T.amber, borderColor: T.amber + "88" }}>① 탭으로</button></div>}
+
+          {/* ① 요구 도출·명세 (SYS.1·2) — 탭을 옮겨도 작성 중인 내용이 유지되도록 항상 마운트하고 숨김 처리 */}
+          <div style={{ display: tab === "req" ? "block" : "none" }}>
+            <ReqGenModal key={itemsVer} embedded form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={ossp}
+              previewAspice={model} seedItems={itemsVer ? items : undefined} onEmbeddedConfirm={confirmReqs} onClose={() => {}} />
+          </div>
 
           {tab === "setup" && (<>
             <AeSec title="적용 기준·범위">
@@ -8251,7 +8403,9 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
   const [zipError, setZipError] = useState(null);
   const [reqModal, setReqModal] = useState(false);   // 요구사항 AI 작성 모달
   const [aeModal, setAeModal] = useState(false);     // ASPICE V-모델 엔지니어링 모달
-  const isAspice = getGuideForOSSP(pdpCtx?.ossp || {})?.id === "aspice";
+  // ASPICE 여부: 과제 유형(시작 화면)이 유일한 기준, 유형이 없는 기존 과제만 OSSP로 판정
+  const isAspice = form?.track ? form.track === "aspice" : getGuideForOSSP(pdpCtx?.ossp || {})?.id === "aspice";
+  const [aeInitTab, setAeInitTab] = useState(null);
   async function handleZipDownload() {
     if (zipping) return;
     setZipping(true); setZipError(null);
@@ -8288,7 +8442,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                   : "먼저 '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2 요구사항을 확정하세요 (DBC만으로 시작할 수도 있습니다)"}
             </div>
           </div>
-          <Btn onClick={()=>setAeModal(true)} style={{ fontSize:11.5, padding:"6px 14px" }}>{am ? "V-모델 편집" : "V-모델 시작"}</Btn>
+          <Btn onClick={()=>{ setAeInitTab(null); setAeModal(true); }} style={{ fontSize:11.5, padding:"6px 14px" }}>{am ? "V-모델 편집" : "V-모델 시작"}</Btn>
         </div>); })()}
       {deliverablesData && (
         <div style={{ animation:"fadeIn .4s" }}>
@@ -8344,7 +8498,13 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                     <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.taskName ? `${doc.taskName} — ` : ""}{doc.purpose}</div></div>
                     <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
                     {isAspice && aspiceCanBuild(AE.aspiceDocKind(doc.name), pdpCtx) && <span title="ASPICE V-모델 추적 모델에서 실문서로 생성됩니다" style={{ fontSize:10, color:T.green, border:`1px solid ${T.green}55`, borderRadius:6, padding:"3px 7px", flexShrink:0 }}>V모델 ✓</span>}
-                    {reqDocKind(doc.name) && !(isAspice && aspiceCanBuild(AE.aspiceDocKind(doc.name), pdpCtx)) && (
+                    {reqDocKind(doc.name) && !(isAspice && aspiceCanBuild(AE.aspiceDocKind(doc.name), pdpCtx)) && isAspice && (
+                      <button onClick={()=>{ setAeInitTab("req"); setAeModal(true); }} title="ASPICE 과제: 요구 도출·명세는 V-모델 ① 탭에서 작성합니다"
+                        style={{ background: requirements?.items?.length ? T.green+"14" : "none", border:`1px solid ${T.green}66`, borderRadius:6, color:T.green, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>
+                        {requirements?.items?.length ? `V모델 ✓ ${requirements.items.length}건` : "V-모델에서 작성"}
+                      </button>
+                    )}
+                    {reqDocKind(doc.name) && !isAspice && (
                       <button onClick={()=>setReqModal(true)} title="이해관계자 요구사항 원문으로 AI 자동 작성"
                         style={{ background: requirements?.items?.length ? T.accentDim : "none", border:`1px solid ${T.accent}66`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>
                         {requirements?.items?.length ? `🤖 ${requirements.items.length}건 ✓` : "🤖 AI 작성"}
@@ -8365,7 +8525,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
         </div>
       )}
       {reqModal && <ReqGenModal onClose={()=>setReqModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} />}
-      {aeModal && <AspiceEngModal onClose={()=>setAeModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} />}
+      {aeModal && <AspiceEngModal onClose={()=>setAeModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} initTab={aeInitTab} />}
     </div>
   );
 }
