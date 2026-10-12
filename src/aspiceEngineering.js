@@ -535,6 +535,7 @@ export function emptyModel() {
     alloc: { SYS: {}, SW: {}, HW: {} },
     modes: [], rationale: { SYS: "", SW: "", HW: "" },
     tests: [], updatedAt: null,
+    linkReview: {}, reqSnaps: {}, reviewLog: [],   // 변경 영향 분석(링크 단위 의심 표시) — 9절
   };
 }
 export function normalizeModel(m) {
@@ -549,6 +550,7 @@ export function normalizeModel(m) {
     alloc: { SYS: { ...((x.alloc || {}).SYS || {}) }, SW: { ...((x.alloc || {}).SW || {}) }, HW: { ...((x.alloc || {}).HW || {}) } },
     modes: [...(x.modes || [])], rationale: { ...e.rationale, ...(x.rationale || {}) },
     tests: [...(x.tests || [])],
+    linkReview: { ...(x.linkReview || {}) }, reqSnaps: { ...(x.reqSnaps || {}) }, reviewLog: [...(x.reviewLog || [])],
   };
 }
 
@@ -700,6 +702,7 @@ const BP = {
   T_SWE6: { "3.1": "SWE.6.BP5·BP6", "4.0": "SWE.6.BP4" }, T_SWE5: { "3.1": "SWE.5.BP7·BP8", "4.0": "SWE.5.BP6" },
   T_HWE4: { "3.1": "HWE.4 (PAM 확장)", "4.0": "HWE.4.BP5" }, T_HWE3: { "3.1": "HWE.3 (PAM 확장)", "4.0": "HWE.3.BP5" },
   REVIEW: { "3.1": "GP 2.2.4 (13-19)", "4.0": "GP 2.2.4 · 13-52" },
+  CHANGE: { "3.1": "SUP.10 변경 영향 분석 · 추적 일관성", "4.0": "SUP.10 변경 영향 분석 · 추적 일관성" },
 };
 export const bpLabel = (key, version) => versionsOf(version).map(v => `${v}: ${(BP[key] || {})[v] || "-"}`).join(" / ");
 
@@ -779,6 +782,9 @@ export function checkConsistency(model) {
     const noPass = ts.filter(t => !String(t.passCriteria || t.expected || "").trim()).map(t => t.id);
     if (noPass.length) add("warn", bpk, `합격 기준이 없는 ${tl.label} 검증 수단 ${noPass.length}건 (08-60)`, noPass);
   });
+
+  // 변경 영향 — 상위 요구 변경으로 의심(suspect) 상태가 된 추적 연결 (9절)
+  changeFindings(m).forEach(f => F.push(f));
 
   // 리뷰·합의 증적
   const drafts = [...m.reqs.SYS, ...(scope.SW ? m.reqs.SW : []), ...(scope.HW ? m.reqs.HW : [])].filter(r => (r.status || "Draft") === "Draft").length;
@@ -995,4 +1001,167 @@ export function applyArchResult(level, res, prevComps = []) {
   });
   const modes = (Array.isArray(res?.modes) ? res.modes : []).slice(0, 12).map(x => ({ name: String(x?.name || ""), desc: String(x?.desc || ""), transition: String(x?.transition || "") })).filter(x => x.name);
   return { comps, interfaces, modes, rationale: String(res?.rationale || "") };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 9) 변경 영향 분석 — 링크 단위 의심(suspect) 표시 (SUP.10 영향 분석 · 양방향 추적 일관성)
+//    원칙: 상위 요구의 내용(제목·내용·검증 기준·유형)이 바뀌면 그 요구에서 나가는 추적 연결
+//          (요소 할당·하위 요구 파생·검증 수단)을 '변경 검토 필요'로 표시한다.
+//          하위 항목은 자동으로 고치지 않는다 — 사람이 유효/무효 판정과 의견을 남겨 해소한다.
+//    linkReview[key] = { h: 판정 시점 상위 요구 지문, dh: 판정 시점 하위 항목 지문, state: valid|invalid, note, by: auto|user, at }
+//    key = "상위ID>종류>하위ID"   (종류: alloc | derive | verify)
+// ═══════════════════════════════════════════════════════════════════════════
+export const SUSPECT_FIELDS = [["title", "제목"], ["text", "내용"], ["verifCriteria", "검증 기준"], ["type", "유형"]];
+const TEST_HASH_FIELDS = ["title", "precondition", "steps", "expected", "passCriteria"];
+const nz = s => String(s ?? "").replace(/\s+/g, " ").trim();
+function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, "0");
+}
+export function reqHash(r) { return fnv1a(SUSPECT_FIELDS.map(([k]) => nz(r?.[k])).join("\u241f")); }
+function testHash(t) { return fnv1a(TEST_HASH_FIELDS.map(k => nz(t?.[k])).join("\u241f")); }
+export function reqSnap(r) { return Object.fromEntries(SUSPECT_FIELDS.map(([k]) => [k, nz(r?.[k])])); }
+// 변경 전 스냅샷과 현재 요구를 비교해 바뀐 필드 라벨 목록
+export function changedFields(snap, r) {
+  if (!snap) return [];
+  return SUSPECT_FIELDS.filter(([k]) => nz(snap[k]) !== nz(r?.[k])).map(([, l]) => l);
+}
+export const LINK_KINDS = { alloc: "요소 할당", derive: "하위 요구 파생", verify: "검증 수단" };
+export const LINK_STATES = { valid: "유효", suspect: "변경 검토 필요", invalid: "무효(조치 필요)", orphan: "상위 삭제(고아 연결)", new: "신규", removed: "연결 제거" };
+
+// 모델의 모든 추적 연결 (하위 쪽에서 수집 — 상위가 삭제돼도 연결은 남아 고아로 드러난다)
+export function listLinks(model) {
+  const m = model;
+  const out = [];
+  const lvOn = lv => lv === "SYS" || !!(m.scope || {})[lv];
+  const reqById = {};
+  ["SYS", "SW", "HW"].forEach(lv => (m.reqs[lv] || []).forEach(r => { reqById[r.id] = { ...r, _lv: lv }; }));
+  ["SYS", "SW", "HW"].forEach(lv => {
+    if (!lvOn(lv)) return;
+    const comps = Object.fromEntries((m.comps[lv] || []).map(c => [c.id, c]));
+    (m.reqs[lv] || []).forEach(r => [...new Set(m.alloc[lv][r.id] || [])].forEach(cid => {
+      if (comps[cid]) out.push({ key: `${r.id}>alloc>${cid}`, up: r.id, kind: "alloc", down: cid, downLevel: lv, downTitle: comps[cid].name || "", dh: "" });
+    }));
+  });
+  ["SW", "HW"].forEach(lv => {
+    if (!lvOn(lv)) return;
+    (m.reqs[lv] || []).forEach(r => [...new Set(r.parents || [])].forEach(p =>
+      out.push({ key: `${p}>derive>${r.id}`, up: p, kind: "derive", down: r.id, downLevel: lv, downTitle: r.title || "", dh: reqHash(r) })));
+  });
+  (m.tests || []).forEach(t => {
+    const tl = TEST_LEVELS[t.level];
+    if (!tl || tl.targetKind !== "req" || !lvOn(tl.level)) return;
+    [...new Set(t.targets || [])].forEach(x =>
+      out.push({ key: `${x}>verify>${t.id}`, up: x, kind: "verify", down: t.id, downLevel: tl.level, downTitle: t.title || "", dh: testHash(t) }));
+  });
+  return { links: out, reqById };
+}
+
+// 연결별 상태: valid / suspect / invalid / orphan / new(아직 기준선 없음 — 저장 시 등록)
+export function linkStatus(model) {
+  const m = normalizeModel(model);
+  const { links, reqById } = listLinks(m);
+  const lr = m.linkReview;
+  const res = links.map(l => {
+    const up = reqById[l.up];
+    if (!up) return { ...l, state: "orphan" };
+    const h = reqHash(up), rec = lr[l.key];
+    if (!rec) return { ...l, state: "new", h };
+    if (rec.h !== h) return { ...l, state: "suspect", h, rec, downChanged: !!(l.dh && rec.dh && rec.dh !== l.dh), fields: changedFields(m.reqSnaps[rec.h], up) };
+    if (rec.state === "invalid") return { ...l, state: "invalid", h, rec };
+    return { ...l, state: "valid", h, rec };
+  });
+  const open = res.filter(x => x.state === "suspect" || x.state === "invalid" || x.state === "orphan");
+  const cnt = s => res.filter(x => x.state === s).length;
+  return { links: res, reqById, open, suspect: cnt("suspect"), invalid: cnt("invalid"), orphan: cnt("orphan") };
+}
+
+function keepSnaps(lr, snaps, reqById, links) {
+  const out = {};
+  const upOf = Object.fromEntries(links.map(l => [l.key, l.up]));
+  Object.entries(lr).forEach(([k, rec]) => {
+    if (!rec || out[rec.h]) return;
+    if (snaps[rec.h]) { out[rec.h] = snaps[rec.h]; return; }
+    const up = reqById[upOf[k]];
+    if (up && reqHash(up) === rec.h) out[rec.h] = reqSnap(up);
+  });
+  return out;
+}
+
+// 기준선 등록: 기록이 없는 연결(신규)을 현재 상위 내용으로 '유효' 등록하고, 사라진 연결의 기록은 정리한다.
+// ⚠ 상위 요구를 새 내용으로 바꾸기 '전에' 호출해야 변경이 감지된다 (요구사항 확정 저장·V-모델 열기 시점).
+export function baselineLinks(model) {
+  const m = normalizeModel(model);
+  const st = linkStatus(m);
+  const keys = new Set(st.links.map(l => l.key));
+  const lr = {};
+  Object.entries(m.linkReview).forEach(([k, v]) => { if (keys.has(k)) lr[k] = v; });
+  const at = new Date().toISOString();
+  st.links.forEach(l => { if (l.state === "new") lr[l.key] = { h: l.h, dh: l.dh, state: "valid", by: "auto", at }; });
+  return { ...m, linkReview: lr, reqSnaps: keepSnaps(lr, m.reqSnaps, st.reqById, st.links) };
+}
+
+// 판정: 유효(영향 없음/하위 반영 완료) 또는 무효(하위 수정 필요). 판정 시점의 상위·하위 지문을 새 기준선으로 기록.
+export function resolveLinks(model, keys, state, note = "") {
+  const m = normalizeModel(model);
+  const st = linkStatus(m);
+  const byKey = Object.fromEntries(st.links.map(l => [l.key, l]));
+  const at = new Date().toISOString();
+  const lr = { ...m.linkReview }, snaps = { ...m.reqSnaps }, log = [...m.reviewLog];
+  (keys || []).forEach(k => {
+    const l = byKey[k];
+    if (!l || l.state === "orphan") return;
+    const up = st.reqById[l.up];
+    const prev = lr[k];
+    const fields = prev && prev.h !== l.h ? changedFields(snaps[prev.h], up) : [];
+    lr[k] = { h: l.h, dh: l.dh, state, note: nz(note), by: "user", at };
+    snaps[l.h] = reqSnap(up);
+    log.push({ at, key: k, up: l.up, kind: l.kind, down: l.down, state, note: nz(note), fields });
+  });
+  return { ...m, linkReview: lr, reqSnaps: keepSnaps(lr, snaps, st.reqById, st.links), reviewLog: log.slice(-500) };
+}
+
+// 연결 제거 (고아 연결 정리 또는 무효 판정 후 연결 자체를 끊을 때)
+export function removeLinks(model, keys, note = "") {
+  const m = normalizeModel(JSON.parse(JSON.stringify(model)));
+  const at = new Date().toISOString();
+  (keys || []).forEach(k => {
+    const [up, kind, down] = String(k).split(">");
+    if (kind === "derive") ["SW", "HW"].forEach(lv => m.reqs[lv].forEach(r => { if (r.id === down) r.parents = (r.parents || []).filter(p => p !== up); }));
+    if (kind === "verify") m.tests.forEach(t => { if (t.id === down) t.targets = (t.targets || []).filter(x => x !== up); });
+    if (kind === "alloc") ["SYS", "SW", "HW"].forEach(lv => { if (m.alloc[lv][up]) m.alloc[lv][up] = m.alloc[lv][up].filter(c => c !== down); });
+    delete m.linkReview[k];
+    m.reviewLog.push({ at, key: k, up, kind, down, state: "removed", note: nz(note), fields: [] });
+  });
+  m.reviewLog = m.reviewLog.slice(-500);
+  return m;
+}
+
+// 일관성 점검용 변경 영향 항목
+export function changeFindings(model) {
+  const st = linkStatus(model);
+  const F = [];
+  const uniq = a => [...new Set(a)];
+  const sus = st.links.filter(l => l.state === "suspect");
+  if (sus.length) { const ups = uniq(sus.map(l => l.up)); F.push({ sev: "error", bp: "CHANGE", msg: `상위 요구 변경으로 검토가 필요한 추적 연결 ${sus.length}건 (변경된 요구 ${ups.length}건) — '변경 영향 검토'에서 유효/무효 판정`, ids: ups.slice(0, 30), count: ups.length }); }
+  const inv = st.links.filter(l => l.state === "invalid");
+  if (inv.length) { const ds = uniq(inv.map(l => l.down)); F.push({ sev: "error", bp: "CHANGE", msg: `무효 판정 후 조치되지 않은 추적 연결 ${inv.length}건 — 하위 항목을 수정한 뒤 유효로 전환`, ids: ds.slice(0, 30), count: ds.length }); }
+  const orp = st.links.filter(l => l.state === "orphan");
+  if (orp.length) { const ds = uniq(orp.map(l => l.down)); F.push({ sev: "error", bp: "CHANGE", msg: `삭제된 상위 요구를 참조하는 추적 연결 ${orp.length}건 (고아 연결) — 연결 제거 또는 상위 재지정 필요`, ids: ds.slice(0, 30), count: ds.length }); }
+  return F;
+}
+
+// 요구사항 확정 전 미리보기: 지금 확정하면 어떤 연결이 의심·고아가 되는가
+export function previewImpact(aspice, items) {
+  if (!aspice) return null;
+  const base = baselineLinks(aspice);
+  const next = { ...base, reqs: { ...base.reqs, SYS: syncSysReqs(items, base.reqs.SYS) } };
+  const before = Object.fromEntries(linkStatus(base).links.map(l => [l.key, l.state]));
+  const st = linkStatus(next);
+  // 이번 확정으로 '새로' 의심·고아가 되는 연결만 (이미 미해결인 연결은 제외)
+  const sus = st.links.filter(l => l.state === "suspect" && before[l.key] !== "suspect");
+  const orp = st.links.filter(l => l.state === "orphan" && before[l.key] !== "orphan");
+  return { changedReqs: new Set(sus.map(l => l.up)).size, suspect: sus.length, orphan: orp.length, removedReqs: new Set(orp.map(l => l.up)).size };
 }

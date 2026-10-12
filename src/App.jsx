@@ -4528,8 +4528,57 @@ function reqDocKind(name) {
 }
 const REQ_TYPE_PREFIX = { "기능": "RF", "비기능": "RN", "인터페이스": "RI" };
 // 유형별 접두(RF/RN/RI) + 4자리 순번 ID 부여 — 기존 ID는 유지하고 빈 항목만 이어서 채번
-function assignReqIds(items) {
-  const maxN = {};
+// ── 요구사항 ID 불변성: 한 번 발급·확정된 ID는 다른 요구에 다시 쓰지 않는다 ──
+// requirements.idRegistry = { max: { RF: n, RN: n, ... }, retired: [폐기된 ID] } — 프로젝트 JSON에 보관(스키마 변경 없음)
+function reqIdBump(floor, id) {
+  const m = /^([A-Z]{2})(\d{4})$/.exec(String(id || ""));
+  if (m) floor[m[1]] = Math.max(floor[m[1]] || 0, Number(m[2]));
+}
+function reqIdFloor(reqs, extraIds = []) {
+  const floor = { ...((reqs?.idRegistry || {}).max || {}) };
+  (reqs?.items || []).forEach(it => reqIdBump(floor, it.id));
+  ((reqs?.idRegistry || {}).retired || []).forEach(id => reqIdBump(floor, id));
+  (extraIds || []).forEach(id => reqIdBump(floor, id));
+  return floor;
+}
+// 확정 시 레지스트리 갱신: 이전 확정본에 있었는데 사라진 ID는 폐기(retired) 처리
+function nextIdRegistry(prevReqs, newItems) {
+  const newIds = new Set((newItems || []).map(i => i.id).filter(Boolean));
+  const retired = [...new Set([...(((prevReqs?.idRegistry || {}).retired) || []), ...(prevReqs?.items || []).map(i => i.id)])].filter(id => id && !newIds.has(id));
+  return { max: reqIdFloor(prevReqs, [...newIds]), retired };
+}
+// AI 재생성 결과를 기존 요구와 매칭해 같은 요구면 기존 ID를 이어받는다 (ReqIF 재반입과 같은 처리).
+// 1차: 정규화한 요구사항명 일치 → 2차: 요구사항명 유사도(문자 bigram Dice) + 출처 일치 가점. 각 기존 ID는 한 번만 사용.
+function matchPrevReqIds(list, prevItems) {
+  const norm = s => String(s || "").toLowerCase().replace(/[\s\p{P}\p{S}]/gu, "");
+  const grams = s => { const g = new Map(); for (let i = 0; i < s.length - 1; i++) { const k = s.slice(i, i + 2); g.set(k, (g.get(k) || 0) + 1); } return g; };
+  const dice = (a, b) => {
+    if (!a || !b) return 0; if (a === b) return 1;
+    const A = grams(a), B = grams(b); let inter = 0, na = 0, nb = 0;
+    A.forEach((v, k) => { na += v; inter += Math.min(v, B.get(k) || 0); }); B.forEach(v => { nb += v; });
+    return na + nb ? (2 * inter) / (na + nb) : 0;
+  };
+  const prev = (prevItems || []).filter(p => p && p.id && String(p.name || "").trim());
+  const used = new Set(), out = list.map(it => ({ ...it, id: "" }));
+  out.forEach(it => {
+    const n = norm(it.name);
+    const hit = prev.find(p => !used.has(p.id) && norm(p.name) === n);
+    if (hit) { it.id = hit.id; used.add(hit.id); }
+  });
+  const cands = [];
+  out.forEach((it, i) => {
+    if (it.id) return;
+    prev.forEach(p => {
+      if (used.has(p.id)) return;
+      const sc = dice(norm(it.name), norm(p.name)) + (String(it.source || "").trim() && String(it.source).trim() === String(p.source || "").trim() ? 0.15 : 0);
+      if (sc >= 0.6) cands.push({ i, id: p.id, sc });
+    });
+  });
+  cands.sort((a, b) => b.sc - a.sc).forEach(c => { if (!out[c.i].id && !used.has(c.id)) { out[c.i].id = c.id; used.add(c.id); } });
+  return { list: out, kept: used.size, missing: prev.filter(p => !used.has(p.id)).map(p => p.id) };
+}
+function assignReqIds(items, floor = {}) {
+  const maxN = { ...(floor || {}) };
   items.forEach(it => { const m = /^([A-Z]{2})(\d{4})$/.exec(String(it.id || "")); if (m) maxN[m[1]] = Math.max(maxN[m[1]] || 0, Number(m[2])); });
   return items.map(it => {
     if (it.id) return it;
@@ -6706,6 +6755,10 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   const sc = model.scope;
   const tOf = (L, id) => model.tests.filter(t => t.level === L && (t.targets || []).includes(id)).map(t => t.id);
   const sysComp = Object.fromEntries(model.comps.SYS.map(c => [c.id, c]));
+  // 변경 영향(링크 단위 의심 표시) — 프로젝트 요구 포함 전체 모델 기준
+  const lst = AE.linkStatus(fullModel);
+  const openUp = new Set(lst.open.filter(l => l.state !== "orphan").map(l => l.up));
+  const openDown = new Set(lst.open.map(l => l.down));
   const fwd = [["요구사항 추적 매트릭스 — 순방향"], [`프로젝트: ${meta.name || ""}`, `문서번호: ${projectDocNo(meta, doc?.code || "SY2105")}`, `정보항목: ${AE.wpLabel("RTM", model.version)}`], []];
   const hdr = ["시스템 요구", "요구사항명", "출처(이해관계자)", "할당 시스템 요소", "시스템 검증(SYS.5)", "시스템 통합 검증(SYS.4)"];
   if (sc.SW) hdr.push("SW 요구", "SW 컴포넌트", "SW 검증(SWE.6)", "SW 통합 검증(SWE.5)");
@@ -6729,17 +6782,26 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
       row.push(ch.map(x => x.id).join(", "), cs.join(", "), q.join(", "), it.join(", "));
       const needs = el.some(e => lv === "SW" ? AE.elemHasSW(sysComp[e]) : AE.elemHasHW(sysComp[e]));
       if (needs && !ch.length) gaps.push(`${lv} 미파생`);
+      if (ch.some(x => openUp.has(x.id))) gaps.push(`${lv} 요구 변경 검토 필요`);
     });
+    if (openUp.has(r.id)) gaps.unshift("변경 검토 필요");
     row.push(gaps.length ? gaps.join(", ") : "OK");
     fwd.push(row);
   });
   const back = [["요구사항 추적 매트릭스 — 역방향 (검증 수단 → 요구)"], [], ["검증 수단 ID", "레벨", "제목", "대상 ID", "대상 존재", "회귀"]];
   const known = new Set(["SYS", "SW", "HW"].flatMap(lv => [...model.reqs[lv].map(x => x.id), ...model.comps[lv].map(x => x.id), ...model.interfaces[lv].map(x => x.id)]));
-  model.tests.forEach(t => back.push([t.id, AE.TEST_LEVELS[t.level]?.proc || t.level, t.title || "", (t.targets || []).join(", "), (t.targets || []).every(x => known.has(x)) ? "예" : "참조 오류", t.regression ? "Y" : ""]));
+  model.tests.forEach(t => back.push([t.id, AE.TEST_LEVELS[t.level]?.proc || t.level, t.title || "", (t.targets || []).join(", "), !(t.targets || []).every(x => known.has(x)) ? "참조 오류" : openDown.has(t.id) ? "예 (변경 검토 필요)" : "예", t.regression ? "Y" : ""]));
   const swBack = [["하위 요구 역추적 (SW/HW 요구 → 시스템 요구)"], [], ["하위 요구", "레벨", "요구사항명", "상위 시스템 요구", "상위 존재"]];
   const sysIds = new Set(model.reqs.SYS.map(r => r.id));
-  ["SW", "HW"].forEach(lv => sc[lv] && model.reqs[lv].forEach(r => swBack.push([r.id, lv, r.title || "", (r.parents || []).join(", "), (r.parents || []).some(p => sysIds.has(p)) ? "예" : "추적 없음"])));
-  const F = AE.checkConsistency(model);
+  ["SW", "HW"].forEach(lv => sc[lv] && model.reqs[lv].forEach(r => swBack.push([r.id, lv, r.title || "", (r.parents || []).join(", "), (r.parents || []).some(p => sysIds.has(p)) ? (openDown.has(r.id) ? "예 (변경 검토 필요)" : "예") : "추적 없음"])));
+  const F = [...AE.checkConsistency(model).filter(f => f.bp !== "CHANGE"), ...AE.changeFindings(fullModel)];
+  // 변경 영향·판정 이력 (SUP.10 영향 분석 증적) — 미해결 연결 + 판정 기록
+  const chg = [["변경 영향·판정 이력 — 상위 요구 변경에 따른 추적 연결 검토"], [`근거: ${AE.bpLabel("CHANGE", model.version)} · 미해결 ${lst.open.length}건 · 판정 기록 ${fullModel.reviewLog.length}건`],
+    ["상위 요구", "연결 종류", "하위 항목", "하위 항목명", "상태", "변경 필드", "판정 의견", "판정일시"],
+    ...lst.open.map(l => [l.up, AE.LINK_KINDS[l.kind], l.down, l.downTitle || "", AE.LINK_STATES[l.state] + (l.downChanged ? " (하위 수정됨)" : ""), (l.fields || []).join(", "), l.rec?.state === "invalid" ? (l.rec.note || "") : "", l.rec?.by === "user" ? String(l.rec.at || "").slice(0, 16).replace("T", " ") : ""]),
+    ...(lst.open.length ? [] : [["-", "-", "-", "미해결 연결 없음", "", "", "", ""]]),
+    [], ["판정 기록 (최신순)"], ["판정일시", "상위 요구", "연결 종류", "하위 항목", "판정", "변경 필드", "의견", ""],
+    ...[...fullModel.reviewLog].reverse().map(g => [String(g.at || "").slice(0, 16).replace("T", " "), g.up, AE.LINK_KINDS[g.kind] || g.kind, g.down, AE.LINK_STATES[g.state] || g.state, (g.fields || []).join(", "), g.note || "", ""])];
   if (prjReqs.length) F.push({ sev: "info", bp: "SYS_REQ_TRACE", msg: `프로젝트·프로세스 요구 ${prjReqs.length}건은 제품 추적 체인(할당·SW/HW 파생·SYS.5 검증) 대상에서 제외하고 '프로젝트·프로세스 요구' 시트에서 관리 산출물로 추적함`, ids: prjReqs.map(r => r.id) });
   const cons = [["일관성·추적성 점검 결과"], [`점검일: ${new Date().toLocaleString("ko-KR")}`], ["심각도", "관련 BP", "내용", "대상 ID(최대 30)"],
     ...F.map(f => [f.sev === "error" ? "오류" : f.sev === "warn" ? "경고" : "정보", AE.bpLabel(f.bp, model.version), f.msg, (f.ids || []).join(", ")])];
@@ -6764,6 +6826,7 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
     { name: "역방향(검증→요구)", rows: back, widths: [14, 8, 40, 20, 10, 6], headerRows: [2], titleRows: [0], freezeRow: 3 },
     { name: "역방향(하위→상위)", rows: swBack, widths: [14, 6, 36, 20, 10], headerRows: [2], titleRows: [0], freezeRow: 3 },
     { name: "일관성 점검", rows: cons, widths: [8, 34, 60, 50], headerRows: [2], titleRows: [0], freezeRow: 3 },
+    ...((lst.open.length || fullModel.reviewLog.length) ? [{ name: "변경 영향·판정 이력", rows: chg, widths: [12, 14, 16, 30, 18, 18, 44, 16], headerRows: [2, chg.length - fullModel.reviewLog.length - 1], titleRows: [0], freezeRow: 3 }] : []),
     ...((fullModel.stakeholders || []).length ? [{ name: "이해관계자 요구 추적", rows: stk, widths: [12, 22, 46, 16, 40, 40], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...(prjReqs.length ? [{ name: "프로젝트·프로세스 요구", rows: prj, widths: [10, 30, 16, 18, 40, 30, 14], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...((fullModel.openIssues || []).length ? [{ name: "미결 사항", rows: oi, widths: [8, 26, 54, 44, 12, 12, 8], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
@@ -7285,13 +7348,17 @@ ${chunks[i]}`, 6000);
         raw = raw.concat(Array.isArray(r?.items) ? r.items : []);
       }
       if (!raw.length) throw new Error("도출된 요구사항이 없습니다. 원문을 확인해 주세요.");
-      let list = assignReqIds(raw.map(it => ({
+      const freshRaw = raw.map(it => ({
         type: ["기능", "비기능", "인터페이스"].includes(it.type) ? it.type : "기능",
         name: String(it.name || "").slice(0, 60), source: String(it.source || ""),
         priority: ["상", "중", "하"].includes(it.priority) ? it.priority : "중",
         summary: String(it.summary || ""), detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통",
         actors: "", basicFlow: "", subFlow: "", exceptionFlow: "", precondition: "", postcondition: "",
-      })));
+      }));
+      // 재생성 시 ID 무결성: 기존 요구와 매칭되면 기존 ID 유지, 신규만 ID 레지스트리 기준으로 새 번호 (폐기·기존 번호 재사용 금지)
+      const idMatch = matchPrevReqIds(freshRaw, items);
+      let list = assignReqIds(idMatch.list, reqIdFloor(requirements, items.map(x => x.id)));
+      const idNote = items.some(x => x.id) ? ` · 기존 ID 유지 ${idMatch.kept}건 · 신규 ${list.length - idMatch.kept}건${idMatch.missing.length ? ` · 이번 결과에 없는 기존 요구 ${idMatch.missing.length}건(${idMatch.missing.slice(0, 8).join(", ")}${idMatch.missing.length > 8 ? " …" : ""}) — 확정 시 폐기` : ""}` : "";
       // 2차(RD1300): 4건씩 상세 명세 — 상세설명·인수기준·품질특성·가정/제약 + 기능은 유스케이스 항목(관련 액터~사후 조건)
       const B = 4;
       for (let i = 0; i < list.length; i += B) {
@@ -7348,21 +7415,24 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
         }
       }
       setItems(list);
-      setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세${leaves.length ? `·모듈 배정(규칙 ${ruleCnt}건${aiCnt ? ` · AI ${aiCnt}건` : ""})` : ""} 완료 — 아래에서 검토·수정 후 확정하세요.` });
+      setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세${leaves.length ? `·모듈 배정(규칙 ${ruleCnt}건${aiCnt ? ` · AI ${aiCnt}건` : ""})` : ""} 완료${idNote} — 아래에서 검토·수정 후 확정하세요.` });
     } catch (e) { setError("AI 생성 실패: " + e.message); setProg(null); }
     setBusy(false);
   }
 
   const upd = (i, k, v) => setItems(list => list.map((it, j) => j === i ? { ...it, [k]: v } : it));
   const del = i => setItems(list => list.filter((_, j) => j !== i));
-  const add = () => setItems(list => assignReqIds([...list, { id: "", type: "기능", name: "", source: "", priority: "중", summary: "", detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통", actors: "", basicFlow: "", subFlow: "", exceptionFlow: "", precondition: "", postcondition: "" }]));
+  const add = () => setItems(list => assignReqIds([...list, { id: "", type: "기능", name: "", source: "", priority: "중", summary: "", detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통", actors: "", basicFlow: "", subFlow: "", exceptionFlow: "", precondition: "", postcondition: "" }], reqIdFloor(requirements)));
   function confirmSave() {
     const valid = items.filter(it => String(it.name || "").trim());
     if (!valid.length) { setError("확정할 요구사항이 없습니다. 요구사항명을 입력해 주세요."); return; }
-    const normed = assignReqIds(valid).map(it => ({ ...it, wbsNo: it.wbsNo && (it.wbsNo === "공통" || leafName[it.wbsNo] !== undefined) ? it.wbsNo : "공통" }));
+    const normed = assignReqIds(valid, reqIdFloor(requirements)).map(it => ({ ...it, wbsNo: it.wbsNo && (it.wbsNo === "공통" || leafName[it.wbsNo] !== undefined) ? it.wbsNo : "공통" }));
+    // ASPICE V-모델 추적 모델 보존 — 기존 연결의 기준선을 '변경 전' 내용으로 먼저 등록한 뒤 새 내용으로 동기화한다.
+    // 이렇게 해야 내용이 바뀐 요구의 하위 연결(할당·파생·검증)이 '변경 검토 필요'로 표시된다 (자동 수정은 하지 않음).
+    const aeBase = requirements?.aspice ? AE.baselineLinks(requirements.aspice) : null;
     setRequirements({ items: normed, sourceName: srcFiles.length ? srcFiles.map(f => f.name).join(", ") : "직접 입력", specLeaves: leaves, qualityStd: QSTD.name, updatedAt: new Date().toISOString(),
-      // ASPICE V-모델 추적 모델 보존 — 시스템 요구는 V-모델 모달을 열 때 ID 기준으로 재동기화된다
-      ...(requirements?.aspice ? { aspice: { ...requirements.aspice, reqs: { ...(requirements.aspice.reqs || {}), SYS: AE.syncSysReqs(normed, requirements.aspice.reqs?.SYS) } } } : {}) });
+      idRegistry: nextIdRegistry(requirements, normed),
+      ...(aeBase ? { aspice: { ...aeBase, reqs: { ...aeBase.reqs, SYS: AE.syncSysReqs(normed, aeBase.reqs.SYS) } } } : {}) });
     onClose();
   }
 
@@ -7458,7 +7528,10 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
           )}
         </div>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 18px", borderTop:`1px solid ${T.border}`, flexShrink:0 }}>
-          <span style={{ fontSize:10.5, color:T.muted }}>{requirements?.items?.length ? `현재 확정본: ${requirements.items.length}건 (${(requirements.updatedAt||"").slice(0,10)})` : "확정된 요구사항 없음"}</span>
+          {(() => { const imp = requirements?.aspice ? AE.previewImpact(requirements.aspice, assignReqIds(items.filter(it => String(it.name || "").trim()), reqIdFloor(requirements))) : null; return (
+          <span style={{ fontSize:10.5, color:T.muted }}>{requirements?.items?.length ? `현재 확정본: ${requirements.items.length}건 (${(requirements.updatedAt||"").slice(0,10)})` : "확정된 요구사항 없음"}
+            {imp && (imp.suspect || imp.orphan) ? <span style={{ color:T.amber, marginLeft:8 }}>⚠ 확정하면 V-모델 추적 연결 {imp.suspect ? `${imp.suspect}건이 '변경 검토 필요'(변경 요구 ${imp.changedReqs}건)` : ""}{imp.suspect && imp.orphan ? ", " : ""}{imp.orphan ? `${imp.orphan}건이 고아 연결(삭제 요구 ${imp.removedReqs}건)` : ""}로 표시됩니다</span> : null}
+          </span>); })()}
           <div style={{ display:"flex", gap:8 }}>
             <Btn variant="outline" onClick={onClose} style={{ fontSize:12, padding:"7px 14px" }}>취소</Btn>
             <Btn onClick={confirmSave} disabled={busy || !items.length} style={{ fontSize:12, padding:"7px 14px" }}>✓ 확정 저장 ({items.length}건)</Btn>
@@ -7493,7 +7566,8 @@ function AeFlags({ r }) {
 function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, ossp }) {
   const [items, setItems] = useState(() => (requirements?.items || []).map(x => ({ ...x })));
   const [model, setModel] = useState(() => {
-    const m = AE.normalizeModel(requirements?.aspice);
+    // 기존 연결의 기준선을 현재 저장본 내용으로 먼저 등록한 뒤 확정 요구로 동기화 (변경 감지)
+    const m = requirements?.aspice ? AE.baselineLinks(requirements.aspice) : AE.normalizeModel(null);
     if (!requirements?.aspice) { m.useAI = !(() => { try { return localStorage.getItem(PBS_NOAI_KEY) === "1"; } catch { return false; } })(); }
     m.reqs.SYS = AE.syncSysReqs(requirements?.items || [], m.reqs.SYS);
     return m;
@@ -7697,7 +7771,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     // 이미 가져온 메시지(같은 메시지명·방향)는 중복 추가하지 않음
     const exists = new Set(items.filter(i => i._dbc).map(i => `${i._dbc.msg}|${i._dbc.tx}`));
     const add = reqs.filter(r => !exists.has(`${r._dbc.msg}|${r._dbc.tx}`));
-    const newItems = assignReqIds([...items, ...add]);
+    const newItems = assignReqIds([...items, ...add], reqIdFloor(requirements));
     setItems(newItems);
     set(n => {
       n.reqs.SYS = AE.syncSysReqs(newItems, n.reqs.SYS);
@@ -7749,9 +7823,24 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   }
 
   function save() {
-    const out = { ...model, reqs: { ...model.reqs, SYS: AE.syncSysReqs(items, model.reqs.SYS) }, updatedAt: new Date().toISOString() };
-    setRequirements({ ...(requirements || {}), items, aspice: out, updatedAt: requirements?.updatedAt || new Date().toISOString() });
+    // 저장 시: 이번 세션에 새로 생긴 연결만 기준선 등록 (미해결 '변경 검토 필요' 연결은 그대로 유지), 사라진 연결 기록 정리
+    const out = { ...AE.baselineLinks({ ...model, reqs: { ...model.reqs, SYS: AE.syncSysReqs(items, model.reqs.SYS) } }), updatedAt: new Date().toISOString() };
+    setRequirements({ ...(requirements || {}), items, aspice: out, idRegistry: nextIdRegistry(requirements, items), updatedAt: requirements?.updatedAt || new Date().toISOString() });
     onClose();
+  }
+  // ── 변경 영향 검토: 유효/무효 판정 · 고아 연결 제거 ──
+  const [reviewNote, setReviewNote] = useState({});   // { 상위ID: 판정 의견 }
+  const [showLog, setShowLog] = useState(false);
+  const lstat = AE.linkStatus(model);
+  function judge(up, keys, state) {
+    const note = String(reviewNote[up] || "").trim();
+    if (state === "invalid" && !note) { setErr("무효 판정에는 의견(필요한 조치)을 입력해 주세요."); return; }
+    setErr(null);
+    setModel(m => AE.resolveLinks(m, keys, state, note));
+  }
+  function dropLinks(up, keys) {
+    setErr(null);
+    setModel(m => AE.removeLinks(m, keys, String(reviewNote[up] || "").trim() || "상위 요구 삭제에 따른 연결 제거"));
   }
   async function downloadPkg() {
     try { const ctx = { requirements: { ...(requirements || {}), items, aspice: model } }; const n = await downloadAspicePackage(form || {}, ctx); setNote(`ASPICE 산출물 ${n}건 ZIP 다운로드를 시작했습니다.`); }
@@ -7872,6 +7961,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           {(busy || prog) && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
           {err && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{err}</div>}
           {note && <div style={{ color: T.green, fontSize: 11.5, padding: 9, background: T.green + "11", borderRadius: 8, marginBottom: 10 }}>{note}</div>}
+          {lstat.open.length > 0 && tab !== "trace" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, color: T.amber, fontSize: 11.5, padding: "7px 10px", background: T.amber + "11", border: `1px solid ${T.amber}55`, borderRadius: 8, marginBottom: 10 }}>
+              <span style={{ flex: 1 }}>상위 요구 변경으로 검토가 필요한 추적 연결이 있습니다 — 변경 검토 {lstat.suspect}건{lstat.invalid ? ` · 무효(조치 필요) ${lstat.invalid}건` : ""}{lstat.orphan ? ` · 고아 연결 ${lstat.orphan}건` : ""}. 하위 문서는 자동으로 수정되지 않습니다.</span>
+              <button onClick={() => setTab("trace")} style={{ ...small, color: T.amber, borderColor: T.amber + "88" }}>변경 영향 검토</button>
+            </div>)}
           {!model.reqs.SYS.length && <div style={{ color: T.amber, fontSize: 11.5, padding: 9, background: T.amber + "11", borderRadius: 8, marginBottom: 10 }}>확정된 시스템 요구사항이 없습니다. '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2를 먼저 확정하거나, ① 탭에서 DBC를 가져오세요.</div>}
 
           {tab === "setup" && (<>
@@ -8005,6 +8099,69 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           })()}
 
           {tab === "trace" && (<>
+            {(lstat.open.length > 0 || model.reviewLog.length > 0) && (() => {
+              const groups = {};
+              lstat.open.forEach(l => { (groups[l.up] = groups[l.up] || []).push(l); });
+              const stColor = { suspect: T.amber, invalid: T.red, orphan: T.red };
+              const fieldOf = { "제목": "title", "내용": "text", "검증 기준": "verifCriteria", "유형": "type" };
+              return (
+              <AeSec title={lstat.open.length ? `변경 영향 검토 — 검토 필요 ${lstat.open.length}건 (상위 요구 ${Object.keys(groups).length}건)` : "변경 영향 검토 — 미해결 연결 없음"}
+                right={model.reviewLog.length ? <button onClick={() => setShowLog(v => !v)} style={small}>{showLog ? "판정 이력 닫기" : `판정 이력 ${model.reviewLog.length}건`}</button> : null}>
+                {lstat.open.length > 0 && <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>상위 요구의 제목·내용·검증 기준·유형이 바뀌면 그 요구에서 나가는 연결을 표시합니다. 하위 항목은 자동으로 고치지 않습니다 — 영향이 없으면 <b>유효</b>, 하위 수정이 필요하면 의견과 함께 <b>무효</b>로 판정하고, 수정을 마친 뒤 유효로 전환하세요. 판정 기록은 추적 매트릭스의 '변경 영향·판정 이력' 시트에 남습니다.</div>}
+                {Object.entries(groups).map(([up, ls]) => {
+                  const cur = lstat.reqById[up];
+                  const sus = ls.filter(l => l.state === "suspect");
+                  const snap = sus[0] ? model.reqSnaps[sus[0].rec?.h] : null;
+                  const fields = [...new Set(sus.flatMap(l => l.fields || []))];
+                  const judgeable = ls.filter(l => l.state !== "orphan").map(l => l.key);
+                  return (
+                    <div key={up} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11.5 }}>
+                        <b>{up}</b><span style={{ flex: 1 }}>{cur ? cur.title : <span style={{ color: T.red }}>삭제된 요구</span>}</span>
+                        {fields.length > 0 && <span style={{ fontSize: 10, color: T.amber }}>변경: {fields.join(" · ")}</span>}
+                      </div>
+                      {cur && snap && fields.length > 0 && (
+                        <div style={{ display: "grid", gridTemplateColumns: "80px 1fr 1fr", gap: "3px 8px", fontSize: 10.5, margin: "6px 0", padding: 6, background: T.bg, borderRadius: 6 }}>
+                          <span /><span style={{ color: T.muted }}>변경 전 (마지막 판정 기준)</span><span style={{ color: T.muted }}>변경 후 (현재)</span>
+                          {fields.map(f => (<React.Fragment key={f}>
+                            <span style={{ color: T.muted }}>{f}</span>
+                            <span style={{ textDecoration: "line-through", color: T.muted, whiteSpace: "pre-wrap" }}>{snap[fieldOf[f]] || "(없음)"}</span>
+                            <span style={{ whiteSpace: "pre-wrap" }}>{cur[fieldOf[f]] || "(없음)"}</span>
+                          </React.Fragment>))}
+                        </div>)}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3, margin: "6px 0" }}>
+                        {ls.map(l => (
+                          <div key={l.key} style={{ display: "grid", gridTemplateColumns: "92px 1fr 150px 128px", gap: 8, alignItems: "center", fontSize: 10.5 }}>
+                            <span style={{ color: T.muted }}>{AE.LINK_KINDS[l.kind]}</span>
+                            <span><b>{l.down}</b> {l.downTitle}{l.downChanged ? <span style={{ color: T.accent }}> · 하위 수정됨(확인 필요)</span> : ""}{l.state === "invalid" && l.rec?.note ? <span style={{ color: T.muted }}> · 의견: {l.rec.note}</span> : ""}</span>
+                            <span style={{ color: stColor[l.state] }}>{AE.LINK_STATES[l.state]}</span>
+                            <div style={{ display: "flex", gap: 3 }}>
+                              {l.state === "orphan"
+                                ? <button onClick={() => dropLinks(up, [l.key])} style={{ ...small, flex: 1, color: T.red }}>연결 제거</button>
+                                : <>
+                                    <button onClick={() => judge(up, [l.key], "valid")} style={{ ...small, flex: 1, color: T.green }}>유효</button>
+                                    {l.state !== "invalid" && <button onClick={() => judge(up, [l.key], "invalid")} style={{ ...small, flex: 1, color: T.red }}>무효</button>}
+                                  </>}
+                            </div>
+                          </div>))}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <input value={reviewNote[up] || ""} onChange={e => setReviewNote(o => ({ ...o, [up]: e.target.value }))} placeholder={cur ? "판정 의견 (예: 할당 영향 없음 / TC 판정 기준을 5,000rpm으로 수정 필요)" : "제거 사유 (예: 고객 협의로 요구 삭제)"} style={{ ...inp, flex: 1 }} />
+                        {judgeable.length > 1 && <button onClick={() => judge(up, judgeable, "valid")} style={{ ...small, color: T.green, whiteSpace: "nowrap" }}>모두 유효</button>}
+                        {!cur && ls.length > 1 && <button onClick={() => dropLinks(up, ls.map(l => l.key))} style={{ ...small, color: T.red, whiteSpace: "nowrap" }}>모두 제거</button>}
+                      </div>
+                    </div>);
+                })}
+                {showLog && (
+                  <div style={{ marginTop: 6, maxHeight: 220, overflowY: "auto", borderTop: `1px solid ${T.border}`, paddingTop: 6 }}>
+                    {[...model.reviewLog].reverse().slice(0, 100).map((g, i) => (
+                      <div key={i} style={{ display: "grid", gridTemplateColumns: "118px 1fr 90px", gap: 8, fontSize: 10.5, padding: "2px 0" }}>
+                        <span style={{ color: T.muted }}>{String(g.at || "").slice(0, 16).replace("T", " ")}</span>
+                        <span>{g.up} → {g.down} <span style={{ color: T.muted }}>({AE.LINK_KINDS[g.kind] || g.kind}{g.fields?.length ? ` · 변경: ${g.fields.join("·")}` : ""})</span>{g.note ? ` — ${g.note}` : ""}</span>
+                        <span style={{ color: g.state === "valid" ? T.green : T.red }}>{AE.LINK_STATES[g.state] || g.state}</span>
+                      </div>))}
+                  </div>)}
+              </AeSec>); })()}
             <AeSec title="추적·검증 커버리지" right={<Btn onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} style={{ fontSize: 11, padding: "4px 12px" }}>📦 V-모델 산출물 ZIP</Btn>}>
               <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                 {pctBar("SYS 요구 → 요소 할당", metrics.sysAlloc)}
@@ -8093,12 +8250,12 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
           subText="WBS 산출물을 수집·구성합니다." />
       )}
       {genError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9 }}>{genError}</div>}
-      {isAspice && (() => { const am = requirements?.aspice ? AE.normalizeModel(requirements.aspice) : null; const errs = am ? AE.checkConsistency(am).filter(f => f.sev === "error").length : 0; return (
+      {isAspice && (() => { const am = requirements?.aspice ? AE.normalizeModel(requirements.aspice) : null; const errs = am ? AE.checkConsistency(am).filter(f => f.sev === "error").length : 0; const openLinks = am ? AE.linkStatus(am).open.length : 0; return (
         <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", marginBottom:12, background:T.accent+"0D", border:`1px solid ${T.accentDim}`, borderLeft:`3px solid ${T.accent}`, borderRadius:9, flexWrap:"wrap" }}>
           <div style={{ flex:1, minWidth:240 }}>
             <div style={{ fontSize:12, fontWeight:700 }}>🚗 ASPICE V-모델 산출물 (시스템·SW·HW 요구 → 설계 → 검증 수단 → 추적성)</div>
             <div style={{ fontSize:10.5, color:T.muted, marginTop:2 }}>
-              {am ? `SYS ${am.reqs.SYS.length} · 요소 ${am.comps.SYS.length}${am.scope.SW ? ` · SW ${am.reqs.SW.length}` : ""}${am.scope.HW ? ` · HW ${am.reqs.HW.length}` : ""} · 검증 수단 ${am.tests.length} · 일관성 오류 ${errs}건 — 저장된 내용은 아키텍처 설계서·SW/HW 명세서·검증 명세/결과서·추적 매트릭스 다운로드에 반영됩니다`
+              {am ? `SYS ${am.reqs.SYS.length} · 요소 ${am.comps.SYS.length}${am.scope.SW ? ` · SW ${am.reqs.SW.length}` : ""}${am.scope.HW ? ` · HW ${am.reqs.HW.length}` : ""} · 검증 수단 ${am.tests.length} · 일관성 오류 ${errs}건${openLinks ? ` · 변경 검토 필요 연결 ${openLinks}건` : ""} — 저장된 내용은 아키텍처 설계서·SW/HW 명세서·검증 명세/결과서·추적 매트릭스 다운로드에 반영됩니다`
                   : requirements?.items?.length ? "확정된 시스템 요구사항에서 SYS.3 → SWE.1/2 · HWE.1/2 → 검증 수단(SYS.4/5·SWE.5/6·HWE.3/4)을 생성합니다 (ASPICE 3.1·4.0 겸용)"
                   : "먼저 '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2 요구사항을 확정하세요 (DBC만으로 시작할 수도 있습니다)"}
             </div>
