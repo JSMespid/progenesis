@@ -49,6 +49,28 @@ const ASPICE_SCOPE_GROUPS = [
 ];
 const aspiceScopeDefault = () => Object.fromEntries(ASPICE_SCOPE_GROUPS.map(g => [g.id, g.on]));
 const aspiceRowGroup = d => (ASPICE_SCOPE_GROUPS.find(g => g.re && g.re.test(String(d.note || ""))) || {}).id || null;
+// ── 관리활동 해석: 가이드에 mgmtActivities가 있으면(ASPICE) 그것을, 없으면 관리활동 테일러링 가이드(V2.0, CMMI SI용) ──
+// ASPICE 항목의 필수(●)/선택(○)은 해당 산출물의 목표 능력수준 열(M/O), 적용 여부는 적용 범위와 선택 산출물 제외(excluded)를 따른다.
+function resolveMgmt(tailoring, guide, procState) {
+  if (!guide?.mgmtActivities) return resolveProcessTailoring(procState !== undefined ? procState : tailoring?.process);
+  const scaleKey = { "(초)대형": "large", "중형": "medium", "소형": "small" }[tailoring?.scale || "중형"] || "medium";
+  const scope = tailoring?.aspiceScope || aspiceScopeDefault();
+  const excluded = tailoring?.excluded || {};
+  const rowByName = new Map((guide.matrix || []).map(r => [r.name, r]));
+  return guide.mgmtActivities.filter(a => scope[a.scope] !== false).map(a => {
+    const row = rowByName.get(a.output);
+    const mk = row?.[scaleKey];
+    const mark = mk === "M" ? "●" : "○";
+    const applied = mark === "●" || !(row && excluded[row.code]);
+    return { area: a.area, process: a.process, activity: "", outputs: a.output, guide: "", key: `am:${a.id}`, mark,
+      l3: mark, l4: mark, l5: mark, applied, changed: false, status: applied ? "적용" : "미적용",
+      reason: applied ? "" : "선택 산출물 미적용", outCode: row?.code || "" };
+  });
+}
+// 관리활동 수준 표기: ASPICE는 목표 능력수준, 그 외는 관리 성숙도 수준(L3~L5)
+const mgmtLevelLabel = (tailoring, guide) => guide?.mgmtActivities
+  ? (guide.scaleOptions?.find(o => o.value === (tailoring?.scale || "중형"))?.label || "").split(" ·")[0] || "ASPICE"
+  : (tailoring?.process?.level || "L3");
 
 const T = {
   bg: "#0A0C10", surface: "#111318", border: "#1E2230",
@@ -893,14 +915,15 @@ export default function SpiderQaAgent() {
         .map(([ph, names]) => `${ph}: ${names.join(", ")}`).join(" / ");
 
       // 프로세스 테일러링(관리 프로세스) 요약 — PDP 개요 작성 근거에 포함
-      const procApplicable2 = resolveProcessTailoring(tailoring.process).filter(r => r.status !== "해당없음");
+      const procApplicable2 = resolveMgmt(tailoring, guide).filter(r => r.status !== "해당없음");
       const procChanged = procApplicable2.filter(r => r.status !== "적용");
-      const procSummary = `관리 성숙도 수준 ${tailoring.process?.level||"L3"} · 적용대상 ${procApplicable2.length}건 (적용 ${procApplicable2.filter(r=>r.status==="적용").length} / 변경적용 ${procApplicable2.filter(r=>r.status==="변경적용").length} / 미적용 ${procApplicable2.filter(r=>r.status==="미적용").length})`
+      const procSummary = `${guide.mgmtActivities ? "ASPICE 관리활동 · 목표 " + mgmtLevelLabel(tailoring, guide) : "관리 성숙도 수준 " + (tailoring.process?.level||"L3")} · 적용대상 ${procApplicable2.length}건 (적용 ${procApplicable2.filter(r=>r.status==="적용").length} / 변경적용 ${procApplicable2.filter(r=>r.status==="변경적용").length} / 미적용 ${procApplicable2.filter(r=>r.status==="미적용").length})`
         + (procChanged.length ? ` — 변경·미적용: ${procChanged.slice(0,10).map(r=>`${r.process}${r.activity?"›"+r.activity:""}(${r.status}${r.reason?": "+r.reason:""})`).join(", ")}` : "");
 
       // PDP 개요 — AI 미사용. 테일러링 확정 결과를 근거로 표준 문안 템플릿으로 생성 (재현성·즉시성 확보)
       const phaseCount = Object.keys(byPhase).length;
-      const level = tailoring.process?.level || "L3";
+      const level = mgmtLevelLabel(tailoring, guide);
+      const levelWord = guide.mgmtActivities ? "목표 능력수준" : "관리 성숙도 수준";
       const designTxt = guide.hasDesignMethod ? `, 설계방식 ${tailoring.method||"UML"}` : "";
       const period = (projectForm.startDate && projectForm.endDate) ? `${projectForm.startDate}~${projectForm.endDate}` : "";
       const strictReg = sdlcFactors?.regulation === "엄격";
@@ -908,11 +931,11 @@ export default function SpiderQaAgent() {
       const result = {
         overview: {
           purpose: `본 문서는 ${projectForm.client ? projectForm.client + " " : ""}"${projectForm.name}" 프로젝트(유형: ${projectForm.type})에 적용할 프로젝트 정의 프로세스(PDP)를 수립하기 위해, ${osspLabel}${josaEul(osspLabel)} 「${guide.title}」 기준으로 테일러링한 결과를 정의하는 것을 목적으로 한다. PMBOK® 8판의 테일러링 원칙에 따라 ${guide.scaleTitle || "프로젝트 규모"}(${scaleLabel})${designTxt} 등 프로젝트 특성을 반영하였다.`,
-          scope: `적용 범위는 ${period ? "사업 기간(" + period + ") 중 " : ""}${selectedSDLC?.label || "선정 SDLC"} 기반 ${phaseCount}개 단계의 확정 산출물 ${applied.length}종과, 「${guide.title}」에 따른 관리활동(관리 성숙도 수준 ${level}, 적용대상 ${procApplicable2.length}건)의 이행 활동 전체로 한다. 단계별 확정 산출물: ${tailoringSummary}`,
+          scope: `적용 범위는 ${period ? "사업 기간(" + period + ") 중 " : ""}${selectedSDLC?.label || "선정 SDLC"} 기반 ${phaseCount}개 단계의 확정 산출물 ${applied.length}종과, 「${guide.title}」에 따른 관리활동(${levelWord} ${level}, 적용대상 ${procApplicable2.length}건)의 이행 활동 전체로 한다. 단계별 확정 산출물: ${tailoringSummary}`,
           objectives: [
             `테일러링 확정 산출물 ${applied.length}종의 단계별 작성·검토·승인 이행`,
             `필수(M) 산출물의 예외 없는 100% 작성 및 베이스라인 관리`,
-            `관리활동 성숙도 수준 ${level} 기준 이행 및 품질보증 활동 수행`,
+            `관리활동 ${levelWord} ${level} 기준 이행 및 품질보증 활동 수행`,
             strictReg ? "법정 감리·인증 대응을 위한 프로세스 증적의 체계적 확보" : "PMBOK® 8판 품질 성과영역 기준의 예방 중심 품질 관리 정착",
           ],
         },
@@ -977,7 +1000,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         const toks = String(outputs||"").split(/,|\s\/\s/).map(x=>x.trim()).filter(Boolean);
         return toks.find(t => t.length >= 2 && t !== "예") || toks[0] || "";
       };
-      resolveProcessTailoring(tailoring.process).filter(r => r.applied).forEach(r => {
+      resolveMgmt(tailoring, guide).filter(r => r.applied).forEach(r => {
         const n = mapMgmtOutput(firstOut(r.outputs), guide);
         if (n && !nameRef.has(n)) nameRef.set(n, { code:null, required: r.mark === "●", mgmt:true });
       });
@@ -1677,6 +1700,33 @@ function AspiceProcessPanel({ form, tailoring, setTailoring, ossp, setOssp, cust
     </div>
   );
 }
+// ── ASPICE 관리활동 목록 — 적용 범위·목표 능력수준에서 결정 (선택 ○ 항목은 해당 산출물 적용/제외와 연동) ──
+function AspiceMgmtList({ tailoring, setTailoring, guide, editable }) {
+  const items = resolveMgmt(tailoring, guide);
+  const byArea = {}; items.forEach(r => { (byArea[r.area] = byArea[r.area] || []).push(r); });
+  const toggle = code => code && setTailoring(t => ({ ...t, excluded: { ...(t.excluded || {}), [code]: !(t.excluded || {})[code] } }));
+  return (
+    <div>
+      <div style={{ fontSize:13, fontWeight:600, marginBottom:4 }}>관리활동 <span style={{ fontSize:11, color:T.muted, fontWeight:400 }}>적용 {items.filter(r => r.applied).length}/{items.length}건 · 목표 {mgmtLevelLabel(tailoring, guide)}</span></div>
+      <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>ASPICE 과제는 CMMI SI용 관리활동 가이드 대신 적용 프로세스 범위(MAN.3·SUP.1·8·9·10, 해당 시 ACQ.4·MAN.5)의 관리활동을 WBS 앞부분에 반영합니다. 필수(●)/선택(○)은 해당 산출물의 목표 능력수준 기준을 따르며{editable ? ", 선택 항목은 눌러서 적용/제외합니다(산출물 목록과 연동)" : ""}.</div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(320px, 1fr))", gap:8 }}>
+        {Object.entries(byArea).map(([area, rs]) => (
+          <div key={area} style={{ padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg }}>
+            <div style={{ fontSize:11.5, fontWeight:700, color:T.accent, marginBottom:4 }}>{area}</div>
+            {rs.map(r => (
+              <div key={r.key} onClick={() => editable && r.mark === "○" && toggle(r.outCode)}
+                style={{ display:"flex", gap:6, alignItems:"baseline", fontSize:11.5, padding:"2px 0", cursor: editable && r.mark === "○" ? "pointer" : "default", color: r.applied ? T.text : T.muted, textDecoration: r.applied ? "none" : "line-through" }}>
+                <span style={{ color: r.mark === "●" ? T.accent : T.amber, flexShrink:0 }}>{r.mark}</span>
+                <span style={{ flex:1 }}>{r.process}</span>
+                <span style={{ fontSize:10, color:T.muted, flexShrink:0 }}>→ {r.outputs}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 // CL1·CL2 '적용 범위' 단계 — 테일러링·PDP 대신 프로세스 범위와 선택 산출물만 정한다
 function AspiceScopeStep({ form, tailoring, setTailoring, ossp, setOssp, customOSSP }) {
   const cl = aspiceClOf(form);
@@ -1712,7 +1762,8 @@ function AspiceScopeStep({ form, tailoring, setTailoring, ossp, setOssp, customO
           </div>
         </div>
       ))}
-      <div style={{ fontSize:11, color:T.muted, marginTop:10, padding:"8px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>적용 프로세스 범위와 생명주기(V-Model)는 MAN.3 프로젝트 계획서에 기술합니다. 관리활동(품질보증·형상·변경 등) 작업은 표준 기준으로 WBS에 반영됩니다.</div>
+      <div style={{ marginTop:14 }}><AspiceMgmtList tailoring={tailoring} setTailoring={setTailoring} guide={guide} editable /></div>
+      <div style={{ fontSize:11, color:T.muted, marginTop:10, padding:"8px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>적용 프로세스 범위와 생명주기(V-Model)는 MAN.3 프로젝트 계획서에 기술합니다.</div>
     </div>
   );
 }
@@ -2327,7 +2378,9 @@ function StepTailoring({ tailoring, setTailoring, ossp }) {
       </div>
       {tTab==="method"
         ? <MethodologyTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={ossp} />
-        : <StepProcessTailoring tailoring={tailoring} setTailoring={setTailoring} />}
+        : getGuideForOSSP(ossp)?.mgmtActivities
+          ? <AspiceMgmtList tailoring={tailoring} setTailoring={setTailoring} guide={getGuideForOSSP(ossp)} editable />
+          : <StepProcessTailoring tailoring={tailoring} setTailoring={setTailoring} />}
     </div>
   );
 }
@@ -2702,11 +2755,16 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
 
   // 프로세스 테일러링 확정 상태 — 이 화면에서도 방법론 매트릭스와 동일하게 직접 수정 가능
   const procState = tailoring?.process || {};
-  const procLevel = procState.level || "L3";
-  const procApplicable = resolveProcessTailoring(procState).filter(r => r.status !== "해당없음");
+  const procLevel = guide?.mgmtActivities ? mgmtLevelLabel(tailoring, guide) : (procState.level || "L3");
+  const procApplicable = resolveMgmt(tailoring, guide, procState).filter(r => r.status !== "해당없음");
   const procByArea = {};
   procApplicable.forEach(r => { (procByArea[r.area] = procByArea[r.area] || []).push(r); });
   const setProcItem = (r, patch) => setTailoring && setTailoring(t => {
+    // ASPICE 관리활동: 적용 여부는 해당 선택 산출물의 적용/제외와 연동 (산출물 목록·WBS와 일치)
+    if (String(r.key).startsWith("am:")) {
+      if (patch.applied === undefined || !r.outCode) return t;
+      return { ...t, excluded: { ...(t.excluded || {}), [r.outCode]: !patch.applied } };
+    }
     const p = t.process || {};
     const items = { ...(p.items||{}) };
     items[r.key] = { applied:r.applied, changed:r.changed, reason:r.reason, ...patch };
@@ -2834,7 +2892,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
             </table>
 
             {/* 4. 프로세스 테일러링 내역서 — 방법론 매트릭스와 동일한 컬럼·규칙 (필수 고정, 선택만 수정) */}
-            <SectionTitle n="4" title={`관리활동 테일러링 내역서 (관리 성숙도 수준 ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
+            <SectionTitle n="4" title={`관리활동 테일러링 내역서 (${guide?.mgmtActivities ? "ASPICE 관리활동 · 목표 능력수준" : "관리 성숙도 수준"} ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
             <div style={{ fontSize:10, color:T.muted, marginBottom:8 }}>
               ※ 필수(●) 프로세스는 항상 적용되며 수정할 수 없습니다. 선택(○) 프로세스는 이 화면 또는 테일러링 단계의 '관리활동 테일러링' 탭에서 적용 여부·변경 여부·사유를 수정할 수 있습니다 (프로젝트 저장 시 함께 보존).
             </div>
@@ -3204,7 +3262,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
 
   // ── 관리 프로세스 작업: PDP(테일러링결과서)에서 '적용'으로 확정된 항목만 그대로 WBS에 반영 ──
   //    (별도 포함/제외 선택 없음 — 적용 여부는 PDP·프로세스 테일러링 탭에서만 결정)
-  const mgmtItems = resolveProcessTailoring(tailoring?.process).filter(r => r.applied);
+  const mgmtItems = resolveMgmt(tailoring, guide).filter(r => r.applied);
   const mgmtByArea = {};
   mgmtItems.forEach(r => { (mgmtByArea[r.area] = mgmtByArea[r.area] || []).push(r); });
   const firstOutput = (outputs) => {
@@ -3518,13 +3576,15 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
       {/* 3. 관리 프로세스 작업 — PDP에서 적용 확정된 항목만 그대로 표시 (읽기 전용) */}
       <div style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>③ 관리활동 작업 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· PDP 적용 확정 {mgmtItems.length}건 — WBS 앞부분에 자동 추가</span></div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>③ 관리활동 작업 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· {guide.mgmtActivities ? "ASPICE 적용 범위 기준" : "PDP 적용 확정"} {mgmtItems.length}건 — WBS 앞부분에 자동 추가</span></div>
           <Btn variant="outline" onClick={() => setShowMgmt(v => !v)} style={{ fontSize: 11, padding: "4px 10px" }}>
             {showMgmt ? "접기 ▲" : "목록 보기 ▼"}
           </Btn>
         </div>
         <div style={{ fontSize: 10, color: T.muted, marginBottom: showMgmt ? 6 : 0 }}>
-          ※ PDP(테일러링결과서)의 관리활동 테일러링 내역서에서 '적용'으로 확정된 관리활동만 반영됩니다. 적용 여부를 바꾸려면 테일러링 단계 또는 PDP 화면에서 수정하세요.
+          {guide.mgmtActivities
+            ? "※ ASPICE 과제는 적용 프로세스 범위(MAN.3·SUP·ACQ.4·MAN.5)와 목표 능력수준에 따라 관리활동이 정해집니다. 바꾸려면 적용 범위(CL3는 테일러링) 단계에서 수정하세요."
+            : "※ PDP(테일러링결과서)의 관리활동 테일러링 내역서에서 '적용'으로 확정된 관리활동만 반영됩니다. 적용 여부를 바꾸려면 테일러링 단계 또는 PDP 화면에서 수정하세요."}
         </div>
         {showMgmt && (
           <div style={{ maxHeight: 260, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 10, padding: "8px 10px", background: T.bg, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -4705,8 +4765,8 @@ function makePdpDocx(meta, ctx, phase) {
   const ap = docApprovers(meta);   // 설정의 작성/검토/승인자·작성조직
 
   const procState = tailoring.process || {};
-  const procLevel = procState.level || "L3";
-  const procApplicable = resolveProcessTailoring(procState).filter(r => r.status !== "해당없음");
+  const procLevel = guide?.mgmtActivities ? mgmtLevelLabel(tailoring, guide) : (procState.level || "L3");
+  const procApplicable = resolveMgmt(tailoring, guide, procState).filter(r => r.status !== "해당없음");
   const procByArea = {};
   procApplicable.forEach(r => { (procByArea[r.area] = procByArea[r.area] || []).push(r); });
 
@@ -4770,7 +4830,7 @@ function makePdpDocx(meta, ctx, phase) {
     docxP(`3. 개발산출물 테일러링 매트릭스 (전체 ${list.length}건 · 적용 ${appliedCount}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
     docxP("※ 필수(M) 산출물은 항상 적용되며 수정할 수 없습니다. 선택(O) 산출물은 테일러링 결과에 따라 적용 여부·변경 여부·사유를 기록합니다.", { size: 18, spacingAfter: 100 }) +
     docxTable(delivRows, -1) +
-    docxP(`4. 관리활동 테일러링 내역서 (관리 성숙도 수준 ${procLevel} · 적용대상 ${procApplicable.length}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
+    docxP(`4. 관리활동 테일러링 내역서 (${guide?.mgmtActivities ? "ASPICE 관리활동 · 목표 능력수준" : "관리 성숙도 수준"} ${procLevel} · 적용대상 ${procApplicable.length}건)`, { bold: true, size: 26, spacingAfter: 160 }) +
     docxP("※ 필수(●) 프로세스는 항상 적용되며 수정할 수 없습니다.", { size: 18, spacingAfter: 100 }) +
     docxTable(procRows, -1);
   return docxPackage(front + body, pkgOpts);
@@ -8690,7 +8750,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
 }
 
 function StepReview({ form, sdlc, ossp, tailoring, pdpData, wbsData, deliverablesData }) {
-  const procApplicable = resolveProcessTailoring(tailoring?.process).filter(r => r.status !== "해당없음");
+  const procApplicable = resolveMgmt(tailoring, getGuideForOSSP(ossp)).filter(r => r.status !== "해당없음");
   const items = [
     {label:"프로젝트명",value:form.name},{label:"고객사",value:form.client},
     {label:"유형",value:form.type},{label:"PM",value:form.pm},
@@ -8742,8 +8802,8 @@ function PdpDocView({ project }) {
 
   // 프로세스 테일러링 확정 상태 (저장된 tailoring.process 기반)
   const procState = tailoring.process || {};
-  const procLevel = procState.level || "L3";
-  const procApplicable = resolveProcessTailoring(procState).filter(r => r.status !== "해당없음");
+  const procLevel = guide?.mgmtActivities ? mgmtLevelLabel(tailoring, guide) : (procState.level || "L3");
+  const procApplicable = resolveMgmt(tailoring, guide, procState).filter(r => r.status !== "해당없음");
   const procByArea = {};
   procApplicable.forEach(r => { (procByArea[r.area] = procByArea[r.area] || []).push(r); });
 
@@ -8817,7 +8877,7 @@ function PdpDocView({ project }) {
       </table>
 
       {/* 4. 프로세스 테일러링 내역서 — 방법론 매트릭스와 동일한 컬럼 구성 (읽기 전용) */}
-      <SectionTitle n="4" title={`관리활동 테일러링 내역서 (관리 성숙도 수준 ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
+      <SectionTitle n="4" title={`관리활동 테일러링 내역서 (${guide?.mgmtActivities ? "ASPICE 관리활동 · 목표 능력수준" : "관리 성숙도 수준"} ${procLevel} · 적용대상 ${procApplicable.length}건)`} />
       <table style={{ width:"100%", fontSize:10.5, borderCollapse:"collapse" }}>
         <thead>
           <tr>{["프로세스 영역","세부 프로세스","구분","적용 여부","변경 여부","테일러링 내역 및 사유"].map(h=>
