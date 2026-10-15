@@ -5,7 +5,8 @@
 //  · 검토 AI는 교체 가능: OpenAI 호환(Chat Completions) 어댑터 1개로 Gemini·OpenAI·사내 LLM(vLLM·Ollama 등)을 모두 연결,
 //    Anthropic은 별도 어댑터(생성 AI와 같은 계열이므로 화면에 '독립성 낮음' 경고).
 //  · 기본값: Google Gemini (OpenAI 호환 엔드포인트).
-//  · 설정은 app_settings.review 에 저장 { provider, model, baseUrl, apiKeys:{gemini,openai,custom,anthropic} }.
+//  · 설정은 app_settings.review 에 저장 { provider(기본 검토 AI), models:{종류별 모델}, baseUrl, apiKeys:{gemini,openai,custom,anthropic} }.
+//    키·모델이 등록된 검토 AI는 모두 '사용 가능'이 되며, 검토 화면에서 실행할 때마다 고를 수 있다(예: Gemini와 ChatGPT 비교).
 //    키는 서버에만 보관하고 화면에는 마스킹만 내려보낸다. 설정이 없으면 환경변수로 폴백.
 //      GEMINI_API_KEY / OPENAI_API_KEY / REVIEW_API_KEY(사내 서버) / ANTHROPIC_API_KEY, REVIEW_PROVIDER, REVIEW_MODEL
 //  · 검토 의견의 형식 검증·근거 인용 대조(환각 필터)는 클라이언트 규칙 엔진(aspiceEngineering.js)이 수행한다.
@@ -20,7 +21,7 @@ import { getSetting, putSetting, maskKey, requireRole, audit, errorResponse } fr
 
 const PROVIDERS = {
   gemini:    { label: 'Google Gemini', kind: 'openai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', env: 'GEMINI_API_KEY', defModel: 'gemini-2.5-flash' },
-  openai:    { label: 'OpenAI (GPT 계열)', kind: 'openai', baseUrl: 'https://api.openai.com/v1', env: 'OPENAI_API_KEY', defModel: '' },
+  openai:    { label: 'OpenAI ChatGPT (GPT 계열)', kind: 'openai', baseUrl: 'https://api.openai.com/v1', env: 'OPENAI_API_KEY', defModel: '' },
   custom:    { label: 'OpenAI 호환 서버 (사내 LLM 등)', kind: 'openai', baseUrl: '', env: 'REVIEW_API_KEY', defModel: '' },
   anthropic: { label: 'Anthropic Claude', kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', env: 'ANTHROPIC_API_KEY', defModel: 'claude-haiku-4-5-20251001' },
   none:      { label: '사용 안 함 (규칙 검사·사람 판정만)', kind: 'none', baseUrl: '', env: '', defModel: '' },
@@ -49,12 +50,35 @@ async function resolve(cfgIn, override = {}) {
     try { const ai = await getSetting('ai', null); if (ai?.apiKey) { apiKey = ai.apiKey; keySource = 'db(ai)'; } } catch { /* 무시 */ }
   }
   const baseUrl = String(override.baseUrl || (provider === 'custom' ? cfg.baseUrl : '') || P.baseUrl || '').replace(/\/+$/, '');
-  const model = override.model || cfg.model || process.env.REVIEW_MODEL || P.defModel || '';
+  const isDefault = provider === (cfg.provider || process.env.REVIEW_PROVIDER || 'gemini');
+  const model = override.model || (cfg.models || {})[provider] || (isDefault ? (cfg.model || process.env.REVIEW_MODEL) : '') || P.defModel || '';
   return { provider, P, apiKey, keySource, baseUrl, model };
 }
 
-function publicView(r) {
+// 키·모델·주소가 모두 갖춰진 검토 AI 목록 (검토 화면의 선택지)
+async function availableList(cfg) {
+  const out = [];
+  for (const id of Object.keys(PROVIDERS)) {
+    if (id === 'none') continue;
+    const r = await resolve(cfg, { provider: id });
+    out.push({ id, label: r.P.label, model: r.model, hasKey: !!r.apiKey, keySource: r.keySource, keyMasked: maskKey(r.apiKey),
+      ready: !!(r.apiKey && r.model && r.baseUrl), sameAsGenerator: r.P.kind === 'anthropic' });
+  }
+  return out;
+}
+
+// 모델 목록에서 대화형 모델만 추린다 (임베딩·음성·이미지 등 제외)
+function chatModels(provider, ids) {
+  const bad = /(embed|embedding|audio|realtime|tts|transcribe|whisper|dall|image|imagen|moderation|search|aqa|veo|computer-use)/i;
+  let xs = ids.filter(x => !bad.test(x));
+  if (provider === 'openai') xs = xs.filter(x => /^(gpt|o\d|chatgpt)/i.test(x));
+  if (provider === 'gemini') xs = xs.filter(x => /gemini/i.test(x));
+  return xs.sort().reverse().slice(0, 60);
+}
+
+function publicView(r, available = []) {
   return {
+    available, defaultProvider: r.provider,
     provider: r.provider, label: r.P.label, kind: r.P.kind, model: r.model,
     baseUrl: r.provider === 'custom' ? r.baseUrl : '',
     hasKey: !!r.apiKey, keySource: r.keySource, keyMasked: maskKey(r.apiKey),
@@ -84,17 +108,23 @@ async function callOpenAICompat(r, system, prompt, maxTokens) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${r.apiKey}` },
     body: JSON.stringify(b),
   });
+  // OpenAI 최신 모델은 max_tokens 대신 max_completion_tokens를 쓴다
+  if (r.provider === 'openai') { delete body.max_tokens; body.max_completion_tokens = maxTokens; }
   let resp = await send(body);
   let text = await resp.text();
-  // 일부 추론형 모델은 temperature·max_tokens를 거부 → 해당 파라미터를 바꿔 1회 재시도
-  if (resp.status === 400 && /temperature|max_tokens/i.test(text)) {
-    const b2 = { ...body }; delete b2.temperature;
-    if (/max_tokens/i.test(text)) { delete b2.max_tokens; b2.max_completion_tokens = maxTokens; }
-    resp = await send(b2); text = await resp.text();
+  // 일부 모델(추론형 등)은 temperature·max_tokens를 거부 → 해당 매개변수를 바꿔 최대 2회 재시도
+  for (let k = 0; k < 2 && resp.status === 400 && /temperature|max_tokens|max_completion_tokens/i.test(text); k++) {
+    if (/temperature/i.test(text)) delete body.temperature;
+    if (/max_completion_tokens/i.test(text) && body.max_completion_tokens) { delete body.max_completion_tokens; body.max_tokens = maxTokens; }
+    else if (/max_tokens/i.test(text) && body.max_tokens) { delete body.max_tokens; body.max_completion_tokens = maxTokens; }
+    resp = await send(body); text = await resp.text();
   }
   if (!resp.ok) { const e = new Error(`검토 AI 오류 (HTTP ${resp.status}): ${pickMsg(text)}`); e.status = resp.status === 401 || resp.status === 403 ? 502 : resp.status; throw e; }
   let data; try { data = JSON.parse(text); } catch { throw new Error('검토 AI 응답을 해석할 수 없습니다.'); }
-  return { text: data?.choices?.[0]?.message?.content || '', model: data?.model || r.model };
+  const ch = data?.choices?.[0];
+  const content = ch?.message?.content || '';
+  if (!content.trim() && ch?.finish_reason === 'length') { const e = new Error('검토 AI가 답변 전에 토큰을 모두 사용했습니다(추론형 모델). 더 가벼운 모델을 선택하세요.'); e.status = 502; throw e; }
+  return { text: content, model: data?.model || r.model };
 }
 
 async function callAnthropic(r, system, prompt, maxTokens) {
@@ -119,30 +149,34 @@ export default async function handler(req, res) {
     // ── 설정 조회 ──
     if (req.method === 'GET') {
       if (!await requireRole(req, res, [])) return;
-      const r = await resolve(await loadCfg());
-      return res.status(200).json(publicView(r));
+      const cfg = await loadCfg();
+      const r = await resolve(cfg);
+      return res.status(200).json(publicView(r, await availableList(cfg)));
     }
 
     // ── 설정 저장 (admin) ──
     if (req.method === 'PUT') {
       const sess = await requireRole(req, res, ['admin']);
       if (!sess) return;
-      const { provider, model, baseUrl, apiKey } = req.body || {};
+      const { provider, model, baseUrl, apiKey, setDefault } = req.body || {};
       if (provider && !PROVIDERS[provider]) return res.status(400).json({ error: '알 수 없는 검토 AI 종류입니다.' });
       if (provider === 'custom' && baseUrl && !/^https:\/\//i.test(baseUrl)) return res.status(400).json({ error: '사내 서버 주소는 https:// 로 시작해야 합니다.' });
       const cur = await loadCfg(true);
-      const next = { ...cur, apiKeys: { ...(cur.apiKeys || {}) } };
-      if (provider) next.provider = provider;
-      if (model !== undefined) next.model = String(model || '').trim();
-      if (baseUrl !== undefined) next.baseUrl = String(baseUrl || '').trim();
-      const p = next.provider || 'gemini';
+      const next = { ...cur, apiKeys: { ...(cur.apiKeys || {}) }, models: { ...(cur.models || {}) } };
+      // 구버전 설정(model 단일 값) → 종류별 모델로 이전
+      if (cur.model && cur.provider && !next.models[cur.provider]) next.models[cur.provider] = cur.model;
+      delete next.model;
+      const p = provider || cur.provider || 'gemini';          // 이번에 편집하는 검토 AI
+      if (setDefault || !cur.provider) next.provider = p;      // 기본 검토 AI 지정
+      if (model !== undefined) next.models[p] = String(model || '').trim();
+      if (baseUrl !== undefined && p === 'custom') next.baseUrl = String(baseUrl || '').trim();
       if (apiKey === null) delete next.apiKeys[p];
       else if (apiKey && String(apiKey).trim()) next.apiKeys[p] = String(apiKey).trim();
       next.updatedAt = new Date().toISOString();
       await putSetting('review', next);
       _cache = { at: 0, cfg: null };
-      await audit(sess.login_id, 'review.settings', p, `model=${next.model || '(기본)'}`);
-      return res.status(200).json(publicView(await resolve(next)));
+      await audit(sess.login_id, 'review.settings', p, `model=${next.models[p] || '(기본)'}${setDefault ? ' · 기본 지정' : ''}`);
+      return res.status(200).json(publicView(await resolve(next), await availableList(next)));
     }
 
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -159,7 +193,7 @@ export default async function handler(req, res) {
       if (r.P.kind === 'openai') {
         try {
           const m = await fetchT(`${r.baseUrl}/models`, { headers: { Authorization: `Bearer ${r.apiKey}` } });
-          if (m.ok) { const d = await m.json(); models = (d.data || []).map(x => String(x.id || '').replace(/^models\//, '')).filter(Boolean).slice(0, 60); }
+          if (m.ok) { const d = await m.json(); models = chatModels(r.provider, (d.data || []).map(x => String(x.id || '').replace(/^models\//, '')).filter(Boolean)); }
         } catch { /* 목록 미지원 서버는 무시 */ }
       }
       if (!r.model) return res.status(200).json({ ok: false, message: '모델 ID를 입력하세요.', models });
@@ -173,10 +207,11 @@ export default async function handler(req, res) {
     if (body.action === 'review') {
       const sess = await requireRole(req, res, REVIEW_ROLES);
       if (!sess) return;
-      const r = await resolve(await loadCfg());
+      if (body.provider && !PROVIDERS[body.provider]) return res.status(400).json({ error: '알 수 없는 검토 AI입니다.' });
+      const r = await resolve(await loadCfg(), { provider: body.provider || undefined });
       if (r.P.kind === 'none') return res.status(409).json({ error: '검토 AI가 \'사용 안 함\'으로 설정되어 있습니다.', code: 'REVIEW_DISABLED' });
       if (!r.apiKey) return res.status(500).json({ error: `검토 AI(${r.P.label}) API 키가 없습니다. 설정 → AI 연동 → 검토 AI에서 등록하거나 환경변수 ${r.P.env || ''}를 설정하세요.`, code: 'NO_REVIEW_KEY' });
-      if (!r.baseUrl || !r.model) return res.status(500).json({ error: '검토 AI의 서버 주소 또는 모델 ID가 설정되지 않았습니다.' });
+      if (!r.baseUrl || !r.model) return res.status(500).json({ error: `검토 AI(${r.P.label})의 서버 주소 또는 모델 ID가 설정되지 않았습니다. 설정 → AI 연동 → 검토 AI에서 등록하세요.` });
       const system = String(body.system || '').slice(0, 4000);
       const prompt = String(body.prompt || '').slice(0, 24000);
       if (!prompt) return res.status(400).json({ error: '검토 내용이 비어 있습니다.' });
