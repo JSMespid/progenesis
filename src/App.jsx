@@ -9741,12 +9741,13 @@ function buildFileTree(files) {
 }
 
 // 폴더 트리를 접고 펴며 렌더링. 폴더 경로별 펼침 상태는 상위에서 관리.
-function FileTree({ node, depth, openMap, toggle, onDownload, onRemove, selected, onToggleSelect, onBulkSelect, pathKey="" }) {
+function FileTree({ node, depth, openMap, toggle, onDownload, onRemove, selected, onToggleSelect, onBulkSelect, pathKey="", onMove, relPath="" }) {
   const folderNames = Object.keys(node.folders).sort((a,b)=>a.localeCompare(b,'ko'));
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
       {folderNames.map(name => {
         const childPath = pathKey ? `${pathKey}/${name}` : name;
+        const childRel = relPath ? `${relPath}/${name}` : name;   // 분류 안에서의 실제 폴더 경로 (file_name 접두)
         const isOpen = openMap[childPath] !== false;  // 기본 펼침
         const child = node.folders[name];
         const count = countFiles(child);
@@ -9768,12 +9769,14 @@ function FileTree({ node, depth, openMap, toggle, onDownload, onRemove, selected
                 <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{name}</span>
                 <span style={{ color:T.muted, fontWeight:400, fontSize:9 }}>({count})</span>
               </span>
+              {onMove && <span onClick={e=>{ e.stopPropagation(); onMove({ type:"folder", path: childRel, name }); }} title="폴더 이동·이름 변경 (하위 파일 포함)"
+                style={{ marginLeft:"auto", fontSize:10.5, color:T.muted, cursor:"pointer", fontWeight:400, flexShrink:0, padding:"0 2px" }}>⇄</span>}
             </div>
             {isOpen && (
               <FileTree node={child} depth={depth+1} openMap={openMap} toggle={toggle}
                 onDownload={onDownload} onRemove={onRemove}
                 selected={selected} onToggleSelect={onToggleSelect} onBulkSelect={onBulkSelect}
-                pathKey={childPath} />
+                pathKey={childPath} onMove={onMove} relPath={childRel} />
             )}
           </div>
         );
@@ -9787,9 +9790,102 @@ function FileTree({ node, depth, openMap, toggle, onDownload, onRemove, selected
             style={{ fontSize:11, color:T.accent, cursor:"pointer", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1 }}>
             {f._displayName}
           </span>
+          {onMove && <span onClick={()=>onMove({ type:"file", file: f })} title="파일 이동·이름 변경" style={{ fontSize:10.5, color:T.muted, cursor:"pointer", flexShrink:0, padding:"0 2px" }}>⇄</span>}
           <span onClick={()=>onRemove(f)} style={{ fontSize:11, color:T.red, cursor:"pointer", flexShrink:0 }}>×</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ── 자산 이동 계획 계산 (순수 함수) ──
+// req: { type:"file", file } | { type:"folder", path, name, category } | { type:"selection", files }
+// dest: { category, folder(분류 안 경로, ""=최상위), rename(파일·폴더 새 이름, 선택) }
+// 반환: { moves:[{ id, from, file_name, category }], error }
+const joinPath = (...xs) => xs.map(x => String(x || "").split("/").map(s => s.trim()).filter(Boolean).join("/")).filter(Boolean).join("/");
+function planAssetMove(req, files, dest) {
+  const folder = joinPath(dest.folder);
+  const rename = String(dest.rename || "").trim();
+  if (rename && /[\\/]/.test(rename)) return { moves: [], error: "이름에는 / 나 \\ 를 쓸 수 없습니다." };
+  const base = n => String(n || "").split("/").pop();
+  const catOf = id => (files.find(f => f.id === id) || {}).category;
+  let moves = [];
+  if (req.type === "file") {
+    moves = [{ id: req.file.id, from: req.file.file_name, file_name: joinPath(folder, rename || base(req.file.file_name)), category: dest.category }];
+  } else if (req.type === "folder") {
+    const P = req.path, sameCat = dest.category === req.category;
+    if (sameCat && (folder === P || folder.startsWith(P + "/"))) return { moves: [], error: "폴더를 자기 자신이나 하위 폴더 안으로 옮길 수 없습니다." };
+    const inside = files.filter(f => f.category === req.category && String(f.file_name).startsWith(P + "/"));
+    moves = inside.map(f => ({ id: f.id, from: f.file_name, file_name: joinPath(folder, rename || req.name, String(f.file_name).slice(P.length + 1)), category: dest.category }));
+  } else {
+    moves = (req.files || []).map(f => ({ id: f.id, from: f.file_name, file_name: joinPath(folder, base(f.file_name)), category: dest.category }));
+  }
+  moves = moves.filter(m => m.file_name !== m.from || m.category !== catOf(m.id));
+  if (!moves.length) return { moves: [], error: "바뀌는 항목이 없습니다." };
+  // 충돌: 이동 결과끼리, 그리고 남는 파일과 같은 경로
+  const movingIds = new Set(moves.map(m => m.id));
+  const occ = new Set(files.filter(f => !movingIds.has(f.id)).map(f => `${f.category}|${f.file_name}`));
+  for (const m of moves) { const k = `${m.category}|${m.file_name}`; if (occ.has(k)) return { moves, error: `같은 위치에 같은 이름의 파일이 있습니다: ${m.file_name}` }; occ.add(k); }
+  return { moves, error: null };
+}
+// 분류 안의 모든 폴더 경로 (이동 대상 목록)
+function folderPathsOf(files, category) {
+  const set = new Set();
+  files.filter(f => f.category === category).forEach(f => { const parts = String(f.file_name).split("/"); parts.pop(); for (let i = 1; i <= parts.length; i++) set.add(parts.slice(0, i).join("/")); });
+  return [...set].sort((a, b) => a.localeCompare(b, "ko"));
+}
+function AssetMoveDialog({ req, files, categories, onClose, onApply }) {
+  const curCat = req.type === "file" ? req.file.category : req.type === "folder" ? req.category : (req.files[0] || {}).category;
+  const curFolder = req.type === "file" ? String(req.file.file_name).split("/").slice(0, -1).join("/") : req.type === "folder" ? req.path.split("/").slice(0, -1).join("/") : "";
+  const [cat, setCat] = useState(curCat);
+  const [folder, setFolder] = useState(curFolder);
+  const [newSub, setNewSub] = useState("");
+  const [rename, setRename] = useState(req.type === "file" ? String(req.file.file_name).split("/").pop() : req.type === "folder" ? req.name : "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const paths = folderPathsOf(files, cat).filter(p => !(req.type === "folder" && cat === curCat && (p === req.path || p.startsWith(req.path + "/"))));
+  const dest = { category: cat, folder: joinPath(folder, newSub), rename: req.type === "selection" ? "" : rename };
+  const plan = planAssetMove({ ...req, category: curCat }, files, dest);
+  const title = req.type === "file" ? "파일 이동·이름 변경" : req.type === "folder" ? `폴더 이동·이름 변경 — ${req.name}` : `선택한 ${req.files.length}개 파일 이동`;
+  const sel = { width:"100%", padding:"7px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, color:T.text, fontSize:12, fontFamily:"inherit", boxSizing:"border-box" };
+  async function apply() {
+    if (plan.error || !plan.moves.length) return;
+    setBusy(true); setErr(null);
+    try { await onApply(plan.moves); onClose(); } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.55)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+      <div onClick={e=>e.stopPropagation()} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, padding:18, width:"100%", maxWidth:560 }}>
+        <div style={{ fontSize:14, fontWeight:700, marginBottom:4 }}>{title}</div>
+        <div style={{ fontSize:11, color:T.muted, marginBottom:12 }}>파일을 다시 올리지 않고 위치(경로)만 바꿉니다. 같은 위치에 같은 이름의 파일이 있으면 이동하지 않습니다.{req.type === "selection" ? " 선택한 파일은 대상 폴더 바로 아래로 옮겨집니다(폴더 구조를 유지하려면 폴더 옆 ⇄를 쓰세요)." : ""}</div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+          <div><div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>자산 분류</div>
+            <select value={cat} onChange={e=>{ setCat(e.target.value); setFolder(""); }} style={sel}>{categories.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+          <div><div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>대상 폴더</div>
+            <select value={folder} onChange={e=>setFolder(e.target.value)} style={sel}>
+              <option value="">(최상위)</option>
+              {paths.map(p => <option key={p} value={p}>{"\u00a0\u00a0".repeat(p.split("/").length - 1)}{p.split("/").pop()}</option>)}
+            </select></div>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns: req.type === "selection" ? "1fr" : "1fr 1fr", gap:10, marginBottom:10 }}>
+          <div><div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>새 하위 폴더 (선택 — 대상 폴더 안에 만듦)</div>
+            <input value={newSub} onChange={e=>setNewSub(e.target.value)} placeholder="예: 8000 HW요구설계검증" style={sel} /></div>
+          {req.type !== "selection" && <div><div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>{req.type === "folder" ? "폴더 이름" : "파일 이름"}</div>
+            <input value={rename} onChange={e=>setRename(e.target.value)} style={sel} /></div>}
+        </div>
+        <div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>미리보기 {plan.moves.length ? `(${plan.moves.length}건)` : ""}</div>
+        <div style={{ maxHeight:150, overflowY:"auto", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"6px 8px", fontSize:10.5, lineHeight:1.6, marginBottom:8 }}>
+          {plan.moves.slice(0, 50).map(m => <div key={m.id}><span style={{ color:T.muted }}>{m.from}</span> → <span style={{ color:T.text }}>{m.category !== curCat ? `[${m.category}] ` : ""}{m.file_name}</span></div>)}
+          {plan.moves.length > 50 && <div style={{ color:T.muted }}>… 외 {plan.moves.length - 50}건</div>}
+          {!plan.moves.length && <div style={{ color:T.muted }}>바뀌는 항목이 없습니다.</div>}
+        </div>
+        {(plan.error || err) && <div style={{ fontSize:11, color:T.red, marginBottom:8 }}>⚠ {err || plan.error}</div>}
+        <div style={{ display:"flex", justifyContent:"flex-end", gap:8 }}>
+          <Btn variant="ghost" onClick={onClose} style={{ fontSize:12, padding:"6px 14px" }}>취소</Btn>
+          <Btn onClick={apply} disabled={busy || !!plan.error || !plan.moves.length} style={{ fontSize:12, padding:"6px 16px" }}>{busy ? "이동 중…" : "이동"}</Btn>
+        </div>
+      </div>
     </div>
   );
 }
@@ -9894,7 +9990,16 @@ function OSSPAssets({ osspId }) {
   const [err, setErr] = useState(null);
   const [dragCat, setDragCat] = useState(null);  // 드래그 오버 중인 category
   const [openMap, setOpenMap] = useState({});    // 폴더 경로별 펼침 상태
-  const [selected, setSelected] = useState({});  // 선택된 파일 id 맵 (다중 삭제용)
+  const [selected, setSelected] = useState({});  // 선택된 파일 id 맵 (다중 삭제·이동용)
+  const [moveReq, setMoveReq] = useState(null);  // 이동·이름 변경 대화상자 요청
+  async function applyMoves(moves) {
+    const res = await fetch("/api/ossp-files", { method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ action:"move", ossp_id: osspId, items: moves.map(m => ({ id: m.id, file_name: m.file_name, category: m.category })) }) });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) throw new Error(data.error || "이동 실패");
+    setSelected({});
+    await load();
+  }
   const toggleFolder = (path) => setOpenMap(m => ({ ...m, [path]: m[path] === false ? true : false }));
 
   async function onDrop(category, e) {
@@ -10037,11 +10142,13 @@ function OSSPAssets({ osspId }) {
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
             <span style={{ fontSize:11, color:T.accent, fontWeight:600 }}>{selectedFiles.length}개 선택됨</span>
             <Btn variant="ghost" onClick={()=>setSelected({})} style={{ fontSize:11, padding:"4px 10px" }}>선택 해제</Btn>
+            <Btn variant="outline" onClick={()=>{ const cats = new Set(selectedFiles.map(f => f.category)); if (cats.size > 1) { setErr("서로 다른 자산 분류의 파일은 한 번에 옮길 수 없습니다. 분류별로 선택하세요."); return; } setMoveReq({ type:"selection", files: selectedFiles }); }} style={{ fontSize:11, padding:"4px 10px" }}>선택 이동</Btn>
             <Btn variant="danger" onClick={()=>removeMany(selectedFiles)} style={{ fontSize:11, padding:"4px 10px" }}>선택 삭제</Btn>
           </div>
         )}
       </div>
       {err && <div style={{ color:T.red, fontSize:11, marginBottom:8 }}>{err}</div>}
+      {moveReq && <AssetMoveDialog req={moveReq} files={files} categories={OSSP_ASSET_CATEGORIES} onClose={()=>setMoveReq(null)} onApply={applyMoves} />}
       {loading ? <Spinner text="자산 불러오는 중…" /> : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10 }}>
           {OSSP_ASSET_CATEGORIES.map(cat => (
@@ -10092,6 +10199,7 @@ function OSSPAssets({ osspId }) {
                   onToggleSelect={toggleSelect}
                   onBulkSelect={setSelectBulk}
                   pathKey={cat}
+                  onMove={r => setMoveReq(r.type === "folder" ? { ...r, category: cat } : r)}
                 />
               )}
             </div>
