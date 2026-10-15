@@ -4,7 +4,8 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 async function supabase(path, method = 'GET', body = null, useService = false) {
-  const key = (useService && SUPABASE_SERVICE_KEY) ? SUPABASE_SERVICE_KEY : SUPABASE_ANON_KEY;
+  // RLS 활성화 대응: 읽기·쓰기 모두 service_role 키 사용 (anon 키로는 RLS에 막힘)
+  const key = SUPABASE_SERVICE_KEY;
   const headers = {
     'Content-Type': 'application/json',
     'apikey': key,

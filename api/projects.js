@@ -1,6 +1,7 @@
 import { requireRole, audit, READ_ROLES, WRITE_ROLES, MANAGE_ROLES } from './_auth.js';
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY;
+// RLS 활성화 대응: 서버 전용 service_role 키 사용 (RLS 우회는 서버에서만, requireRole로 접근 통제)
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 // Supabase REST 호출 공통 헬퍼
 // - 204 No Content 등 빈 본문을 안전하게 처리 (기존 res.json() 호출이 빈 본문에서 예외 → DELETE 500의 원인)
