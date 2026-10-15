@@ -44,10 +44,24 @@ const ASPICE_SCOPE_GROUPS = [
   { id: "SUP",  label: "SUP.1·8·9·10 품질보증·형상·문제·변경", re: /^(SUP\.|PA 2\.2)/, on: true, lock: true },
   { id: "SYS",  label: "SYS.1~5 시스템 엔지니어링", re: /^SYS\./, on: true, lock: true },
   { id: "SWE",  label: "SWE.1~6 소프트웨어 엔지니어링", re: /^SWE\./, on: true },
-  { id: "HWE",  label: "HWE.1~4 하드웨어 엔지니어링", re: null, on: false, note: "HW 산출물은 V-모델에서 생성" },
+  { id: "HWE",  label: "HWE.1~4 하드웨어 엔지니어링", re: /^HWE\./, on: false },
   { id: "SPL",  label: "SPL.2 제품 릴리즈", re: /^SPL\./, on: true },
 ];
-const aspiceScopeDefault = () => Object.fromEntries(ASPICE_SCOPE_GROUPS.map(g => [g.id, g.on]));
+// 개발 범위(form.aspiceDev): "SW" = SW만 / "HWSW" = HW·SW 함께 / "HW" = HW만 — SWE·HWE 범위의 단일 기준
+const ASPICE_DEVS = [
+  { id: "SW",   label: "SW",      desc: "SW만 개발 (HW는 별도 조직·협력사)" },
+  { id: "HWSW", label: "HW + SW", desc: "HW와 SW를 함께 개발 (전장부품·제어기 일체)" },
+  { id: "HW",   label: "HW",      desc: "HW만 개발" },
+];
+const aspiceDevOf = form => ASPICE_DEVS.some(d => d.id === form?.aspiceDev) ? form.aspiceDev : "SW";
+const devFromScope = sc => (sc && sc.HWE) ? (sc.SWE === false ? "HW" : "HWSW") : "SW";
+const aspiceScopeDefault = (dev) => {
+  const sc = Object.fromEntries(ASPICE_SCOPE_GROUPS.map(g => [g.id, g.on]));
+  if (dev) { sc.SWE = dev !== "HW"; sc.HWE = dev !== "SW"; }
+  return sc;
+};
+// 범위 판정 — 저장된 범위에 키가 없으면(구버전 저장본) 그 그룹의 기본값(on)을 따른다. HWE·ACQ 등 기본 꺼짐 그룹이 의도치 않게 켜지지 않도록.
+const aspiceGroupOn = (scope, gid) => { const v = scope?.[gid]; if (v === undefined) return !!(ASPICE_SCOPE_GROUPS.find(g => g.id === gid) || {}).on; return v !== false; };
 const aspiceRowGroup = d => (ASPICE_SCOPE_GROUPS.find(g => g.re && g.re.test(String(d.note || ""))) || {}).id || null;
 // ── 관리활동 해석: 가이드에 mgmtActivities가 있으면(ASPICE) 그것을, 없으면 관리활동 테일러링 가이드(V2.0, CMMI SI용) ──
 // ASPICE 항목의 필수(●)/선택(○)은 해당 산출물의 목표 능력수준 열(M/O), 적용 여부는 적용 범위와 선택 산출물 제외(excluded)를 따른다.
@@ -57,7 +71,7 @@ function resolveMgmt(tailoring, guide, procState) {
   const scope = tailoring?.aspiceScope || aspiceScopeDefault();
   const excluded = tailoring?.excluded || {};
   const rowByName = new Map((guide.matrix || []).map(r => [r.name, r]));
-  return guide.mgmtActivities.filter(a => scope[a.scope] !== false).map(a => {
+  return guide.mgmtActivities.filter(a => aspiceGroupOn(scope, a.scope)).map(a => {
     const row = rowByName.get(a.output);
     const mk = row?.[scaleKey];
     const mark = mk === "M" ? "●" : "○";
@@ -1543,9 +1557,10 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
     const gid = trackGuideId(form.track, selectedOSSP);
     if ((selectedOSSP.guideId || null) !== gid) setSelectedOSSP({ ...selectedOSSP, guideId: gid || undefined });
   }, [form.track, selectedOSSP]);
-  function chooseTrack(track, aspiceVersion, aspiceCL) {
+  function chooseTrack(track, aspiceVersion, aspiceCL, aspiceDev) {
     setForm(p => ({ ...p, track, aspiceVersion: track === "aspice" ? (aspiceVersion || p.aspiceVersion || "both") : "",
-      aspiceCL: track === "aspice" ? (aspiceCL || p.aspiceCL || "CL2") : "" }));
+      aspiceCL: track === "aspice" ? (aspiceCL || p.aspiceCL || "CL2") : "",
+      aspiceDev: track === "aspice" ? (aspiceDev || p.aspiceDev || "SW") : "" }));
     // ASPICE: 규제 수준을 '엄격'으로 두어 SDLC 추천이 V-Model로 가도록 (사용자가 바꾼 값은 유지)
     if (track === "aspice" && sdlcFactors?.regulation === "보통" && !selectedSDLC) setSdlcFactors(f => ({ ...f, regulation: "엄격" }));
   }
@@ -1565,9 +1580,23 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
     setTailoring(t => {
       const scale = clScale(cl);
       if (t.scale === scale && t.aspiceScope) return t;
-      return { ...t, scale, aspiceScope: t.aspiceScope || aspiceScopeDefault() };
+      return { ...t, scale, aspiceScope: t.aspiceScope || aspiceScopeDefault(form.aspiceDev) };
     });
   }, [isAspiceTrack, cl, selectedOSSP, selectedSDLC]);
+  // 개발 범위(SW / HW+SW / HW) → 적용 범위의 SWE·HWE. 개발 범위 값이 없던 기존 과제는 저장된 적용 범위에서 역산해 채운다.
+  useEffect(() => {
+    if (!isAspiceTrack) return;
+    if (!form.aspiceDev) {
+      if (tailoring?.aspiceScope) setForm(p => p.aspiceDev ? p : { ...p, aspiceDev: devFromScope(tailoring.aspiceScope) });
+      return;
+    }
+    const want = { SWE: form.aspiceDev !== "HW", HWE: form.aspiceDev !== "SW" };
+    setTailoring(t => {
+      const sc = t.aspiceScope || aspiceScopeDefault(form.aspiceDev);
+      if (t.aspiceScope && (sc.SWE !== false) === want.SWE && !!sc.HWE === want.HWE) return t;
+      return { ...t, aspiceScope: { ...sc, ...want } };
+    });
+  }, [isAspiceTrack, form.aspiceDev, !!tailoring?.aspiceScope]);
   // 진입 시 임시저장본이 있으면 복원 안내. 이미 입력 중이면(폼에 값 있음) 안내 생략.
   const [draftInfo, setDraftInfo] = useState(() => {
     const d = loadDraft ? loadDraft() : null;
@@ -1631,8 +1660,8 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         {step===0 && <StepInfo form={form} setForm={setForm} onChooseTrack={chooseTrack} osspChosen={!!selectedOSSP} />}
         {step===1 && <StepSDLC factors={sdlcFactors} setFactors={setSdlcFactors} selected={selectedSDLC} setSelected={setSelectedSDLC} recommendation={sdlcRecommendation} recommending={recommending} genError={genError} onRecommend={onRecommendSDLC} />}
         {step===2 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} sdlc={selectedSDLC} track={form.track} />}
-        {step===3 && isAspiceTrack && cl !== "CL3" && <AspiceScopeStep form={form} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} setOssp={setSelectedOSSP} customOSSP={customOSSP} />}
-        {step===3 && isAspiceTrack && cl === "CL3" && <AspiceProcessPanel form={form} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} setOssp={setSelectedOSSP} customOSSP={customOSSP} />}
+        {step===3 && isAspiceTrack && cl !== "CL3" && <AspiceScopeStep form={form} onDevChange={dev => setForm(p => ({ ...p, aspiceDev: dev }))} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} setOssp={setSelectedOSSP} customOSSP={customOSSP} />}
+        {step===3 && isAspiceTrack && cl === "CL3" && <AspiceProcessPanel form={form} onDevChange={dev => setForm(p => ({ ...p, aspiceDev: dev }))} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} setOssp={setSelectedOSSP} customOSSP={customOSSP} />}
         {step===3 && !(isAspiceTrack && cl !== "CL3") && <StepTailoring tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} />}
         {step===4 && <StepPDP pdpData={pdpData} generating={generating} genError={genError} onGenerate={onGeneratePDP} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} sdlc={selectedSDLC} form={form} />}
         {step===5 && <StepWBS wbsData={wbsData} setWbsData={setWbsData} generating={generating} genError={genError} genProgress={genProgress} onRecommendPBS={onRecommendPBS} pbsNoAi={pbsNoAi} onTogglePbsNoAi={onTogglePbsNoAi} wbsSetup={wbsSetup} setWbsSetup={setWbsSetup} tailoring={tailoring} ossp={selectedOSSP} form={form} setForm={setForm} />}
@@ -1654,6 +1683,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
 function TrackPicker({ onChoose }) {
   const [ver, setVer] = useState("both");
   const [cl, setCl] = useState("CL2");
+  const [dev, setDev] = useState("SW");
   return (
     <Card style={{ padding:24, marginBottom:16 }}>
       <h2 style={{ fontSize:16, fontWeight:700, marginBottom:4 }}>어떤 과제인가요?</h2>
@@ -1682,10 +1712,18 @@ function TrackPicker({ onChoose }) {
                   ))}
                 </div>
                 <div style={{ fontSize:10.5, color:T.muted, marginTop:5 }}>{ASPICE_CLS.find(c => c.id === cl)?.desc}</div>
+                <div style={{ fontSize:10.5, color:T.muted, margin:"10px 0 5px" }}>개발 범위 — HW를 포함하면 HWE.1~4 산출물이 WBS·산출물 목록과 V-모델에 함께 들어갑니다</div>
+                <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                  {ASPICE_DEVS.map(d => (
+                    <button key={d.id} onClick={() => setDev(d.id)} title={d.desc}
+                      style={{ fontSize:11, padding:"4px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${dev === d.id ? T.accent : T.border}`, background: dev === d.id ? T.accent : "transparent", color: dev === d.id ? "#fff" : T.muted }}>{d.label}</button>
+                  ))}
+                </div>
+                <div style={{ fontSize:10.5, color:T.muted, marginTop:5 }}>{ASPICE_DEVS.find(d => d.id === dev)?.desc}{dev !== "SW" && ver !== "4.0" ? " · 3.1 심사에서는 HWE를 PAM 확장으로 표기" : ""}</div>
               </div>
             )}
             <div style={{ flex:1 }} />
-            <Btn onClick={() => onChoose(t.id, t.id === "aspice" ? ver : "", t.id === "aspice" ? cl : "")} style={{ fontSize:12.5, padding:"8px 14px", marginTop:6 }}>이 유형으로 시작 →</Btn>
+            <Btn onClick={() => onChoose(t.id, t.id === "aspice" ? ver : "", t.id === "aspice" ? cl : "", t.id === "aspice" ? dev : "")} style={{ fontSize:12.5, padding:"8px 14px", marginTop:6 }}>이 유형으로 시작 →</Btn>
           </div>
         ))}
       </div>
@@ -1693,13 +1731,25 @@ function TrackPicker({ onChoose }) {
   );
 }
 // ── ASPICE: OSSP 자동 지정 + 적용 프로세스 범위 (CL1·2 '적용 범위' 단계, CL3 테일러링 단계 상단 공통) ──
-function AspiceProcessPanel({ form, tailoring, setTailoring, ossp, setOssp, customOSSP }) {
+function AspiceProcessPanel({ form, onDevChange, tailoring, setTailoring, ossp, setOssp, customOSSP }) {
   const cands = [...OSSP_OPTIONS, ...(customOSSP || [])].filter(isAspiceOSSP);
-  const scope = tailoring?.aspiceScope || aspiceScopeDefault();
+  const scope = tailoring?.aspiceScope || aspiceScopeDefault(form?.aspiceDev);
+  const [devMsg, setDevMsg] = useState("");
   const guide = TAILORING_GUIDES.aspice;
   const scaleKey = { "(초)대형": "large", "중형": "medium", "소형": "small" }[clScale(aspiceClOf(form))];
   const countOf = gid => guide.matrix.filter(d => aspiceRowGroup(d) === gid && d[scaleKey] && d[scaleKey] !== "-").length;
-  const toggle = gid => setTailoring(t => ({ ...t, aspiceScope: { ...(t.aspiceScope || aspiceScopeDefault()), [gid]: !(t.aspiceScope || aspiceScopeDefault())[gid] } }));
+  const toggle = gid => {
+    // SWE·HWE는 개발 범위(form.aspiceDev)가 기준 — 바꾸면 기본정보의 개발 범위·V-모델 SW/HW 범위와 함께 바뀐다
+    if ((gid === "SWE" || gid === "HWE") && onDevChange) {
+      const cur = { SWE: aspiceGroupOn(scope, "SWE"), HWE: aspiceGroupOn(scope, "HWE") };
+      const next = { ...cur, [gid]: !cur[gid] };
+      if (!next.SWE && !next.HWE) { setDevMsg("SW와 HW를 모두 뺄 수는 없습니다. 개발 범위는 SW · HW+SW · HW 중 하나입니다."); return; }
+      setDevMsg("");
+      onDevChange(next.SWE && next.HWE ? "HWSW" : next.HWE ? "HW" : "SW");
+      return;
+    }
+    setTailoring(t => ({ ...t, aspiceScope: { ...(t.aspiceScope || aspiceScopeDefault(form?.aspiceDev)), [gid]: !(t.aspiceScope || aspiceScopeDefault(form?.aspiceDev))[gid] } }));
+  };
   return (
     <div style={{ marginBottom:16 }}>
       <div style={{ fontSize:12, color:T.muted, marginBottom:10, padding:"8px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
@@ -1713,20 +1763,22 @@ function AspiceProcessPanel({ form, tailoring, setTailoring, ossp, setOssp, cust
         <span>· 목표 <b style={{ color:T.text }}>{aspiceClOf(form)}</b> · {(AE.ASPICE_VERSIONS.find(v => v.id === (form.aspiceVersion || "both")) || {}).label}</span>
       </div>
       <div style={{ fontSize:13, fontWeight:600, marginBottom:4 }}>적용 프로세스 범위</div>
-      <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>VDA 범위가 기본으로 선택되어 있습니다. 해당 없는 프로세스는 해제하면 그 산출물이 목록에서 빠집니다. 여기서 정한 SW·HW 범위는 V-모델 적용 범위의 기본값이 됩니다.</div>
+      <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>VDA 범위를 기준으로 일반적인 공급사 과제에 맞춰 기본 선택되어 있습니다 (협력사 개발이면 ACQ.4를 켜세요). 해당 없는 프로세스는 해제하면 그 산출물이 목록에서 빠집니다. SW·HW 범위는 기본정보의 개발 범위와 연동되며, V-모델 적용 범위와 WBS·산출물 목록에 함께 반영됩니다.</div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(300px, 1fr))", gap:6 }}>
         {["MAN3","SUP","SYS","SWE","HWE","SPL","ACQ","VAL","REU","MAN5"].map(id => ASPICE_SCOPE_GROUPS.find(g => g.id === id)).map(g => {
-          const on = scope[g.id] !== false && (g.lock || !!scope[g.id]);
+          const on = !!g.lock || aspiceGroupOn(scope, g.id);
           const n = countOf(g.id);
           return (
             <label key={g.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderRadius:8, border:`1px solid ${on ? T.accent+"88" : T.border}`, background: on ? T.accentGlow : T.bg, cursor: g.lock ? "default" : "pointer", fontSize:12, color: on ? T.text : T.muted }}>
               <input type="checkbox" checked={on} disabled={g.lock} onChange={() => !g.lock && toggle(g.id)} />
               <span style={{ flex:1 }}>{g.label}{g.lock && <span style={{ color:T.muted, fontSize:10.5 }}> · 필수</span>}</span>
+              {g.id === "HWE" && (form?.aspiceVersion || "both") !== "4.0" && <span title="3.1 PRM에는 HWE가 없어 4.0 HWE.1~4를 PAM 확장으로 준용합니다" style={{ fontSize:10, color:T.amber }}>3.1: PAM 확장</span>}
               <span style={{ fontSize:10.5, color:T.muted }}>{g.note || (n ? `산출물 ${n}종` : "")}</span>
             </label>
           );
         })}
       </div>
+      {devMsg && <div style={{ fontSize:11, color:T.amber, marginTop:6 }}>⚠ {devMsg}</div>}
     </div>
   );
 }
@@ -1758,7 +1810,7 @@ function AspiceMgmtList({ tailoring, setTailoring, guide, editable }) {
   );
 }
 // CL1·CL2 '적용 범위' 단계 — 테일러링·PDP 대신 프로세스 범위와 선택 산출물만 정한다
-function AspiceScopeStep({ form, tailoring, setTailoring, ossp, setOssp, customOSSP }) {
+function AspiceScopeStep({ form, onDevChange, tailoring, setTailoring, ossp, setOssp, customOSSP }) {
   const cl = aspiceClOf(form);
   const guide = TAILORING_GUIDES.aspice;
   const list = classifyDeliverables(clScale(cl), "UML", guide, tailoring?.aspiceScope || aspiceScopeDefault());
@@ -1771,7 +1823,7 @@ function AspiceScopeStep({ form, tailoring, setTailoring, ossp, setOssp, customO
     <div>
       <h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>적용 범위</h2>
       <p style={{ fontSize:12, color:T.muted, marginBottom:12 }}>목표 {cl}은 조직 표준 프로세스 테일러링과 테일러링 결과서(PDP)가 필요하지 않습니다. 대상 프로세스와 산출물만 정하면 다음 단계에서 WBS를 만듭니다. {cl === "CL1" ? "CL1은 각 프로세스의 결과물(WP) 작성에 집중하며, 검토 기록 등 관리 증적은 선택(O)입니다." : "CL2는 표준 산출물을 전면 적용하며, 계획·모니터링(PA 2.1)과 산출물 검토·관리(PA 2.2) 증적을 포함합니다."}</p>
-      <AspiceProcessPanel form={form} tailoring={tailoring} setTailoring={setTailoring} ossp={ossp} setOssp={setOssp} customOSSP={customOSSP} />
+      <AspiceProcessPanel form={form} onDevChange={onDevChange} tailoring={tailoring} setTailoring={setTailoring} ossp={ossp} setOssp={setOssp} customOSSP={customOSSP} />
       <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:8 }}>
         <div style={{ fontSize:13, fontWeight:600 }}>산출물</div>
         <div style={{ fontSize:11, color:T.muted }}>적용 {applied}종 = 필수(M) {req.length} + 선택(O) {opt.length - opt.filter(d => excluded[d.code]).length}/{opt.length}{opt.length ? " — 선택 산출물은 눌러서 적용/제외" : ""}</div>
@@ -1815,13 +1867,18 @@ function TrackField({ form, onChooseTrack, osspChosen }) {
           </select>
         )}
         {form.track === "aspice" && (
+          <select value={aspiceDevOf(form)} onChange={e => { onChooseTrack("aspice", form.aspiceVersion, aspiceClOf(form), e.target.value); setWarn(true); }} title="개발 범위 — SWE·HWE 적용 범위" style={{ fontSize:11.5, padding:"5px 8px", background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, fontFamily:"inherit" }}>
+            {ASPICE_DEVS.map(d => <option key={d.id} value={d.id}>개발 범위: {d.label} — {d.desc}</option>)}
+          </select>
+        )}
+        {form.track === "aspice" && (
           <select value={aspiceClOf(form)} onChange={e => { onChooseTrack("aspice", form.aspiceVersion, e.target.value); setWarn(true); }} title="목표 능력수준" style={{ fontSize:11.5, padding:"5px 8px", background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, fontFamily:"inherit" }}>
             {ASPICE_CLS.map(c => <option key={c.id} value={c.id}>목표 {c.label} — {c.desc}</option>)}
           </select>
         )}
       </div>
       {form.track === "aspice" && <div style={{ fontSize:10.5, color:T.muted, marginTop:6 }}>진행 단계: {aspiceClOf(form) === "CL3" ? "기본정보 → 테일러링 → PDP → WBS → 산출물 → 완료" : "기본정보 → 적용 범위 → WBS → 산출물 → 완료 (테일러링·PDP 불필요)"}</div>}
-      {warn && <div style={{ fontSize:11, color:T.amber, marginTop:6 }}>⚠ 과제 유형·능력수준이 바뀌면 적용되는 테일러링 가이드와 진행 단계가 달라집니다. 이미 진행한 OSSP·테일러링·PDP 단계를 다시 확인해 주세요. 작성한 요구사항과 V-모델 데이터는 그대로 보존됩니다.</div>}
+      {warn && <div style={{ fontSize:11, color:T.amber, marginTop:6 }}>⚠ 과제 유형·능력수준·개발 범위가 바뀌면 적용되는 테일러링 가이드와 진행 단계가 달라집니다. 이미 진행한 OSSP·테일러링·PDP 단계를 다시 확인해 주세요. 작성한 요구사항과 V-모델 데이터는 그대로 보존됩니다.</div>}
     </div>
   );
 }
@@ -2377,7 +2434,7 @@ function classifyDeliverables(scale, method, guide, aspiceScope) {
   const inScope = d => {
     if (g.id !== "aspice" || !aspiceScope) return true;
     const grp = aspiceRowGroup(d);
-    return !grp || aspiceScope[grp] !== false;
+    return !grp || aspiceGroupOn(aspiceScope, grp);
   };
   const scaleKey = scale === "(초)대형" ? "large" : scale === "중형" ? "medium" : "small";
   const result = [];
@@ -4873,12 +4930,23 @@ function reqDocKind(name) {
   // normDocName의 경로 분리에 걸리지 않게 치환 후 정규화
   const n = normDocName(String(name || "").replace(/\//g, "·"));
   if (!n.includes("요구사항")) return null;
+  if (/검증|시험|테스트/.test(n)) return null;   // "HW 요구사항 검증 명세서" 등 검증 문서는 요구사항 문서가 아님
   const hasDef = n.includes("정의서");
   const hasSpec = n.includes("명세서");
   if (hasDef && hasSpec) return "both";
   if (hasDef) return "def";
   if (hasSpec) return "spec";
   return null;
+}
+// ASPICE 과제 여부 (산출물 생성 컨텍스트 기준)
+const isAspiceCtx = ctx => ctx?.ossp?.guideId === "aspice" || getGuideForOSSP(ctx?.ossp || {})?.id === "aspice";
+// 컨텍스트를 고려한 요구사항 문서 판정 — ASPICE의 SW·HW 요구사항 명세서(SWE.1·HWE.1)는 V-모델 하위 요구로만 만든다.
+// (확정 요구는 SYS.2 시스템 요구이므로 하위 레벨 명세서에 채우면 레벨이 섞인다)
+function reqDocKindFor(name, ctx) {
+  const k = reqDocKind(name);
+  if (!k || !isAspiceCtx(ctx)) return k;
+  const ak = AE.aspiceDocKind(name);
+  return ak && ak !== "SYS_RS" ? null : k;
 }
 const REQ_TYPE_PREFIX = { "기능": "RF", "비기능": "RN", "인터페이스": "RI" };
 // 유형별 접두(RF/RN/RI) + 4자리 순번 ID 부여 — 기존 ID는 유지하고 빈 항목만 이어서 채번
@@ -6415,7 +6483,7 @@ function isDynamicDoc(doc, wbs, ctx) {
   const n = String(doc.name || "").replace(/\s/g, "");
   if (n.toUpperCase() === "WBS" && wbs?.tasks?.length) return true;
   if (n === "테일러링결과서" && ctx?.tailoring) return true;
-  if (reqDocKind(doc.name) && ctx?.requirements?.items?.length) return true;   // 확정된 요구사항이 있으면 정의서·명세서를 실문서로 생성
+  if (reqDocKindFor(doc.name, ctx) && ctx?.requirements?.items?.length) return true;   // 확정된 요구사항이 있으면 정의서·명세서를 실문서로 생성
   return false;
 }
 // ── 요구사항 → 헤더 매핑형 xlsx 채움 (OSSP 가이드의 reqXlsxFill 설정 기반) ─────────────
@@ -7346,11 +7414,24 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   ], std.opts);
 }
 
+// 적용 범위(테일러링)의 SWE·HWE를 V-모델 저장본의 SW·HW 범위에 덮어쓴 컨텍스트 — WBS·산출물 목록·문서 생성이 같은 범위를 보도록
+function withAspiceScope(ctx) {
+  const sc = ctx?.tailoring?.aspiceScope;
+  const raw = ctx?.requirements?.aspice;
+  if (!sc || !raw) return ctx;
+  const SW = aspiceGroupOn(sc, "SWE"), HW = aspiceGroupOn(sc, "HWE");
+  const cur = raw.scope || {};
+  if (cur.SW === SW && !!cur.HW === HW) return ctx;
+  return { ...ctx, requirements: { ...ctx.requirements, aspice: { ...raw, scope: { ...cur, SW, HW } } } };
+}
 // 산출물명 → ASPICE 문서 생성 가능 여부 (모델에 해당 내용이 있을 때만 — 없으면 기존 템플릿/스켈레톤 경로 유지)
-function aspiceCanBuild(kind, ctx) {
+// HW 문서는 OSSP 라이브러리에 템플릿이 없을 수 있으므로, HW 범위가 켜져 있으면 내용이 비어도 모델 구조(근거 없는 칸은 TBD)로 생성한다.
+function aspiceCanBuild(kind, ctx0) {
+  const ctx = withAspiceScope(ctx0);
   const raw = ctx?.requirements?.aspice;
   if (!kind || !raw) return false;
   const m = AE.normalizeModel(raw);
+  if (AE.HW_DOC_KINDS.includes(kind)) return !!m.scope.HW;
   const has = { SYS_AD: m.comps.SYS.length > 0, SW_RS: m.scope.SW && m.reqs.SW.length > 0, HW_RS: m.scope.HW && m.reqs.HW.length > 0,
     SW_AD: m.scope.SW && m.comps.SW.length > 0, HW_AD: m.scope.HW && m.comps.HW.length > 0, RTM: m.reqs.SYS.length > 0,
     STK_LIST: m.reqs.STK.length > 0, SW_DD: m.scope.SW && m.units.SW.length > 0 };
@@ -7359,7 +7440,8 @@ function aspiceCanBuild(kind, ctx) {
   if (D?.test) return m.scope[AE.TEST_LEVELS[D.test].level] && m.tests.some(t => t.level === D.test);
   return false;   // SYS_RS는 기존 요구사항 명세서 경로(템플릿 채움)를 유지
 }
-function buildAspiceDoc(kind, meta, ctx, doc) {
+function buildAspiceDoc(kind, meta, ctx0, doc) {
+  const ctx = withAspiceScope(ctx0);
   if (kind === "SW_RS" || kind === "HW_RS") return { ext: "docx", bytes: makeAspiceReqDocx(kind === "SW_RS" ? "SW" : "HW", meta, ctx, doc) };
   if (kind === "SYS_AD" || kind === "SW_AD" || kind === "HW_AD") return { ext: "docx", bytes: makeAspiceArchDocx(kind === "SYS_AD" ? "SYS" : kind === "SW_AD" ? "SW" : "HW", meta, ctx, doc) };
   if (kind === "RTM") return { ext: "xlsx", bytes: makeAspiceRtmXlsx(meta, ctx, doc) };
@@ -7370,7 +7452,7 @@ function buildAspiceDoc(kind, meta, ctx, doc) {
 // ASPICE V-모델 산출물 패키지 ZIP — 범위 내 생성 가능한 문서 전부 + 일관성 점검 보고
 async function downloadAspicePackage(meta, ctx) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
-  const order = ["STK_LIST", "SYS_AD", "SW_RS", "SW_AD", "SW_DD", "HW_RS", "HW_AD", "V_SYS5", "V_SYS4", "V_SWE6", "V_SWE5", "V_SWE4", "V_HWE4", "V_HWE3", "R_SYS5", "R_SYS4", "R_SWE6", "R_SWE5", "R_SWE4", "RTM"];
+  const order = ["STK_LIST", "SYS_AD", "SW_RS", "SW_AD", "SW_DD", "HW_RS", "HW_AD", "V_SYS5", "V_SYS4", "V_SWE6", "V_SWE5", "V_SWE4", "V_HWE4", "V_HWE3", "R_SYS5", "R_SYS4", "R_SWE6", "R_SWE5", "R_SWE4", "R_HWE4", "R_HWE3", "RTM"];
   const files = [];
   order.forEach((k, i) => {
     if (!aspiceCanBuild(k, ctx)) return;
@@ -7388,7 +7470,8 @@ async function downloadAspicePackage(meta, ctx) {
   return files.length;
 }
 
-async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
+async function resolveDeliverableFile(doc, catName, meta, wbs, ctx0) {
+  const ctx = withAspiceScope(ctx0);
   // ASPICE V-모델 산출물(SyAD·SW/HW 요구·설계·검증 명세/결과·RTM): 추적 모델에 내용이 있으면 모델에서 생성
   // (SW 요구사항 명세서가 아래 요구사항 경로에 걸려 시스템 요구로 채워지는 것을 막기 위해 가장 먼저 판정)
   const aKind = AE.aspiceDocKind(doc.name);
@@ -7396,7 +7479,7 @@ async function resolveDeliverableFile(doc, catName, meta, wbs, ctx) {
     try { return buildAspiceDoc(aKind, meta, ctx, doc); } catch (_) { /* 생성 실패 시 기존 경로 폴백 */ }
   }
   // 요구사항 정의서·명세서: 확정 요구사항이 있으면 OSSP 산출물템플릿에 채워 표준 양식 그대로 생성 (실패 시 자체 생성 폴백)
-  const reqKind0 = reqDocKind(doc.name);
+  const reqKind0 = reqDocKindFor(doc.name, ctx);
   if (reqKind0 && ctx?.requirements?.items?.length) {
     try {
       const viaTpl = await resolveReqDocFromTemplate(doc, reqKind0, meta, ctx);
@@ -7478,7 +7561,7 @@ function officeFileForDoc(doc, catName, meta, wbs, ctx) {
     return { ext: "docx", bytes: makePdpDocx(meta, ctx, catName) };
   }
   // 산출물명이 요구사항 정의서/명세서(통합 포함)이고 확정된 요구사항이 있으면 실문서를 생성
-  const reqKind = reqDocKind(doc.name);
+  const reqKind = reqDocKindFor(doc.name, ctx);
   if (reqKind && ctx?.requirements?.items?.length) {
     return { ext: "docx", bytes: makeReqDocx(meta, ctx, catName, reqKind, doc) };
   }
@@ -8198,8 +8281,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     if (!requirements?.aspice) {
       m.useAI = !(() => { try { return localStorage.getItem(PBS_NOAI_KEY) === "1"; } catch { return false; } })();
       if (form?.aspiceVersion && AE.ASPICE_VERSIONS.some(v => v.id === form.aspiceVersion)) m.version = form.aspiceVersion;   // 시작 화면에서 고른 적용 기준
-      if (tailoring?.aspiceScope) { m.scope.SW = tailoring.aspiceScope.SWE !== false; m.scope.HW = !!tailoring.aspiceScope.HWE; }   // 적용 범위 단계의 SW·HW 범위
     }
+    // SW·HW 범위의 기준은 적용 범위(개발 범위)다 — 저장본이 있어도 항상 맞춘다 (WBS·산출물 목록과 V-모델 범위의 일치)
+    if (tailoring?.aspiceScope) { m.scope.SW = aspiceGroupOn(tailoring.aspiceScope, "SWE"); m.scope.HW = aspiceGroupOn(tailoring.aspiceScope, "HWE"); }
     m.reqs.STK = AE.syncStkReqs(requirements?.stk?.items || [], m.reqs.STK);
     m.reqs.SYS = AE.syncSysReqs(requirements?.items || [], m.reqs.SYS);
     return m;
@@ -8231,6 +8315,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const V = model.version;
   const findings = AE.checkConsistency(model);
   const metrics = AE.coverageMetrics(model);
+  // 적용 범위(개발 범위)가 있는 과제는 SW·HW 범위를 그쪽에서만 바꾼다 — WBS·산출물 목록·V-모델 범위 일치
+  const scopeLocked = !!tailoring?.aspiceScope;
+  const hiddenHW = !model.scope.HW ? (model.reqs.HW.length + model.comps.HW.length + model.tests.filter(t => /^HWE/.test(t.level)).length) : 0;
+  const hiddenSW = !model.scope.SW ? (model.reqs.SW.length + model.comps.SW.length + (model.units.SW || []).length) : 0;
   const inp = { width: "100%", padding: "4px 6px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 11, fontFamily: "inherit", boxSizing: "border-box" };
   const ta = { ...inp, minHeight: 40, resize: "vertical", lineHeight: 1.45 };
   const small = { background: "none", border: `1px solid ${T.border}`, borderRadius: 6, color: T.accent, cursor: "pointer", fontSize: 10.5, padding: "3px 9px", fontFamily: "inherit" };
@@ -8725,10 +8813,12 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>{AE.ASPICE_VERSIONS.find(v => v.id === V)?.desc}</div>
               <div style={{ display: "flex", gap: 16, fontSize: 11.5, flexWrap: "wrap" }}>
                 <label><input type="checkbox" checked disabled /> 시스템 (SYS.2~SYS.5)</label>
-                <label><input type="checkbox" checked={model.scope.SW} onChange={e => set(n => { n.scope.SW = e.target.checked; })} /> SW (SWE.1·2·5·6)</label>
-                <label title={V === "3.1" ? "3.1 PRM에는 HWE가 없어 4.0 HWE를 PAM 확장으로 준용합니다" : ""}><input type="checkbox" checked={model.scope.HW} onChange={e => set(n => { n.scope.HW = e.target.checked; })} /> HW (HWE.1~4){V === "3.1" ? " · PAM 확장" : ""}</label>
+                <label title={scopeLocked ? "SW·HW 범위는 새 프로젝트의 개발 범위·적용 범위에서 바꿉니다 (WBS·산출물 목록과 일치 유지)" : ""}><input type="checkbox" checked={model.scope.SW} disabled={scopeLocked} onChange={e => set(n => { n.scope.SW = e.target.checked; })} /> SW (SWE.1·2·5·6)</label>
+                <label title={scopeLocked ? "SW·HW 범위는 새 프로젝트의 개발 범위·적용 범위에서 바꿉니다 (WBS·산출물 목록과 일치 유지)" : V === "3.1" ? "3.1 PRM에는 HWE가 없어 4.0 HWE를 PAM 확장으로 준용합니다" : ""}><input type="checkbox" checked={model.scope.HW} disabled={scopeLocked} onChange={e => set(n => { n.scope.HW = e.target.checked; })} /> HW (HWE.1~4){V === "3.1" ? " · PAM 확장" : ""}</label>
                 <label style={{ marginLeft: "auto" }} title="해제 시 /api/chat 호출 없이 규칙 기반 초안만 생성 (폐쇄망·재현성)"><input type="checkbox" checked={model.useAI} onChange={e => set(n => { n.useAI = e.target.checked; })} /> AI 사용 (해제 = 규칙 기반만)</label>
               </div>
+              {scopeLocked && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>SW·HW 범위는 과제의 개발 범위({ASPICE_DEVS.find(d => d.id === devFromScope(tailoring.aspiceScope))?.label})를 따릅니다 — 바꾸려면 새 프로젝트의 기본정보(개발 범위) 또는 적용 범위 단계에서 변경하세요. WBS·산출물 목록과 V-모델 범위가 항상 같게 유지됩니다.</div>}
+              {(hiddenHW > 0 || hiddenSW > 0) && <div style={{ fontSize: 10.5, color: T.amber, marginTop: 6 }}>⚠ 범위 밖으로 숨겨진 데이터가 있습니다{hiddenSW ? ` — SW ${hiddenSW}건` : ""}{hiddenHW ? ` — HW ${hiddenHW}건` : ""}. 삭제되지 않고 보존되며, 개발 범위에 다시 포함하면 그대로 나타납니다.</div>}
               <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>※ SWE.3(상세설계)·SWE.4(유닛 검증)는 코드가 근거이므로 ④ SW 탭에서 유닛 분해·요구 추적 골격과 헤더(.h) 기반 인터페이스만 생성하고 알고리즘·동적 동작은 TBD로 둡니다. HWE 상세설계는 회로 확정 후 OSSP 템플릿으로 작성합니다.</div>
             </AeSec>
             <AeSec title="입력자료 체크리스트 — 확보한 자료를 표시하면 WP 충족도에 반영됩니다 (없는 자료는 AI가 지어내지 않고 TBD로 남깁니다)"
@@ -9187,7 +9277,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                   : "먼저 '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2 요구사항을 확정하세요 (DBC만으로 시작할 수도 있습니다)"}
             </div>
           </div>
-          {am && am.reqs.SYS.length > 0 && <Btn variant="outline" onClick={async()=>{ try { await downloadAspicePackage(form || {}, { requirements }); } catch(e) { alert(e.message); } }} title="V-모델 산출물 전체(이해관계자 요구 목록·아키텍처·요구·상세설계·검증 명세·추적 매트릭스) ZIP" style={{ fontSize:11.5, padding:"6px 12px", marginRight:6 }}>📦 ZIP</Btn>}
+          {am && am.reqs.SYS.length > 0 && <Btn variant="outline" onClick={async()=>{ try { await downloadAspicePackage(form || {}, { requirements, tailoring: pdpCtx?.tailoring }); } catch(e) { alert(e.message); } }} title="V-모델 산출물 전체(이해관계자 요구 목록·아키텍처·요구·상세설계·검증 명세·추적 매트릭스) ZIP" style={{ fontSize:11.5, padding:"6px 12px", marginRight:6 }}>📦 ZIP</Btn>}
             <Btn onClick={()=>{ setAeInitTab(null); setAeModal(true); }} style={{ fontSize:11.5, padding:"6px 14px" }}>{am ? "V-모델 편집" : "V-모델 시작"}</Btn>
         </div>); })()}
       {deliverablesData && (

@@ -162,7 +162,9 @@ export const DEVOPS_TAILORING_MATRIX = [
 ];
 
 
-// ── 5) 자동차 SW(ASPICE 4.0) — 등록 자산 "자동차SW 테일러링 가이드 V1.1" 기준 (41건, ASPICE 프로세스 산출물로 한정)
+// ── 5) 자동차 SW(ASPICE 4.0) — 등록 자산 "자동차SW 테일러링 가이드 V1.1" 기준 (41건) + HWE.1~4 하드웨어 엔지니어링 산출물 6건 (ASPICE 프로세스 산출물로 한정)
+// HWE 산출물은 적용 범위에서 HWE를 켠 과제에만 포함된다. 4.0 정식 프로세스이며, 3.1 단독 심사는 PAM 확장(4.0 HWE 준용)으로 표기한다.
+// HW 산출물의 code는 aspiceEngineering.js ASPICE_DOCS의 code와 같아야 한다 (문서번호·V-모델 실문서 생성 연결).
 // 목표 능력수준 매핑: CL3(테일러링 적용, PA 3.2 프로세스 전개)→large / CL2(표준 프로세스 전면 적용)→medium / CL1(프로세스 결과물 중심)→small.
 // CL1 열은 CL3 열과 같되 PA 2.x 관리 증적(산출물 검토 기록부)과 코딩 가이드라인을 선택(O)으로 둔다 — 현장 기준에 따라 조정 가능.
 // CL2 열은 전 산출물 M(테일러링 없음). 기능안전(ISO 26262)·사이버보안(ISO/SAE 21434) 산출물은 본 가이드 범위 밖(제외). note = ASPICE 프로세스 · 정보항목(WP) · 테일러링 조건.
@@ -181,7 +183,7 @@ export const ASPICE_TAILORING_MATRIX = [
   {"code": "SY2102", "name": "시스템 요구사항 명세서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.2 · 17-00, 17-54, 15-51"},
   {"code": "SY2103", "name": "시스템 아키텍처 설계서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.3 · 04-06, 17-54, 15-51"},
   {"code": "SY2104", "name": "인터페이스 정의서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.3 · 04-06 · 통신 연계 시 필수"},
-  {"code": "SY2105", "name": "요구사항 추적 매트릭스", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.2~SWE.6 · 13-51"},
+  {"code": "SY2105", "name": "요구사항 추적 매트릭스", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.2~SWE.6 (HW 범위 시 HWE.1~4 포함) · 13-51"},
   {"code": "SY2106", "name": "시스템 검증 명세서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.5 · 08-60, 08-58"},
   {"code": "SY2107", "name": "시스템 통합 검증 명세서", "phase": "시스템 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.4 · 08-60, 06-50"},
   {"code": "SW3101", "name": "SW 요구사항 명세서", "phase": "SW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.1 · 17-00, 17-54, 15-51"},
@@ -197,10 +199,16 @@ export const ASPICE_TAILORING_MATRIX = [
   {"code": "SW4104", "name": "정적분석 결과서", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.4 · 15-52"},
   {"code": "SW4105", "name": "코드 리뷰 기록", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.4 · 13-19, 15-52"},
   {"code": "SW4106", "name": "SW 유닛 검증 결과서", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.4 · 15-52, 03-50 · 커버리지 기준 A: MC/DC · B: Branch · C: Statement"},
+  {"code": "HW3101", "name": "HW 요구사항 명세서", "phase": "HW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "HWE.1 · 17-00, 17-54, 15-51 · 3.1: PAM 확장(4.0 HWE.1 준용)"},
+  {"code": "HW3102", "name": "HW 아키텍처 설계서", "phase": "HW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "HWE.2 · 04-52, 04-53, 15-51 · 3.1: PAM 확장(4.0 HWE.2 준용)"},
+  {"code": "HW5101", "name": "HW 설계 검증 명세서", "phase": "HW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "HWE.3 · 08-60, 08-58 · 3.1: PAM 확장(4.0 HWE.3 준용)"},
+  {"code": "HW5102", "name": "HW 요구사항 검증 명세서", "phase": "HW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "HWE.4 · 08-60, 08-58 · 3.1: PAM 확장(4.0 HWE.4 준용)"},
   {"code": "SW5101", "name": "SW 통합 검증 결과서", "phase": "SW 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.5 · 15-52, 01-50"},
   {"code": "SW5102", "name": "SW 검증 결과서", "phase": "SW 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.6 · 15-52"},
   {"code": "PR5101", "name": "문제 관리대장", "phase": "SW 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SUP.9 · 13-07, 15-12"},
   {"code": "CR5101", "name": "변경요청 관리대장", "phase": "SW 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SUP.10 · 13-16"},
+  {"code": "HW6101", "name": "HW 설계 검증 결과서", "phase": "HW 검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "HWE.3 · 15-52, 03-50 · 3.1: PAM 확장(4.0 HWE.3 준용)"},
+  {"code": "HW6102", "name": "HW 요구사항 검증 결과서", "phase": "HW 검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "HWE.4 · 15-52, 03-50 · 3.1: PAM 확장(4.0 HWE.4 준용)"},
   {"code": "SY6101", "name": "시스템 통합 검증 결과서", "phase": "시스템 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.4 · 15-52, 11-06"},
   {"code": "SY6102", "name": "시스템 검증 결과서", "phase": "시스템 통합·검증", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SYS.5 · 15-52"},
   {"code": "VL6101", "name": "밸리데이션 보고서", "phase": "시스템 통합·검증", "method": "공통", "large": "O", "medium": "M", "small": "O", "note": "VAL.1 · 13-24 · 실차 밸리데이션 수행 시 필수"},
@@ -310,7 +318,7 @@ export const TAILORING_GUIDES = {
     title: "자동차SW 테일러링 가이드",
     subtitle: "Automotive SPICE 4.0 · V1.1 (ASPICE 프로세스 산출물 한정)",
     hasDesignMethod: false,
-    phaseOrder: ["착수·계획", "시스템 요구·설계", "SW 요구·설계", "SW 상세설계·구현", "SW 통합·검증", "시스템 통합·검증", "릴리즈"],
+    phaseOrder: ["착수·계획", "시스템 요구·설계", "SW 요구·설계", "SW 상세설계·구현", "HW 요구·설계", "SW 통합·검증", "HW 검증", "시스템 통합·검증", "릴리즈"],
     scaleTitle: "목표 능력수준",
     criteriaTitle: "능력수준별 적용 방식",
     hideDesignMethod: true,   // PDP 2장에서 "설계방식: 해당 없음" 행 숨김

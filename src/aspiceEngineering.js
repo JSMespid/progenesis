@@ -80,8 +80,8 @@ export const ASPICE_DOCS = {
   V_SYS4: { title: "시스템 통합 검증 명세서", proc: "SYS.4", test: "SYS4", wp: { "3.1": "08-50, 08-52", "4.0": "08-60, 08-58, 06-50" }, code: "SY2107" },
   V_SWE6: { title: "SW 검증 명세서", proc: "SWE.6", test: "SWE6", wp: { "3.1": "08-50, 08-52", "4.0": "08-60, 08-58" }, code: "SW3104" },
   V_SWE5: { title: "SW 통합 검증 명세서", proc: "SWE.5", test: "SWE5", wp: { "3.1": "08-50, 08-52", "4.0": "08-60, 08-58, 06-50" }, code: "SW3103" },
-  V_HWE4: { title: "HW 요구사항 검증 명세서", proc: "HWE.4", test: "HWE4", wp: { "3.1": "PAM 확장", "4.0": "08-60, 08-58" }, code: "HW5102" },
-  V_HWE3: { title: "HW 설계 검증 명세서", proc: "HWE.3", test: "HWE3", wp: { "3.1": "PAM 확장", "4.0": "08-60, 08-58" }, code: "HW5101" },
+  V_HWE4: { title: "HW 요구사항 검증 명세서", proc: "HWE.4", test: "HWE4", wp: { "3.1": "PAM 확장(4.0 HWE.4 준용)", "4.0": "08-60, 08-58" }, code: "HW5102" },
+  V_HWE3: { title: "HW 설계 검증 명세서", proc: "HWE.3", test: "HWE3", wp: { "3.1": "PAM 확장(4.0 HWE.3 준용)", "4.0": "08-60, 08-58" }, code: "HW5101" },
   R_SYS5: { title: "시스템 검증 결과서", proc: "SYS.5", test: "SYS5", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SY6102" },
   R_SYS4: { title: "시스템 통합 검증 결과서", proc: "SYS.4", test: "SYS4", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SY6101" },
   R_SWE6: { title: "SW 검증 결과서", proc: "SWE.6", test: "SWE6", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SW5102" },
@@ -90,8 +90,12 @@ export const ASPICE_DOCS = {
   SW_DD:  { title: "SW 상세설계서", proc: "SWE.3", wp: { "3.1": "04-05, 11-05", "4.0": "04-05, 15-51" }, code: "SW4101" },
   V_SWE4: { title: "SW 유닛 검증 명세서", proc: "SWE.4", test: "SWE4", wp: { "3.1": "08-50, 08-52", "4.0": "08-60, 08-58" }, code: "SW4103" },
   R_SWE4: { title: "SW 유닛 검증 결과서", proc: "SWE.4", test: "SWE4", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SW4106" },
+  R_HWE3: { title: "HW 설계 검증 결과서", proc: "HWE.3", test: "HWE3", result: true, wp: { "3.1": "PAM 확장(4.0 HWE.3 준용)", "4.0": "15-52, 03-50" }, code: "HW6101" },
+  R_HWE4: { title: "HW 요구사항 검증 결과서", proc: "HWE.4", test: "HWE4", result: true, wp: { "3.1": "PAM 확장(4.0 HWE.4 준용)", "4.0": "15-52, 03-50" }, code: "HW6102" },
   RTM:    { title: "요구사항 추적 매트릭스", proc: "SYS.2~SWE.6", wp: { "3.1": "13-22", "4.0": "13-51" }, code: "SY2105" },
 };
+// HW 레벨 문서 종류 — OSSP 라이브러리에 HW 템플릿이 없어도 V-모델 추적 모델에서 구조화된 문서(근거 없는 칸은 TBD)를 만든다
+export const HW_DOC_KINDS = ["HW_RS", "HW_AD", "V_HWE3", "V_HWE4", "R_HWE3", "R_HWE4"];
 export function wpLabel(docKind, version) {
   const d = ASPICE_DOCS[docKind]; if (!d) return "";
   return versionsOf(version).map(v => `${v}: ${d.wp[v]}`).join(" / ");
@@ -127,8 +131,8 @@ export function aspiceDocKind(name) {
     return null;
   }
   if (n.startsWith("HW")) {
-    if (n.includes("요구사항검증")) return isSpec ? "V_HWE4" : null;
-    if (n.includes("설계검증")) return isSpec ? "V_HWE3" : null;
+    if (n.includes("요구사항검증")) return isResult ? "R_HWE4" : isSpec ? "V_HWE4" : null;
+    if (n.includes("설계검증")) return isResult ? "R_HWE3" : isSpec ? "V_HWE3" : null;
     if (n.includes("요구사항명세")) return "HW_RS";
     if (n.includes("아키텍처") || n.includes("설계서")) return "HW_AD";
   }
