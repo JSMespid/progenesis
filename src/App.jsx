@@ -7326,8 +7326,8 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   const rvw = AE.reviewView(fullModel);
   const rvRows = [["3단 교차검토 — 검토 AI 의견 및 QA 판정 기록"],
     [`검토 기준 ${AE.REVIEW_CRITERIA_VER} (${AE.REVIEW_CRITERIA_BASIS}) · 의견 ${rvw.list.length}건 · 미판정 ${rvw.count().open}건 · 실행 이력: ${rvw.runs.slice(-5).map(r => `${String(r.at).slice(0, 16).replace("T", " ")} ${r.level} ${r.label || r.provider} ${r.model}`).join(" / ") || "-"}`],
-    ["레벨", "요구 ID", "요구사항명", "기준", "심각도", "근거 인용", "검토 의견", "개선 제안", "검토 모델·일시", "판정", "판정 의견", "판정일시"],
-    ...rvw.list.map(f => { const run = rvw.runs.find(r => r.at === f.runAt); return [AE.LEVELS[f.level]?.reqProc || f.level, f.reqId, f.reqTitle || (f.removed ? "(삭제됨)" : ""), (AE.REVIEW_CRITERIA.find(c => c.code === f.criterion) || {}).label || f.criterion, AE.REVIEW_SEV[f.severity] || f.severity, f.evidence || "", f.issue, f.suggestion || "", `${run ? `${run.label || run.provider} ${run.model}` : ""} ${String(f.runAt || "").slice(0, 16).replace("T", " ")}`.trim(), f.judge ? AE.REVIEW_JUDGE[f.judge.state] : (f.stale ? "미판정 (요구 변경됨)" : "미판정"), f.judge?.note || "", f.judge ? String(f.judge.at).slice(0, 16).replace("T", " ") : ""]; })];
+    ["레벨", "요구 ID", "요구사항명", "기준", "심각도", "근거 인용", "검토 의견", "개선 제안", "검토 AI·모델·일시", "판정", "판정 의견", "판정일시"],
+    ...rvw.list.map(f => { const run = rvw.runs.find(r => r.at === f.runAt); return [AE.LEVELS[f.level]?.reqProc || f.level, f.reqId, f.reqTitle || (f.removed ? "(삭제됨)" : ""), (AE.REVIEW_CRITERIA.find(c => c.code === f.criterion) || {}).label || f.criterion, AE.REVIEW_SEV[f.severity] || f.severity, f.evidence || "", f.issue, f.suggestion || "", `${f.reviewer ? `${f.reviewer} ${f.reviewerModel || ""}` : run ? `${run.label || run.provider} ${run.model}` : ""} ${String(f.runAt || "").slice(0, 16).replace("T", " ")}`.trim(), f.judge ? AE.REVIEW_JUDGE[f.judge.state] : (f.stale ? "미판정 (요구 변경됨)" : "미판정"), f.judge?.note || "", f.judge ? String(f.judge.at).slice(0, 16).replace("T", " ") : ""]; })];
   const w = [...(hasStk ? [16] : []), 12, 26, 16, 22, 16, 16, ...(sc.SW ? [16, 14, 16, 16] : []), ...(sc.HW ? [16, 14, 16, 16] : []), 18];
   const std = xlsxStdParts({ title: doc?.name || AE.ASPICE_DOCS.RTM.title, docCode: projectDocNo(meta, doc?.code || "SY2105"), phase: "SYS.2~SWE.6", meta, infoRows: [["적용 기준", `Automotive SPICE ${AE.ASPICE_VERSIONS.find(v => v.id === model.version)?.label || model.version}`], ["정보항목(WP)", AE.wpLabel("RTM", model.version)]] });
   return makeXlsxBook([
@@ -8256,21 +8256,24 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [rv, setRv] = useState(null);              // 검토 AI 설정(마스킹)
   const [rvLevel, setRvLevel] = useState("SYS");
   const [rvFilter, setRvFilter] = useState("open");
-  useEffect(() => { apiFetch("/api/review").then(setRv).catch(e => setRv({ error: e.message })); }, []);
+  const [rvProv, setRvProv] = useState("");          // 이번 검토에 쓸 검토 AI (Gemini·ChatGPT 등) — 기본은 설정의 기본 검토 AI
+  const [rvBy, setRvBy] = useState("all");           // 판정 목록: 검토 AI별 보기
+  useEffect(() => { apiFetch("/api/review").then(c => { setRv(c); const ready = (c.available || []).filter(a => a.ready); setRvProv(ready.some(a => a.id === c.defaultProvider) ? c.defaultProvider : (ready[0]?.id || "")); }).catch(e => setRv({ error: e.message })); }, []);
+  const rvSel = (rv?.available || []).find(a => a.id === rvProv) || null;
   function aiReview(mode) {
     const lv = rvLevel;
     return run(`검토 AI 의견 수집 (${AE.LEVELS[lv].reqProc})`, async () => {
       if (!rv || rv.error) throw new Error(rv?.error || "검토 AI 설정을 불러오지 못했습니다.");
-      if (rv.kind === "none") throw new Error("검토 AI가 '사용 안 함'입니다. 설정 → AI 연동 → 검토 AI에서 선택하세요.");
-      const targets = AE.reviewTargets(model, lv, mode);
+      if (!rvSel || !rvSel.ready) throw new Error("사용 가능한 검토 AI가 없습니다. 설정 → AI 연동 → 검토 AI에서 Gemini 또는 ChatGPT의 API 키와 모델을 등록하세요.");
+      const targets = AE.reviewTargets(model, lv, mode, rvSel.id);
       if (!targets.length) return "다시 검토할 요구가 없습니다 — 마지막 검토 이후 바뀐 요구가 없습니다.";
       const parents = lv === "SYS" ? model.reqs.STK : AE.parentsForLevel(model, lv);
       const kept = [], done = []; let dropped = 0, failed = 0, meta = {}, lastErr = null;
       for (let i = 0; i < targets.length; i += AE.REVIEW_BATCH) {
         const batch = targets.slice(i, i + AE.REVIEW_BATCH);
-        setProg({ percent: 5 + (i / targets.length) * 90, label: `${rv.label} 검토 중… (${Math.min(i + batch.length, targets.length)}/${targets.length})` });
+        setProg({ percent: 5 + (i / targets.length) * 90, label: `${rvSel.label} 검토 중… (${Math.min(i + batch.length, targets.length)}/${targets.length})` });
         try {
-          const r = await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "review", system: AE.reviewSystemPrompt(), prompt: AE.promptReview({ level: lv, reqs: batch, parents, version: V }) }) });
+          const r = await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "review", provider: rvSel.id, system: AE.reviewSystemPrompt(), prompt: AE.promptReview({ level: lv, reqs: batch, parents, version: V }) }) });
           meta = { provider: r.provider, label: r.label, model: r.model, sameAsGenerator: r.sameAsGenerator };
           const v = AE.validateReview(AE.parseReviewJson(r.text), batch);
           kept.push(...v.kept); dropped += v.dropped.length; done.push(...batch.map(b => b.id));
@@ -8896,9 +8899,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             const critLabel = Object.fromEntries(AE.REVIEW_CRITERIA.map(c => [c.code, c.label]));
             const sevColor = { major: T.red, minor: T.amber, info: T.muted };
             const jColor = { valid: T.green, invalid: T.muted, opinion: T.accent };
-            const list = v.list.filter(f => f.level === rvLevel).filter(f => rvFilter === "all" ? true : rvFilter === "open" ? !f.judge : f.judge?.state === rvFilter);
-            const lastRun = [...v.runs].reverse().find(r => r.level === rvLevel);
-            const changedN = AE.reviewTargets(model, rvLevel, "changed").length;
+            const reviewers = [...new Set(v.list.filter(f => f.level === rvLevel).map(f => f.reviewer || f.provider || "검토 AI"))];
+            const list = v.list.filter(f => f.level === rvLevel).filter(f => rvBy === "all" || (f.reviewer || f.provider || "검토 AI") === rvBy).filter(f => rvFilter === "all" ? true : rvFilter === "open" ? !f.judge : f.judge?.state === rvFilter);
+            const lastRun = [...v.runs].reverse().find(r => r.level === rvLevel && (!rvSel || r.provider === rvSel.id));
+            const changedN = AE.reviewTargets(model, rvLevel, "changed", rvSel?.id || "").length;
+            const readyList = (rv?.available || []).filter(a => a.ready);
             const judge = (f, state) => {
               let note = "";
               if (state === "invalid" || state === "opinion") {
@@ -8908,7 +8913,6 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               setModel(m => AE.judgeReview(m, [f.key], state, note));
             };
             const chip = (label, val, color) => <span style={{ padding: "4px 10px", borderRadius: 8, background: color + "18", border: `1px solid ${color}44`, color, fontSize: 11 }}>{label} <b>{val}</b></span>;
-            const noKey = rv && !rv.error && rv.kind !== "none" && !rv.hasKey;
             return (<>
               <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8, lineHeight: 1.6 }}>
                 <b style={{ color: T.text }}>3단 교차검토</b> — ① 규칙 엔진이 결정론적으로 점검하고, ② 생성 AI와 <b>다른</b> 검토 AI가 요구 품질 의견을 내며(의견의 대상 ID·기준·근거 인용은 규칙으로 다시 검증), ③ QA 담당자가 유효·무효·의견으로 판정합니다. 심사 증적은 ③ 판정 기록입니다.
@@ -8935,11 +8939,13 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 {rv?.error && <div style={{ fontSize: 11, color: T.red }}>검토 AI 설정 조회 실패: {rv.error}</div>}
                 {rv && !rv.error && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11 }}>
-                    <span>검토 AI: <b>{rv.label}</b>{rv.kind !== "none" && <span style={{ color: T.muted }}> · {rv.model || "모델 미설정"}</span>}</span>
-                    {rv.kind !== "none" && !rv.sameAsGenerator && <span style={{ color: T.green, fontSize: 10.5 }}>✓ 생성 AI(Claude)와 다른 모델 — 독립 검토</span>}
-                    {rv.sameAsGenerator && <span style={{ color: T.amber, fontSize: 10.5 }}>⚠ 생성 AI와 같은 계열 — 독립성 낮음 (다른 검토 AI 권장)</span>}
-                    {noKey && <span style={{ color: T.red, fontSize: 10.5 }}>API 키 없음 — 설정 → AI 연동 → 검토 AI에서 등록하세요</span>}
+                    <span>검토 AI:</span>
+                    {readyList.length === 0 && <span style={{ color: T.red, fontSize: 10.5 }}>사용 가능한 검토 AI 없음 — 설정 → AI 연동 → 검토 AI에서 Gemini 또는 ChatGPT의 API 키·모델을 등록하세요</span>}
+                    {readyList.map(a => <button key={a.id} disabled={busy} onClick={() => setRvProv(a.id)} title={a.model} style={{ ...small, background: rvProv === a.id ? T.accent : "none", color: rvProv === a.id ? "#fff" : T.accent }}>{a.label.replace(/ \(.*\)$/, "")} · {a.model}</button>)}
+                    {rvSel && !rvSel.sameAsGenerator && <span style={{ color: T.green, fontSize: 10.5 }}>✓ 생성 AI(Claude)와 다른 모델 — 독립 검토</span>}
+                    {rvSel?.sameAsGenerator && <span style={{ color: T.amber, fontSize: 10.5 }}>⚠ 생성 AI와 같은 계열 — 독립성 낮음 (다른 검토 AI 권장)</span>}
                   </div>)}
+                {readyList.length > 1 && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 4 }}>같은 요구를 여러 검토 AI로 각각 검토할 수 있습니다. 검토 AI별 의견은 따로 보관되며 ③에서 함께 판정합니다.</div>}
                 <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6, lineHeight: 1.6 }}>
                   검토 기준 {AE.REVIEW_CRITERIA_VER} ({AE.REVIEW_CRITERIA_BASIS}): {AE.REVIEW_CRITERIA.map(c => c.label).join(" · ")}
                 </div>
@@ -8949,7 +8955,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </AeSec>
 
               <AeSec title={`③ QA 담당자 판정 — 미판정 ${cnt.open} · 유효 ${cnt.valid} · 무효 ${cnt.invalid} · 의견 ${cnt.opinion}${cnt.stale ? ` · 요구 변경됨 ${cnt.stale}` : ""}`}
-                right={<div style={{ display: "flex", gap: 3 }}>{[["open", "미판정"], ["valid", "유효"], ["invalid", "무효"], ["opinion", "의견"], ["all", "전체"]].map(([k, l]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.accent }}>{l}</button>)}</div>}>
+                right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정"], ["valid", "유효"], ["invalid", "무효"], ["opinion", "의견"], ["all", "전체"]].map(([k, l]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.accent }}>{l}</button>)}</div>}>
                 {!cnt.total && <div style={{ fontSize: 11, color: T.muted }}>아직 검토 AI 의견이 없습니다. ②에서 검토를 실행하세요.</div>}
                 {cnt.total > 0 && !list.length && <div style={{ fontSize: 11, color: T.muted }}>해당하는 항목이 없습니다.</div>}
                 {list.length > 0 && (
@@ -8964,7 +8970,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                           <td style={{ padding: "6px", fontFamily: "monospace" }}>{f.reqId}
                             {f.stale && <div style={{ color: T.amber, fontSize: 9.5, fontFamily: "inherit" }}>요구 변경됨</div>}
                             {f.removed && <div style={{ color: T.red, fontSize: 9.5, fontFamily: "inherit" }}>요구 삭제됨</div>}</td>
-                          <td style={{ padding: "6px" }}><div>{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div></td>
+                          <td style={{ padding: "6px" }}><div>{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }} title={f.reviewerModel}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}</td>
                           <td style={{ padding: "6px", lineHeight: 1.5 }}>
                             <div style={{ color: T.muted, fontSize: 10 }}>{f.reqTitle}</div>
                             {f.evidence && <div style={{ fontSize: 10.5 }}>근거: <span style={{ background: T.amber + "22", padding: "0 3px", borderRadius: 3 }}>"{f.evidence}"</span></div>}
@@ -10784,26 +10790,29 @@ function AiTab({ flash, settings, onReload }) {
 }
 
 // ── 검토 AI(교차검토) 설정 — /api/review ──
-// OpenAI 호환 어댑터 1개로 Gemini·OpenAI·사내 LLM 서버를 연결하고, 기본값은 Gemini.
+// 검토 AI마다 API 키·모델을 따로 등록한다. 등록된 검토 AI는 모두 검토 화면에서 고를 수 있고, 그중 하나가 기본값.
 function ReviewAiSettings({ flash }) {
   const [cfg, setCfg] = useState(null);
-  const [provider, setProvider] = useState("gemini");
+  const [provider, setProvider] = useState("gemini");   // 편집 중인 검토 AI
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [key, setKey] = useState("");
+  const [asDefault, setAsDefault] = useState(false);
   const [busy, setBusy] = useState(false);
   const [verify, setVerify] = useState(null);
-  const apply = c => { setCfg(c); setProvider(c.provider || "gemini"); setModel(c.model || ""); setBaseUrl(c.baseUrl || ""); };
-  useEffect(() => { apiFetch("/api/review").then(apply).catch(e => setCfg({ error: e.message })); }, []);
-  const providers = cfg?.providers || [{ id: "gemini", label: "Google Gemini" }];
-  const changedProvider = cfg && provider !== cfg.provider;
+  const pick = (c, id) => { const a = (c?.available || []).find(x => x.id === id); setProvider(id); setModel(a?.model || ""); setBaseUrl(id === "custom" ? (c?.baseUrl || "") : ""); setKey(""); setVerify(null); setAsDefault(c?.defaultProvider === id); };
+  const load = (keep) => apiFetch("/api/review").then(c => { setCfg(c); pick(c, keep || c.defaultProvider || "gemini"); }).catch(e => setCfg({ error: e.message }));
+  useEffect(() => { load(); }, []);
+  const providers = (cfg?.providers || []).filter(p => p.id !== "none");
+  const cur = (cfg?.available || []).find(a => a.id === provider);
+  const srcLabel = { db: "설정 화면", "db(ai)": "Claude 키 재사용", env: "Vercel 환경변수", none: "미등록" };
 
   async function save({ clearKey = false } = {}) {
     setBusy(true); setVerify(null);
     try {
-      const c = await apiFetch("/api/review", { method: "PUT", body: JSON.stringify({ provider, model: model.trim(), baseUrl: baseUrl.trim(), apiKey: clearKey ? null : (key.trim() || undefined) }) });
-      apply(c); setKey("");
-      flash("ok", clearKey ? "저장된 검토 AI 키를 삭제했습니다." : "검토 AI 설정을 저장했습니다.");
+      await apiFetch("/api/review", { method: "PUT", body: JSON.stringify({ provider, model: model.trim(), baseUrl: baseUrl.trim(), apiKey: clearKey ? null : (key.trim() || undefined), setDefault: asDefault }) });
+      await load(provider);
+      flash("ok", clearKey ? "저장된 키를 삭제했습니다." : "검토 AI 설정을 저장했습니다.");
     } catch (e) { flash("error", e.message); }
     setBusy(false);
   }
@@ -10813,45 +10822,56 @@ function ReviewAiSettings({ flash }) {
     catch (e) { setVerify({ ok: false, message: e.message }); }
     setBusy(false);
   }
-  const srcLabel = { db: "설정 화면에 저장된 키", "db(ai)": "Claude 키 재사용", env: "Vercel 환경변수", none: "미설정" };
   const sel = { width: "100%", padding: "9px 12px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, color: T.text, fontSize: 13, fontFamily: "inherit" };
+  const help = {
+    gemini: "Google AI Studio → API 키에서 발급합니다. 결제가 연결된 프로젝트(유료 등급)의 키를 사용해야 입력 데이터가 모델 학습에 쓰이지 않습니다. 환경변수 GEMINI_API_KEY도 사용할 수 있습니다.",
+    openai: "OpenAI API 키는 platform.openai.com → API keys에서 발급합니다. ChatGPT 구독(Plus·Team 등)과는 별개이며, API 결제(크레딧)가 등록되어 있어야 합니다. 환경변수 OPENAI_API_KEY도 사용할 수 있습니다. 응답 시간 제한(약 10초)이 있으므로 빠른 모델(mini 계열 등)을 권장합니다.",
+    custom: "사내 LLM 서버는 이 서비스(클라우드)에서 접근 가능한 OpenAI 호환 주소여야 합니다. 방화벽 안의 서버는 구축형 도입 시 연결됩니다.",
+    anthropic: "생성 AI(Claude)와 같은 계열이라 독립 검토 효과가 낮습니다. 키를 비워두면 Claude API 키를 재사용합니다.",
+  }[provider];
 
   return (
     <SettingsSection title="검토 AI (V-모델 3단 교차검토)"
-      desc="ASPICE V-모델 산출물을 생성 AI(Claude)와 다른 모델이 검토해 의견을 냅니다. OpenAI 호환 방식으로 Gemini·OpenAI·사내 LLM 서버를 연결할 수 있으며, 키는 서버에만 저장됩니다. 검토 의견은 참고용이며 최종 판정은 QA 담당자가 합니다.">
+      desc="ASPICE V-모델 산출물을 생성 AI(Claude)와 다른 모델이 검토해 의견을 냅니다. 검토 AI마다 API 키와 모델을 따로 등록하며, 등록된 검토 AI는 검토 화면에서 실행할 때마다 고를 수 있습니다(예: Gemini와 ChatGPT로 각각 검토). 키는 서버에만 저장되고 화면에는 마스킹만 표시됩니다.">
       {cfg?.error && <div style={{ color: T.red, fontSize: 12, marginBottom: 10 }}>설정 조회 실패: {cfg.error}</div>}
       {cfg && !cfg.error && (
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", background: T.bg, borderRadius: 10, marginBottom: 16, flexWrap: "wrap", fontSize: 12 }}>
-          <Badge color={cfg.kind === "none" ? T.muted : cfg.hasKey ? T.green : T.red}>{cfg.kind === "none" ? "사용 안 함" : cfg.hasKey ? "연결됨" : "키 없음"}</Badge>
-          <span><b>{cfg.label}</b>{cfg.kind !== "none" && <span style={{ color: T.muted }}> · {cfg.model || "모델 미설정"}</span>}</span>
-          {cfg.kind !== "none" && <span style={{ fontFamily: "monospace", color: T.muted, fontSize: 11 }}>{cfg.keyMasked || "키 없음"} ({srcLabel[cfg.keySource] || cfg.keySource})</span>}
-          {cfg.sameAsGenerator && <span style={{ color: T.amber, fontSize: 11 }}>⚠ 생성 AI와 같은 계열 — 독립성 낮음</span>}
+        <div style={{ background: T.bg, borderRadius: 10, padding: "8px 12px", marginBottom: 16 }}>
+          {(cfg.available || []).map(a => (
+            <div key={a.id} onClick={() => pick(cfg, a.id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 4px", fontSize: 12, cursor: "pointer", borderBottom: `1px solid ${T.border}`, background: provider === a.id ? T.accent + "12" : "transparent" }}>
+              <Badge color={a.ready ? T.green : a.hasKey ? T.amber : T.muted}>{a.ready ? "사용 가능" : a.hasKey ? "모델 필요" : "미등록"}</Badge>
+              <span style={{ minWidth: 190 }}><b>{a.label}</b>{cfg.defaultProvider === a.id && <span style={{ color: T.accent, fontSize: 11 }}> · 기본</span>}</span>
+              <span style={{ color: T.muted, flex: 1 }}>{a.model || "-"}</span>
+              <span style={{ fontFamily: "monospace", color: T.muted, fontSize: 11 }}>{a.keyMasked || ""} {a.hasKey ? `(${srcLabel[a.keySource] || a.keySource})` : ""}</span>
+            </div>))}
+          <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>행을 누르면 아래에서 해당 검토 AI를 편집합니다.</div>
         </div>)}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
         <div>
-          <div style={{ fontSize: 11, color: T.muted, marginBottom: 6 }}>검토 AI 종류</div>
-          <select value={provider} onChange={e => { setProvider(e.target.value); setVerify(null); }} style={sel}>
+          <div style={{ fontSize: 11, color: T.muted, marginBottom: 6 }}>편집할 검토 AI</div>
+          <select value={provider} onChange={e => pick(cfg, e.target.value)} style={sel}>
             {providers.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select>
         </div>
-        {provider !== "none" && <Input label="모델 ID (비우면 기본값)" value={model} onChange={setModel} placeholder={provider === "gemini" ? "예: gemini-2.5-flash" : "모델 ID"} />}
+        <Input label="모델 ID" value={model} onChange={setModel} placeholder={provider === "gemini" ? "예: gemini-2.5-flash" : provider === "openai" ? "연결 검증 후 목록에서 선택" : "모델 ID"} />
         {provider === "custom" && <Input label="서버 주소 (OpenAI 호환 Base URL)" value={baseUrl} onChange={setBaseUrl} placeholder="https://llm.example.co.kr/v1" />}
-        {provider !== "none" && <Input label={changedProvider ? "API 키 (새 종류는 키 필요)" : "새 API 키"} type="password" value={key} onChange={setKey} placeholder="비워두면 기존 키·환경변수 유지" />}
+        <Input label={cur?.hasKey ? "새 API 키 (비워두면 기존 키 유지)" : "API 키"} type="password" value={key} onChange={setKey} placeholder={provider === "openai" ? "sk-..." : provider === "gemini" ? "AIza..." : ""} />
       </div>
-      {provider === "gemini" && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 8, lineHeight: 1.6 }}>Gemini 키는 Google AI Studio → API 키에서 발급합니다. 결제가 연결된 프로젝트(유료 등급)의 키를 사용해야 입력 데이터가 모델 학습에 쓰이지 않습니다. 환경변수 GEMINI_API_KEY도 사용할 수 있습니다.</div>}
-      {provider === "custom" && <div style={{ fontSize: 10.5, color: T.amber, marginTop: 8, lineHeight: 1.6 }}>사내 LLM 서버는 이 서비스(클라우드)에서 접근 가능한 주소여야 합니다. 방화벽 안의 서버는 구축형 도입 시 연결됩니다.</div>}
+      {help && <div style={{ fontSize: 10.5, color: provider === "custom" || provider === "anthropic" ? T.amber : T.muted, marginTop: 8, lineHeight: 1.6 }}>{help}</div>}
+      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: 10, cursor: "pointer" }}>
+        <input type="checkbox" checked={asDefault} onChange={e => setAsDefault(e.target.checked)} /> 기본 검토 AI로 지정 (검토 화면에서 처음 선택되는 검토 AI)
+      </label>
       {verify && (
         <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: (verify.ok ? T.green : T.red) + "18", border: `1px solid ${(verify.ok ? T.green : T.red)}55`, color: verify.ok ? T.green : T.red, fontSize: 12, lineHeight: 1.6 }}>
           {verify.ok ? "✓ " : "✕ "}{verify.message}
-          {(verify.models || []).length > 0 && <div style={{ marginTop: 8, color: T.muted, fontSize: 11 }}>사용 가능한 모델 (눌러서 선택):
+          {(verify.models || []).length > 0 && <div style={{ marginTop: 8, color: T.muted, fontSize: 11 }}>사용 가능한 모델 (눌러서 선택 후 저장):
             <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>{verify.models.map(m => <button key={m} onClick={() => setModel(m)} style={{ background: m === model ? T.accent : "none", color: m === model ? "#fff" : T.accent, border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>{m}</button>)}</div>
           </div>}
         </div>)}
       <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
         <Btn onClick={() => save()} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "처리 중…" : "저장"}</Btn>
-        {provider !== "none" && <Btn variant="outline" onClick={doVerify} disabled={busy} style={{ fontSize: 12, padding: "7px 16px" }}>연결 검증·모델 목록</Btn>}
-        {cfg?.keySource === "db" && provider === cfg.provider && (
-          <Btn variant="ghost" onClick={() => { if (confirm("저장된 검토 AI 키를 삭제합니다. 계속할까요?")) save({ clearKey: true }); }} disabled={busy} style={{ fontSize: 12, padding: "7px 16px", color: T.red, borderColor: T.red + "55" }}>저장된 키 삭제</Btn>)}
+        <Btn variant="outline" onClick={doVerify} disabled={busy} style={{ fontSize: 12, padding: "7px 16px" }}>연결 검증·모델 목록</Btn>
+        {cur?.keySource === "db" && (
+          <Btn variant="ghost" onClick={() => { if (confirm(`${cur.label}의 저장된 키를 삭제합니다. 계속할까요?`)) save({ clearKey: true }); }} disabled={busy} style={{ fontSize: 12, padding: "7px 16px", color: T.red, borderColor: T.red + "55" }}>저장된 키 삭제</Btn>)}
       </div>
     </SettingsSection>
   );

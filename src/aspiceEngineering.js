@@ -1436,22 +1436,26 @@ export function validateReview(raw, batch) {
   return { kept, dropped };
 }
 
-// 검토 실행 결과를 모델에 반영 — 다시 검토한 요구의 '미판정' 지적만 교체하고, 판정된 지적은 보존한다
+// 검토 실행 결과를 모델에 반영 — 같은 검토 AI가 다시 검토한 요구의 '미판정' 지적만 교체하고,
+// 판정된 지적과 다른 검토 AI(예: Gemini ↔ ChatGPT)의 지적은 보존한다
 export function applyReviewRun(model, { level, reviewedIds, kept, meta }) {
   const m = normalizeModel(model);
   const at = meta?.at || new Date().toISOString();
+  const prov = meta?.provider || "";
   const reqById = Object.fromEntries((m.reqs[level] || []).map(r => [r.id, r]));
   const ids = new Set(reviewedIds);
-  const keep = m.aiReview.findings.filter(f => !(f.level === level && ids.has(f.reqId) && !f.judge));
+  const keep = m.aiReview.findings.filter(f => !(f.level === level && ids.has(f.reqId) && !f.judge && (f.provider || "") === prov));
   const judgedKeys = new Set(keep.map(f => f.key));
   const fresh = kept.map(f => ({
     ...f, level, runAt: at, reqHash: reqHash(reqById[f.reqId] || {}),
-    key: `${level}|${f.reqId}|${f.criterion}|${fnv1a(f.issue)}`,
+    provider: prov, reviewer: meta?.label || prov, reviewerModel: meta?.model || "",
+    key: `${level}|${f.reqId}|${f.criterion}|${fnv1a(f.issue)}|${prov}`,
   })).filter(f => !judgedKeys.has(f.key));
   m.aiReview.findings = [...keep, ...fresh];
-  const hs = { ...((m.aiReview.hashes || {})[level] || {}) };
+  const hk = prov ? `${prov}:${level}` : level;   // 검토 AI별로 '어디까지 검토했는지' 따로 기록
+  const hs = { ...((m.aiReview.hashes || {})[hk] || {}) };
   reviewedIds.forEach(id => { if (reqById[id]) hs[id] = reqHash(reqById[id]); });
-  m.aiReview.hashes = { ...(m.aiReview.hashes || {}), [level]: hs };
+  m.aiReview.hashes = { ...(m.aiReview.hashes || {}), [hk]: hs };
   m.aiReview.runs = [...m.aiReview.runs, {
     at, level, provider: meta?.provider || "", label: meta?.label || "", model: meta?.model || "",
     criteria: REVIEW_CRITERIA_VER, reviewed: reviewedIds.length, kept: fresh.length, dropped: meta?.dropped || 0,
@@ -1491,10 +1495,11 @@ export function reviewView(model) {
 }
 
 // 다시 검토할 대상: mode "all" = 전체 / "changed" = 아직 검토하지 않았거나 마지막 검토 이후 내용이 바뀐 요구
-export function reviewTargets(model, level, mode = "all") {
+export function reviewTargets(model, level, mode = "all", provider = "") {
   const m = normalizeModel(model);
   const reqs = m.reqs[level] || [];
   if (mode === "all") return reqs;
-  const snap = (m.aiReview.hashes || {})[level] || {};
+  const hsAll = m.aiReview.hashes || {};
+  const snap = hsAll[provider ? `${provider}:${level}` : level] || {};
   return reqs.filter(r => snap[r.id] !== reqHash(r));
 }
