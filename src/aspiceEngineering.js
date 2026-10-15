@@ -551,6 +551,7 @@ export function emptyModel() {
     tests: [], updatedAt: null,
     linkReview: {}, reqSnaps: {}, reviewLog: [],   // 변경 영향 분석(링크 단위 의심 표시) — 9절
     units: { SW: [] },                              // SWE.3 유닛 골격 — 10절
+    aiReview: { runs: [], findings: [], hashes: {} },           // 3단 교차검토(규칙 → 검토 AI 의견 → 사람 판정) — 11절
   };
 }
 export function normalizeModel(m) {
@@ -567,6 +568,7 @@ export function normalizeModel(m) {
     tests: [...(x.tests || [])],
     linkReview: { ...(x.linkReview || {}) }, reqSnaps: { ...(x.reqSnaps || {}) }, reviewLog: [...(x.reviewLog || [])],
     units: { SW: [...((x.units || {}).SW || [])] },
+    aiReview: { runs: [...((x.aiReview || {}).runs || [])], findings: [...((x.aiReview || {}).findings || [])], hashes: { ...((x.aiReview || {}).hashes || {}) } },
   };
 }
 
@@ -1331,4 +1333,168 @@ export function coverageDetail(model) {
     push({ key: "t" + L, group: "verif", kind: tl.targetKind, q: `${what}마다 ${tl.targetKind === "if" ? "통합 시험" : "시험"}이 있나`, sub: `${what} → ${tl.label} · ${tl.proc}`, tab: "verif", level: L, total: targets.length, missing: targets.filter(x => !cov.has(x.id)).map(x => x.id) });
   });
   return out;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11) 3단 교차검토 — ① 규칙 검사(checkConsistency·qualityFlags) → ② 검토 AI 의견 → ③ QA 담당자 판정
+//  · 검토 AI는 생성 AI와 다른 모델(기본 Gemini)을 /api/review 로 호출한다.
+//  · AI 의견도 규칙으로 거른다: 대상 ID·기준 코드·근거 인용(원문 일치)을 검증하고 어긋나면 버린다.
+//  · 검토 기준은 버전으로 고정하고, 실행마다 모델·일시·기준 버전을 기록한다(재현성·심사 증적).
+//  · 판정(유효·무효·의견)은 사람만 한다. AI 의견 자체는 심사 증적이 아니라 판정 기록이 증적이다.
+// ═══════════════════════════════════════════════════════════════════════════
+export const REVIEW_CRITERIA_VER = "RC-1.0";
+export const REVIEW_CRITERIA_BASIS = "ISO/IEC/IEEE 29148 요구사항 특성 기반";
+export const REVIEW_CRITERIA = [
+  { code: "AMBIG",    label: "모호성",       desc: "해석이 둘 이상 가능한 표현, 모호어, 정의되지 않은 용어" },
+  { code: "VERIF",    label: "검증 가능성",   desc: "합격·불합격을 판정할 정량 기준·조건·허용오차가 없음" },
+  { code: "SINGULAR", label: "단일성",       desc: "하나의 요구에 둘 이상의 요구가 결합되어 있음" },
+  { code: "COMPLETE", label: "완전성",       desc: "동작 조건·입력 범위·예외·상태(모드) 등 필요한 정보가 빠짐" },
+  { code: "CONSIST",  label: "일관성",       desc: "상위 요구 또는 다른 요구와 모순되거나 수치·용어가 불일치" },
+  { code: "DESIGN",   label: "구현 중립성",   desc: "무엇(What)이 아니라 구현 해법(How)을 서술함" },
+  { code: "FEASIBLE", label: "실현 가능성",   desc: "기술·자원 측면에서 달성 여부가 의심됨" },
+];
+export const REVIEW_SEV = { major: "중대", minor: "경미", info: "제안" };
+export const REVIEW_JUDGE = { valid: "유효 (수정 필요)", invalid: "무효 (지적 부적절)", opinion: "의견 (참고·보류)" };
+export const REVIEW_BATCH = 4;   // 한 번에 보내는 요구 수 — Vercel 약 10초 제한 대응
+
+export function reviewSystemPrompt() {
+  return "You are an independent quality assurance reviewer for Automotive SPICE work products. " +
+    "Review only what is given. Never invent requirement IDs, numbers, or quotes. Respond with valid JSON only, no markdown.";
+}
+
+// 검토 대상 요구(batch)와 상위 요구(parents)로 검토 프롬프트를 만든다.
+export function promptReview({ level, reqs, parents = [], version = "both" }) {
+  const proc = (LEVELS[level] || {}).reqProc || level;
+  const crit = REVIEW_CRITERIA.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n");
+  const brief = r => ({ id: r.id, title: nz(r.title), text: nz(r.text), type: r.type || "", verifCriteria: nz(r.verifCriteria), parents: r.parents || [] });
+  const usedParents = new Set(reqs.flatMap(r => r.parents || []));
+  const par = parents.filter(p => usedParents.has(p.id)).map(p => ({ id: p.id, title: nz(p.title), text: nz(p.text) }));
+  return `역할: 당신은 ASPICE ${proc} (${procLabel(proc, version)}) 산출물을 검토하는 독립 품질보증(QA) 검토자입니다.
+아래 [검토 대상] 요구사항을 [검토 기준]에 따라 검토하고, 문제가 있는 것만 지적하세요.
+
+[검토 기준] (${REVIEW_CRITERIA_VER}, ${REVIEW_CRITERIA_BASIS})
+${crit}
+
+[규칙]
+1) id는 반드시 [검토 대상]에 있는 ID만 사용한다. 다른 ID를 만들지 않는다.
+2) criterion은 위 기준 코드 중 하나만 쓴다.
+3) evidence는 해당 요구의 title·text·verifCriteria에서 그대로 복사한 짧은 구절(30자 이내)이다. 원문에 없는 문구를 쓰지 않는다. 빠진 정보를 지적할 때(COMPLETE·VERIF)는 빈 문자열로 둔다.
+4) severity는 major(검증·구현 불가 수준) / minor(수정 권장) / info(개선 제안) 중 하나.
+5) 문제가 없는 요구는 지적하지 않는다. 요구 하나당 최대 3건.
+6) issue와 suggestion은 한국어 한 문장, 줄바꿈 없이 작성한다. suggestion에 원문에 없는 수치를 확정값처럼 쓰지 말고 필요하면 'TBD(확인 필요)'로 쓴다.
+7) CONSIST는 [상위 요구]와 비교해 판단한다.
+
+[상위 요구]
+${par.length ? JSON.stringify(par) : "(없음)"}
+
+[검토 대상]
+${JSON.stringify(reqs.map(brief))}
+
+[출력 형식] JSON만:
+{"findings":[{"id":"","criterion":"AMBIG","severity":"minor","evidence":"","issue":"","suggestion":""}]}`;
+}
+
+// 검토 AI 응답 텍스트 → JSON (마크다운 섞임·잘림 방어)
+export function parseReviewJson(text) {
+  let t = String(text || "").replace(/```(?:json)?/gi, "").trim();
+  const a = t.indexOf("{"), b = t.lastIndexOf("}");
+  if (a >= 0 && b > a) {
+    const body = t.slice(a, b + 1);
+    try { return JSON.parse(body); } catch (_) { /* 아래에서 복구 */ }
+    try { return JSON.parse(body.replace(/[\r\n\t]+/g, " ")); } catch (_) { /* 아래에서 복구 */ }
+  }
+  // 잘린 응답: 완결된 { ... } 객체만 골라 살린다 (중첩 없는 finding 객체 가정)
+  const objs = [];
+  const re = /\{[^{}]*"id"\s*:[^{}]*\}/g; let mm;
+  while ((mm = re.exec(t))) { try { objs.push(JSON.parse(mm[0].replace(/[\r\n\t]+/g, " "))); } catch (_) { /* 버림 */ } }
+  if (objs.length) return { findings: objs, _salvaged: true };
+  throw new Error("검토 AI 응답을 JSON으로 해석하지 못했습니다.");
+}
+
+// AI 의견을 규칙으로 거른다 — kept(채택 후보)와 dropped(버린 이유) 반환
+export function validateReview(raw, batch) {
+  const byId = Object.fromEntries(batch.map(r => [r.id, r]));
+  const codes = new Set(REVIEW_CRITERIA.map(c => c.code));
+  const kept = [], dropped = [], seen = new Set();
+  const norm = s => nz(s).replace(/["'“”‘’`]/g, "").toLowerCase();
+  (Array.isArray(raw?.findings) ? raw.findings : []).forEach(f => {
+    const id = nz(f?.id), crit = nz(f?.criterion).toUpperCase();
+    const r = byId[id];
+    if (!r) return dropped.push({ id, reason: "검토 대상에 없는 ID" });
+    if (!codes.has(crit)) return dropped.push({ id, reason: `알 수 없는 기준(${crit || "없음"})` });
+    const issue = nz(f?.issue);
+    if (!issue) return dropped.push({ id, reason: "지적 내용 없음" });
+    const ev = nz(f?.evidence);
+    if (ev && !norm(`${r.title} ${r.text} ${r.verifCriteria}`).includes(norm(ev))) return dropped.push({ id, reason: `근거 인용이 원문과 불일치("${ev.slice(0, 20)}")` });
+    const k = `${id}|${crit}|${norm(issue).slice(0, 40)}`;
+    if (seen.has(k)) return dropped.push({ id, reason: "중복 지적" });
+    seen.add(k);
+    const sev = ["major", "minor", "info"].includes(String(f?.severity)) ? f.severity : "minor";
+    kept.push({ reqId: id, criterion: crit, severity: sev, evidence: ev, issue, suggestion: nz(f?.suggestion) });
+  });
+  return { kept, dropped };
+}
+
+// 검토 실행 결과를 모델에 반영 — 다시 검토한 요구의 '미판정' 지적만 교체하고, 판정된 지적은 보존한다
+export function applyReviewRun(model, { level, reviewedIds, kept, meta }) {
+  const m = normalizeModel(model);
+  const at = meta?.at || new Date().toISOString();
+  const reqById = Object.fromEntries((m.reqs[level] || []).map(r => [r.id, r]));
+  const ids = new Set(reviewedIds);
+  const keep = m.aiReview.findings.filter(f => !(f.level === level && ids.has(f.reqId) && !f.judge));
+  const judgedKeys = new Set(keep.map(f => f.key));
+  const fresh = kept.map(f => ({
+    ...f, level, runAt: at, reqHash: reqHash(reqById[f.reqId] || {}),
+    key: `${level}|${f.reqId}|${f.criterion}|${fnv1a(f.issue)}`,
+  })).filter(f => !judgedKeys.has(f.key));
+  m.aiReview.findings = [...keep, ...fresh];
+  const hs = { ...((m.aiReview.hashes || {})[level] || {}) };
+  reviewedIds.forEach(id => { if (reqById[id]) hs[id] = reqHash(reqById[id]); });
+  m.aiReview.hashes = { ...(m.aiReview.hashes || {}), [level]: hs };
+  m.aiReview.runs = [...m.aiReview.runs, {
+    at, level, provider: meta?.provider || "", label: meta?.label || "", model: meta?.model || "",
+    criteria: REVIEW_CRITERIA_VER, reviewed: reviewedIds.length, kept: fresh.length, dropped: meta?.dropped || 0,
+    failed: meta?.failed || 0, sameAsGenerator: !!meta?.sameAsGenerator,
+  }].slice(-30);
+  return m;
+}
+
+// 사람 판정 — state: valid | invalid | opinion | null(판정 취소)
+export function judgeReview(model, keys, state, note = "", by = "user") {
+  const m = normalizeModel(model);
+  const ks = new Set(keys);
+  m.aiReview.findings = m.aiReview.findings.map(f => ks.has(f.key)
+    ? { ...f, judge: state ? { state, note: nz(note), by, at: new Date().toISOString() } : null }
+    : f);
+  return m;
+}
+
+// 지적 이후 요구가 바뀌었는지(재검토 필요) 표시
+export function reviewView(model) {
+  const m = normalizeModel(model);
+  const reqById = {};
+  ["SYS", "SW", "HW"].forEach(lv => (m.reqs[lv] || []).forEach(r => { reqById[`${lv}|${r.id}`] = r; }));
+  const list = m.aiReview.findings.map(f => {
+    const r = reqById[`${f.level}|${f.reqId}`];
+    return { ...f, reqTitle: r?.title || "", removed: !r, stale: !!r && f.reqHash !== reqHash(r) };
+  });
+  const count = (lv) => {
+    const xs = list.filter(f => !lv || f.level === lv);
+    return { total: xs.length, open: xs.filter(f => !f.judge).length, valid: xs.filter(f => f.judge?.state === "valid").length,
+      invalid: xs.filter(f => f.judge?.state === "invalid").length, opinion: xs.filter(f => f.judge?.state === "opinion").length,
+      stale: xs.filter(f => f.stale).length };
+  };
+  const reviewedAt = {};
+  m.aiReview.runs.forEach(r => { reviewedAt[r.level] = r.at; });
+  return { list, count, runs: m.aiReview.runs, reviewedAt };
+}
+
+// 다시 검토할 대상: mode "all" = 전체 / "changed" = 아직 검토하지 않았거나 마지막 검토 이후 내용이 바뀐 요구
+export function reviewTargets(model, level, mode = "all") {
+  const m = normalizeModel(model);
+  const reqs = m.reqs[level] || [];
+  if (mode === "all") return reqs;
+  const snap = (m.aiReview.hashes || {})[level] || {};
+  return reqs.filter(r => snap[r.id] !== reqHash(r));
 }

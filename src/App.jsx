@@ -7322,6 +7322,12 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   // SW 요구 → 유닛 (SWE.3) — 골격 추적
   const unitRows = [["SW 요구 → 유닛 추적 (SWE.3 골격)"], [`근거: ${AE.bpLabel("SW_UNIT", model.version)} · 유닛 ${fullModel.units.SW.length}개 (헤더 근거 ${fullModel.units.SW.filter(u => u.origin === "header").length})`], ["SW 요구", "요구사항명", "할당 유닛", "유닛 검증(SWE.4)", "판정"],
     ...model.reqs.SW.map(r => { const us = fullModel.units.SW.filter(u => (u.reqs || []).includes(r.id)); return [r.id, r.title || "", us.map(u => `${u.id} ${u.name}`).join(", ") || "-", [...new Set(us.flatMap(u => tOf("SWE4", u.id)))].join(", "), us.length ? "할당" : "미할당"]; })];
+  // 3단 교차검토 — 검토 AI 의견과 QA 담당자 판정 기록 (판정 기록이 심사 증적)
+  const rvw = AE.reviewView(fullModel);
+  const rvRows = [["3단 교차검토 — 검토 AI 의견 및 QA 판정 기록"],
+    [`검토 기준 ${AE.REVIEW_CRITERIA_VER} (${AE.REVIEW_CRITERIA_BASIS}) · 의견 ${rvw.list.length}건 · 미판정 ${rvw.count().open}건 · 실행 이력: ${rvw.runs.slice(-5).map(r => `${String(r.at).slice(0, 16).replace("T", " ")} ${r.level} ${r.label || r.provider} ${r.model}`).join(" / ") || "-"}`],
+    ["레벨", "요구 ID", "요구사항명", "기준", "심각도", "근거 인용", "검토 의견", "개선 제안", "검토 모델·일시", "판정", "판정 의견", "판정일시"],
+    ...rvw.list.map(f => { const run = rvw.runs.find(r => r.at === f.runAt); return [AE.LEVELS[f.level]?.reqProc || f.level, f.reqId, f.reqTitle || (f.removed ? "(삭제됨)" : ""), (AE.REVIEW_CRITERIA.find(c => c.code === f.criterion) || {}).label || f.criterion, AE.REVIEW_SEV[f.severity] || f.severity, f.evidence || "", f.issue, f.suggestion || "", `${run ? `${run.label || run.provider} ${run.model}` : ""} ${String(f.runAt || "").slice(0, 16).replace("T", " ")}`.trim(), f.judge ? AE.REVIEW_JUDGE[f.judge.state] : (f.stale ? "미판정 (요구 변경됨)" : "미판정"), f.judge?.note || "", f.judge ? String(f.judge.at).slice(0, 16).replace("T", " ") : ""]; })];
   const w = [...(hasStk ? [16] : []), 12, 26, 16, 22, 16, 16, ...(sc.SW ? [16, 14, 16, 16] : []), ...(sc.HW ? [16, 14, 16, 16] : []), 18];
   const std = xlsxStdParts({ title: doc?.name || AE.ASPICE_DOCS.RTM.title, docCode: projectDocNo(meta, doc?.code || "SY2105"), phase: "SYS.2~SWE.6", meta, infoRows: [["적용 기준", `Automotive SPICE ${AE.ASPICE_VERSIONS.find(v => v.id === model.version)?.label || model.version}`], ["정보항목(WP)", AE.wpLabel("RTM", model.version)]] });
   return makeXlsxBook([
@@ -7335,6 +7341,7 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
     ...((sc.SW && fullModel.units.SW.length) ? [{ name: "SW 요구→유닛", rows: unitRows, widths: [12, 30, 40, 24, 10], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...((fullModel.stakeholders || []).length ? [{ name: "이해관계자 요구 추적", rows: stk, widths: [12, 22, 46, 16, 40, 40], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...(prjReqs.length ? [{ name: "프로젝트·프로세스 요구", rows: prj, widths: [10, 30, 16, 18, 40, 30, 14], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
+    ...(rvw.list.length ? [{ name: "교차검토·판정 기록", rows: rvRows, widths: [8, 12, 26, 12, 8, 22, 44, 36, 22, 16, 30, 16], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...((fullModel.openIssues || []).length ? [{ name: "미결 사항", rows: oi, widths: [8, 26, 54, 44, 12, 12, 8], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
   ], std.opts);
 }
@@ -8159,7 +8166,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
 // ASPICE V-모델 엔지니어링 모달 — SYS.2 확정 요구 → SYS.3 → SWE.1/2 · HWE.1/2 → 검증 수단 → 추적·충족도
 // 저장 위치: requirements.aspice (tailoring JSON 내부 — DB 스키마 변경 없음)
 // ═══════════════════════════════════════════════════════════════════════════
-const AE_TABS = [["setup", "① 입력자료·설정"], ["req", "② 요구 도출·명세"], ["SYS", "③ 시스템 (SYS.2·3)"], ["SW", "④ SW (SWE.1·2)"], ["HW", "⑤ HW (HWE.1·2)"], ["verif", "⑥ 검증 수단"], ["trace", "⑦ 추적성·충족도"]];
+const AE_TABS = [["setup", "① 입력자료·설정"], ["req", "② 요구 도출·명세"], ["SYS", "③ 시스템 (SYS.2·3)"], ["SW", "④ SW (SWE.1·2)"], ["HW", "⑤ HW (HWE.1·2)"], ["verif", "⑥ 검증 수단"], ["trace", "⑦ 추적성·충족도"], ["review", "⑧ QA 교차검토"]];
 const AE_SEV = { error: { c: "#FF5B5B", l: "오류" }, warn: { c: "#F5A623", l: "경고" }, info: { c: "#6B7280", l: "정보" } };
 
 // 모달 내부에서 정의하면 렌더마다 컴포넌트가 새로 만들어져 입력 포커스가 사라지므로 최상위에 둔다
@@ -8244,6 +8251,40 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     setBusy(false);
   }
   const sysCompName = () => Object.fromEntries(model.comps.SYS.map(c => [c.id, c.name]));
+
+  // ── 11) 3단 교차검토: ① 규칙 검사 → ② 검토 AI 의견(/api/review, 생성 AI와 다른 모델) → ③ QA 담당자 판정 ──
+  const [rv, setRv] = useState(null);              // 검토 AI 설정(마스킹)
+  const [rvLevel, setRvLevel] = useState("SYS");
+  const [rvFilter, setRvFilter] = useState("open");
+  useEffect(() => { apiFetch("/api/review").then(setRv).catch(e => setRv({ error: e.message })); }, []);
+  function aiReview(mode) {
+    const lv = rvLevel;
+    return run(`검토 AI 의견 수집 (${AE.LEVELS[lv].reqProc})`, async () => {
+      if (!rv || rv.error) throw new Error(rv?.error || "검토 AI 설정을 불러오지 못했습니다.");
+      if (rv.kind === "none") throw new Error("검토 AI가 '사용 안 함'입니다. 설정 → AI 연동 → 검토 AI에서 선택하세요.");
+      const targets = AE.reviewTargets(model, lv, mode);
+      if (!targets.length) return "다시 검토할 요구가 없습니다 — 마지막 검토 이후 바뀐 요구가 없습니다.";
+      const parents = lv === "SYS" ? model.reqs.STK : AE.parentsForLevel(model, lv);
+      const kept = [], done = []; let dropped = 0, failed = 0, meta = {}, lastErr = null;
+      for (let i = 0; i < targets.length; i += AE.REVIEW_BATCH) {
+        const batch = targets.slice(i, i + AE.REVIEW_BATCH);
+        setProg({ percent: 5 + (i / targets.length) * 90, label: `${rv.label} 검토 중… (${Math.min(i + batch.length, targets.length)}/${targets.length})` });
+        try {
+          const r = await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "review", system: AE.reviewSystemPrompt(), prompt: AE.promptReview({ level: lv, reqs: batch, parents, version: V }) }) });
+          meta = { provider: r.provider, label: r.label, model: r.model, sameAsGenerator: r.sameAsGenerator };
+          const v = AE.validateReview(AE.parseReviewJson(r.text), batch);
+          kept.push(...v.kept); dropped += v.dropped.length; done.push(...batch.map(b => b.id));
+        } catch (e) {
+          if ([401, 403, 409, 428, 500].includes(e.status)) throw e;   // 설정·권한 문제는 즉시 중단
+          failed += batch.length; lastErr = e;
+        }
+      }
+      if (!done.length) throw lastErr || new Error("모든 검토 호출이 실패했습니다.");
+      setModel(m => AE.applyReviewRun(m, { level: lv, reviewedIds: done, kept, meta: { ...meta, dropped, failed } }));
+      setRvFilter("open");
+      return `검토 ${done.length}건 · 판정 대기 의견 ${kept.length}건 · 규칙으로 걸러낸 의견 ${dropped}건${failed ? ` · 실패 ${failed}건(다시 실행하면 미검토분만 보냅니다)` : ""}`;
+    });
+  }
 
   // ── SYS.3: 시스템 아키텍처 초안 + 할당 ──
   function sysArch() {
@@ -8627,6 +8668,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     </div>
   );
   const errCount = findings.filter(f => f.sev === "error").length;
+  const rvOpen = AE.reviewView(model).count().open;
   const runHere = !!(runAt && runAt.el && runAt.el.isConnected && runAt.tab === tab);
   const runCtx = { anchor: runHere ? runAt.anchor : null, busy, prog, runErr };
 
@@ -8644,7 +8686,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         <div style={{ display: "flex", gap: 3, padding: "8px 18px 0", flexShrink: 0, flexWrap: "wrap" }}>
           {AE_TABS.filter(([id]) => !(id === "SW" && !model.scope.SW) && !(id === "HW" && !model.scope.HW)).map(([id, label]) => (
             <button key={id} onClick={() => { setTab(id); setFocus(null); }} style={{ padding: "6px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: tab === id ? 700 : 400, background: tab === id ? T.accent : "transparent", color: tab === id ? "#fff" : T.muted, border: `1px solid ${tab === id ? T.accent : T.border}`, cursor: "pointer", fontFamily: "inherit" }}>
-              {label}{id === "trace" && errCount ? ` (${errCount})` : ""}</button>
+              {label}{id === "trace" && errCount ? ` (${errCount})` : ""}{id === "review" && rvOpen ? ` (${rvOpen})` : ""}</button>
           ))}
         </div>
         <div style={{ padding: "12px 18px", overflowY: "auto", flex: 1 }}>
@@ -8841,6 +8883,106 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   </div>); })}
                 {!ts.length && <div style={{ fontSize: 11, color: T.muted, padding: 8 }}>검증 수단 없음 — 생성 버튼을 누르세요.</div>}
               </div>
+            </>);
+          })()}
+
+          {tab === "review" && (() => {
+            const v = AE.reviewView(model);
+            const cnt = v.count(rvLevel);
+            const levels = ["SYS", ...(model.scope.SW ? ["SW"] : [])];
+            const lvReqs = model.reqs[rvLevel] || [];
+            const qf = lvReqs.filter(r => AE.qualityFlags(r).length).length;
+            const sevN = k => findings.filter(f => f.sev === k).length;
+            const critLabel = Object.fromEntries(AE.REVIEW_CRITERIA.map(c => [c.code, c.label]));
+            const sevColor = { major: T.red, minor: T.amber, info: T.muted };
+            const jColor = { valid: T.green, invalid: T.muted, opinion: T.accent };
+            const list = v.list.filter(f => f.level === rvLevel).filter(f => rvFilter === "all" ? true : rvFilter === "open" ? !f.judge : f.judge?.state === rvFilter);
+            const lastRun = [...v.runs].reverse().find(r => r.level === rvLevel);
+            const changedN = AE.reviewTargets(model, rvLevel, "changed").length;
+            const judge = (f, state) => {
+              let note = "";
+              if (state === "invalid" || state === "opinion") {
+                note = window.prompt(state === "invalid" ? "무효 사유 — 지적이 부적절한 이유를 적어 주세요" : "의견 — 참고·보류 사유를 적어 주세요", f.judge?.note || "");
+                if (note === null) return;
+              }
+              setModel(m => AE.judgeReview(m, [f.key], state, note));
+            };
+            const chip = (label, val, color) => <span style={{ padding: "4px 10px", borderRadius: 8, background: color + "18", border: `1px solid ${color}44`, color, fontSize: 11 }}>{label} <b>{val}</b></span>;
+            const noKey = rv && !rv.error && rv.kind !== "none" && !rv.hasKey;
+            return (<>
+              <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8, lineHeight: 1.6 }}>
+                <b style={{ color: T.text }}>3단 교차검토</b> — ① 규칙 엔진이 결정론적으로 점검하고, ② 생성 AI와 <b>다른</b> 검토 AI가 요구 품질 의견을 내며(의견의 대상 ID·기준·근거 인용은 규칙으로 다시 검증), ③ QA 담당자가 유효·무효·의견으로 판정합니다. 심사 증적은 ③ 판정 기록입니다.
+              </div>
+              <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
+                {levels.map(lv => <button key={lv} onClick={() => setRvLevel(lv)} style={{ ...small, background: rvLevel === lv ? T.accent : "none", color: rvLevel === lv ? "#fff" : T.accent }}>{AE.LEVELS[lv].reqProc} {AE.LEVELS[lv].label} 요구 ({(model.reqs[lv] || []).length})</button>)}
+              </div>
+
+              <AeSec title="① 규칙 검사 — 결정론적 (같은 입력이면 같은 결과)" right={<button onClick={() => setTab("trace")} style={small}>추적성·충족도에서 보기</button>}>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {chip("V-모델 오류", sevN("error"), sevN("error") ? T.red : T.green)}
+                  {chip("경고", sevN("warn"), sevN("warn") ? T.amber : T.green)}
+                  {chip("정보", sevN("info"), T.muted)}
+                  {chip(`${AE.LEVELS[rvLevel].reqProc} 요구 품질 플래그`, `${qf} / ${lvReqs.length}`, qf ? T.amber : T.green)}
+                </div>
+                <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>추적성 단절·할당 누락·검증 기준 누락·모호어·복합 요구 등은 AI 없이 규칙으로 판정합니다.</div>
+              </AeSec>
+
+              <AeSec title="② 검토 AI 의견 — 의미 품질 (참고 의견)" right={<>
+                <button disabled={busy || !lvReqs.length} onClick={() => aiReview("changed")} style={small} title="아직 검토하지 않았거나 마지막 검토 이후 바뀐 요구만 보냅니다">변경분 검토 ({changedN})</button>
+                <button disabled={busy || !lvReqs.length} onClick={() => aiReview("all")} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>전체 검토 ({lvReqs.length})</button>
+              </>}>
+                {!rv && <div style={{ fontSize: 11, color: T.muted }}>검토 AI 설정을 불러오는 중…</div>}
+                {rv?.error && <div style={{ fontSize: 11, color: T.red }}>검토 AI 설정 조회 실패: {rv.error}</div>}
+                {rv && !rv.error && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11 }}>
+                    <span>검토 AI: <b>{rv.label}</b>{rv.kind !== "none" && <span style={{ color: T.muted }}> · {rv.model || "모델 미설정"}</span>}</span>
+                    {rv.kind !== "none" && !rv.sameAsGenerator && <span style={{ color: T.green, fontSize: 10.5 }}>✓ 생성 AI(Claude)와 다른 모델 — 독립 검토</span>}
+                    {rv.sameAsGenerator && <span style={{ color: T.amber, fontSize: 10.5 }}>⚠ 생성 AI와 같은 계열 — 독립성 낮음 (다른 검토 AI 권장)</span>}
+                    {noKey && <span style={{ color: T.red, fontSize: 10.5 }}>API 키 없음 — 설정 → AI 연동 → 검토 AI에서 등록하세요</span>}
+                  </div>)}
+                <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6, lineHeight: 1.6 }}>
+                  검토 기준 {AE.REVIEW_CRITERIA_VER} ({AE.REVIEW_CRITERIA_BASIS}): {AE.REVIEW_CRITERIA.map(c => c.label).join(" · ")}
+                </div>
+                {lastRun && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 4 }}>
+                  마지막 검토 {String(lastRun.at).slice(0, 16).replace("T", " ")} · {lastRun.label || lastRun.provider} {lastRun.model} · 검토 {lastRun.reviewed}건 · 판정 대기로 등록 {lastRun.kept}건 · 규칙으로 걸러냄 {lastRun.dropped}건{lastRun.failed ? ` · 실패 ${lastRun.failed}건` : ""}
+                </div>}
+              </AeSec>
+
+              <AeSec title={`③ QA 담당자 판정 — 미판정 ${cnt.open} · 유효 ${cnt.valid} · 무효 ${cnt.invalid} · 의견 ${cnt.opinion}${cnt.stale ? ` · 요구 변경됨 ${cnt.stale}` : ""}`}
+                right={<div style={{ display: "flex", gap: 3 }}>{[["open", "미판정"], ["valid", "유효"], ["invalid", "무효"], ["opinion", "의견"], ["all", "전체"]].map(([k, l]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.accent }}>{l}</button>)}</div>}>
+                {!cnt.total && <div style={{ fontSize: 11, color: T.muted }}>아직 검토 AI 의견이 없습니다. ②에서 검토를 실행하세요.</div>}
+                {cnt.total > 0 && !list.length && <div style={{ fontSize: 11, color: T.muted }}>해당하는 항목이 없습니다.</div>}
+                {list.length > 0 && (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                      <thead><tr style={{ color: T.muted, textAlign: "left" }}>
+                        <th style={{ padding: "4px 6px", width: 80 }}>요구</th><th style={{ padding: "4px 6px", width: 92 }}>기준·심각도</th>
+                        <th style={{ padding: "4px 6px" }}>검토 의견</th><th style={{ padding: "4px 6px", width: 200 }}>판정</th>
+                      </tr></thead>
+                      <tbody>{list.map(f => (
+                        <tr key={f.key} style={{ borderTop: `1px solid ${T.border}`, verticalAlign: "top", opacity: f.judge?.state === "invalid" ? 0.6 : 1 }}>
+                          <td style={{ padding: "6px", fontFamily: "monospace" }}>{f.reqId}
+                            {f.stale && <div style={{ color: T.amber, fontSize: 9.5, fontFamily: "inherit" }}>요구 변경됨</div>}
+                            {f.removed && <div style={{ color: T.red, fontSize: 9.5, fontFamily: "inherit" }}>요구 삭제됨</div>}</td>
+                          <td style={{ padding: "6px" }}><div>{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div></td>
+                          <td style={{ padding: "6px", lineHeight: 1.5 }}>
+                            <div style={{ color: T.muted, fontSize: 10 }}>{f.reqTitle}</div>
+                            {f.evidence && <div style={{ fontSize: 10.5 }}>근거: <span style={{ background: T.amber + "22", padding: "0 3px", borderRadius: 3 }}>"{f.evidence}"</span></div>}
+                            <div>{f.issue}</div>
+                            {f.suggestion && <div style={{ color: T.green, fontSize: 10.5 }}>제안: {f.suggestion}</div>}
+                          </td>
+                          <td style={{ padding: "6px" }}>
+                            <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                              {["valid", "invalid", "opinion"].map(st => <button key={st} disabled={busy} onClick={() => judge(f, st)} style={{ ...small, padding: "2px 7px", background: f.judge?.state === st ? jColor[st] : "none", color: f.judge?.state === st ? "#fff" : jColor[st], borderColor: jColor[st] + "88" }}>{AE.REVIEW_JUDGE[st].split(" ")[0]}</button>)}
+                              {f.judge && <button onClick={() => setModel(m => AE.judgeReview(m, [f.key], null))} style={{ ...small, padding: "2px 7px", color: T.muted }} title="판정 취소">↺</button>}
+                            </div>
+                            {f.judge && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 3 }}>{AE.REVIEW_JUDGE[f.judge.state]} · {String(f.judge.at).slice(0, 16).replace("T", " ")}{f.judge.note ? ` — ${f.judge.note}` : ""}</div>}
+                          </td>
+                        </tr>))}
+                      </tbody>
+                    </table>
+                  </div>)}
+              </AeSec>
             </>);
           })()}
 
@@ -10636,7 +10778,82 @@ function AiTab({ flash, settings, onReload }) {
           <Btn onClick={() => save()} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "저장 중…" : "저장"}</Btn>
         </div>
       </SettingsSection>
+      <ReviewAiSettings flash={flash} />
     </div>
+  );
+}
+
+// ── 검토 AI(교차검토) 설정 — /api/review ──
+// OpenAI 호환 어댑터 1개로 Gemini·OpenAI·사내 LLM 서버를 연결하고, 기본값은 Gemini.
+function ReviewAiSettings({ flash }) {
+  const [cfg, setCfg] = useState(null);
+  const [provider, setProvider] = useState("gemini");
+  const [model, setModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [verify, setVerify] = useState(null);
+  const apply = c => { setCfg(c); setProvider(c.provider || "gemini"); setModel(c.model || ""); setBaseUrl(c.baseUrl || ""); };
+  useEffect(() => { apiFetch("/api/review").then(apply).catch(e => setCfg({ error: e.message })); }, []);
+  const providers = cfg?.providers || [{ id: "gemini", label: "Google Gemini" }];
+  const changedProvider = cfg && provider !== cfg.provider;
+
+  async function save({ clearKey = false } = {}) {
+    setBusy(true); setVerify(null);
+    try {
+      const c = await apiFetch("/api/review", { method: "PUT", body: JSON.stringify({ provider, model: model.trim(), baseUrl: baseUrl.trim(), apiKey: clearKey ? null : (key.trim() || undefined) }) });
+      apply(c); setKey("");
+      flash("ok", clearKey ? "저장된 검토 AI 키를 삭제했습니다." : "검토 AI 설정을 저장했습니다.");
+    } catch (e) { flash("error", e.message); }
+    setBusy(false);
+  }
+  async function doVerify() {
+    setBusy(true); setVerify(null);
+    try { setVerify(await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "verify", provider, model: model.trim(), baseUrl: baseUrl.trim(), apiKey: key.trim() || undefined }) })); }
+    catch (e) { setVerify({ ok: false, message: e.message }); }
+    setBusy(false);
+  }
+  const srcLabel = { db: "설정 화면에 저장된 키", "db(ai)": "Claude 키 재사용", env: "Vercel 환경변수", none: "미설정" };
+  const sel = { width: "100%", padding: "9px 12px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, color: T.text, fontSize: 13, fontFamily: "inherit" };
+
+  return (
+    <SettingsSection title="검토 AI (V-모델 3단 교차검토)"
+      desc="ASPICE V-모델 산출물을 생성 AI(Claude)와 다른 모델이 검토해 의견을 냅니다. OpenAI 호환 방식으로 Gemini·OpenAI·사내 LLM 서버를 연결할 수 있으며, 키는 서버에만 저장됩니다. 검토 의견은 참고용이며 최종 판정은 QA 담당자가 합니다.">
+      {cfg?.error && <div style={{ color: T.red, fontSize: 12, marginBottom: 10 }}>설정 조회 실패: {cfg.error}</div>}
+      {cfg && !cfg.error && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", background: T.bg, borderRadius: 10, marginBottom: 16, flexWrap: "wrap", fontSize: 12 }}>
+          <Badge color={cfg.kind === "none" ? T.muted : cfg.hasKey ? T.green : T.red}>{cfg.kind === "none" ? "사용 안 함" : cfg.hasKey ? "연결됨" : "키 없음"}</Badge>
+          <span><b>{cfg.label}</b>{cfg.kind !== "none" && <span style={{ color: T.muted }}> · {cfg.model || "모델 미설정"}</span>}</span>
+          {cfg.kind !== "none" && <span style={{ fontFamily: "monospace", color: T.muted, fontSize: 11 }}>{cfg.keyMasked || "키 없음"} ({srcLabel[cfg.keySource] || cfg.keySource})</span>}
+          {cfg.sameAsGenerator && <span style={{ color: T.amber, fontSize: 11 }}>⚠ 생성 AI와 같은 계열 — 독립성 낮음</span>}
+        </div>)}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, color: T.muted, marginBottom: 6 }}>검토 AI 종류</div>
+          <select value={provider} onChange={e => { setProvider(e.target.value); setVerify(null); }} style={sel}>
+            {providers.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
+        </div>
+        {provider !== "none" && <Input label="모델 ID (비우면 기본값)" value={model} onChange={setModel} placeholder={provider === "gemini" ? "예: gemini-2.5-flash" : "모델 ID"} />}
+        {provider === "custom" && <Input label="서버 주소 (OpenAI 호환 Base URL)" value={baseUrl} onChange={setBaseUrl} placeholder="https://llm.example.co.kr/v1" />}
+        {provider !== "none" && <Input label={changedProvider ? "API 키 (새 종류는 키 필요)" : "새 API 키"} type="password" value={key} onChange={setKey} placeholder="비워두면 기존 키·환경변수 유지" />}
+      </div>
+      {provider === "gemini" && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 8, lineHeight: 1.6 }}>Gemini 키는 Google AI Studio → API 키에서 발급합니다. 결제가 연결된 프로젝트(유료 등급)의 키를 사용해야 입력 데이터가 모델 학습에 쓰이지 않습니다. 환경변수 GEMINI_API_KEY도 사용할 수 있습니다.</div>}
+      {provider === "custom" && <div style={{ fontSize: 10.5, color: T.amber, marginTop: 8, lineHeight: 1.6 }}>사내 LLM 서버는 이 서비스(클라우드)에서 접근 가능한 주소여야 합니다. 방화벽 안의 서버는 구축형 도입 시 연결됩니다.</div>}
+      {verify && (
+        <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: (verify.ok ? T.green : T.red) + "18", border: `1px solid ${(verify.ok ? T.green : T.red)}55`, color: verify.ok ? T.green : T.red, fontSize: 12, lineHeight: 1.6 }}>
+          {verify.ok ? "✓ " : "✕ "}{verify.message}
+          {(verify.models || []).length > 0 && <div style={{ marginTop: 8, color: T.muted, fontSize: 11 }}>사용 가능한 모델 (눌러서 선택):
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>{verify.models.map(m => <button key={m} onClick={() => setModel(m)} style={{ background: m === model ? T.accent : "none", color: m === model ? "#fff" : T.accent, border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>{m}</button>)}</div>
+          </div>}
+        </div>)}
+      <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+        <Btn onClick={() => save()} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "처리 중…" : "저장"}</Btn>
+        {provider !== "none" && <Btn variant="outline" onClick={doVerify} disabled={busy} style={{ fontSize: 12, padding: "7px 16px" }}>연결 검증·모델 목록</Btn>}
+        {cfg?.keySource === "db" && provider === cfg.provider && (
+          <Btn variant="ghost" onClick={() => { if (confirm("저장된 검토 AI 키를 삭제합니다. 계속할까요?")) save({ clearKey: true }); }} disabled={busy} style={{ fontSize: 12, padding: "7px 16px", color: T.red, borderColor: T.red + "55" }}>저장된 키 삭제</Btn>)}
+      </div>
+    </SettingsSection>
   );
 }
 
