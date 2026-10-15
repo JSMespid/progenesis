@@ -89,6 +89,48 @@ export default async function handler(req, res) {
       const body = req.body || {};
       const { action } = body;
 
+      // ── (0) 경로 이동·폴더 이름 변경 ──────────────────────────────
+      //     POST { action:'move', ossp_id, items:[{ id, file_name, category? }] }
+      //     Storage 객체는 그대로 두고 DB의 file_name(폴더 경로 포함)·category만 바꾼다 → 파일 재업로드 불필요.
+      //     전부 검증한 뒤에만 반영(하나라도 문제가 있으면 아무것도 바꾸지 않음).
+      if (action === 'move') {
+        const { ossp_id, items } = body;
+        if (!ossp_id || !Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'ossp_id와 이동할 항목이 필요합니다.' });
+        if (items.length > 500) return res.status(400).json({ error: '한 번에 500개까지만 이동할 수 있습니다.' });
+        const clean = (name) => {
+          const segs = String(name || '').replace(/\\/g, '/').split('/').map(x => x.trim());
+          if (segs.some(x => !x || x === '.' || x === '..')) return null;
+          const out = segs.join('/');
+          return out.length > 300 ? null : out;
+        };
+        const rows = await db(`/ossp_files?ossp_id=eq.${encodeURIComponent(ossp_id)}&select=id,category,file_name&limit=10000`);
+        const all = Array.isArray(rows) ? rows : [];
+        const byId = Object.fromEntries(all.map(r => [String(r.id), r]));
+        const plan = [];
+        for (const it of items) {
+          const cur = byId[String(it.id)];
+          if (!cur) return res.status(400).json({ error: `이 OSSP의 파일이 아닙니다 (id ${it.id}).` });
+          const name = clean(it.file_name);
+          if (!name) return res.status(400).json({ error: `경로가 올바르지 않습니다: ${it.file_name}` });
+          const category = it.category || cur.category;
+          if (!CATEGORIES.includes(category)) return res.status(400).json({ error: `알 수 없는 자산 분류: ${category}` });
+          plan.push({ id: cur.id, file_name: name, category, from: cur.file_name });
+        }
+        // 충돌 검사: 이동 후 같은 분류·같은 경로의 파일이 둘 이상이면 거부
+        const moving = new Set(plan.map(p => String(p.id)));
+        const occupied = new Set(all.filter(r => !moving.has(String(r.id))).map(r => `${r.category}|${r.file_name}`));
+        for (const p of plan) {
+          const k = `${p.category}|${p.file_name}`;
+          if (occupied.has(k)) return res.status(409).json({ error: `같은 위치에 같은 이름의 파일이 이미 있습니다: ${p.file_name}` });
+          occupied.add(k);
+        }
+        for (const p of plan) {
+          await db(`/ossp_files?id=eq.${p.id}`, 'PATCH', { file_name: p.file_name, category: p.category });
+        }
+        audit(sess.login_id, 'ossp-files.move', String(ossp_id), plan.slice(0, 20).map(p => `${p.from} → ${p.file_name}`).join(' | ').slice(0, 900));
+        return res.status(200).json({ success: true, moved: plan.length });
+      }
+
       // ── (1) 직접 업로드용 서명 URL 발급 ─────────────────────────
       //     POST { action:'sign-upload', ossp_id, category, file_name }
       if (action === 'sign-upload') {
