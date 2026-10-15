@@ -110,10 +110,13 @@ async function callOpenAICompat(r, system, prompt, maxTokens) {
   });
   // OpenAI 최신 모델은 max_tokens 대신 max_completion_tokens를 쓴다
   if (r.provider === 'openai') { delete body.max_tokens; body.max_completion_tokens = maxTokens; }
+  // 추론형 모델이 '생각'에 토큰·시간을 다 쓰지 않도록 추론 강도를 낮춘다 (미지원 모델은 아래에서 제거 후 재시도)
+  if (r.provider === 'gemini' || r.provider === 'openai') body.reasoning_effort = 'low';
   let resp = await send(body);
   let text = await resp.text();
   // 일부 모델(추론형 등)은 temperature·max_tokens를 거부 → 해당 매개변수를 바꿔 최대 2회 재시도
-  for (let k = 0; k < 2 && resp.status === 400 && /temperature|max_tokens|max_completion_tokens/i.test(text); k++) {
+  for (let k = 0; k < 3 && resp.status === 400 && /temperature|max_tokens|max_completion_tokens|reasoning/i.test(text); k++) {
+    if (/reasoning/i.test(text)) delete body.reasoning_effort;
     if (/temperature/i.test(text)) delete body.temperature;
     if (/max_completion_tokens/i.test(text) && body.max_completion_tokens) { delete body.max_completion_tokens; body.max_tokens = maxTokens; }
     else if (/max_tokens/i.test(text) && body.max_tokens) { delete body.max_tokens; body.max_completion_tokens = maxTokens; }
@@ -123,7 +126,7 @@ async function callOpenAICompat(r, system, prompt, maxTokens) {
   let data; try { data = JSON.parse(text); } catch { throw new Error('검토 AI 응답을 해석할 수 없습니다.'); }
   const ch = data?.choices?.[0];
   const content = ch?.message?.content || '';
-  if (!content.trim() && ch?.finish_reason === 'length') { const e = new Error('검토 AI가 답변 전에 토큰을 모두 사용했습니다(추론형 모델). 더 가벼운 모델을 선택하세요.'); e.status = 502; throw e; }
+  if (!content.trim() && ch?.finish_reason === 'length') { const e = new Error('검토 AI가 답변 전에 토큰을 모두 사용했습니다(추론형 모델). 더 가벼운 모델을 선택하세요.'); e.status = 502; e.code = 'THINKING_LIMIT'; throw e; }
   return { text: content, model: data?.model || r.model };
 }
 
@@ -198,9 +201,13 @@ export default async function handler(req, res) {
       }
       if (!r.model) return res.status(200).json({ ok: false, message: '모델 ID를 입력하세요.', models });
       try {
-        const out = r.P.kind === 'anthropic' ? await callAnthropic(r, 'Reply with OK.', 'ping', 8) : await callOpenAICompat(r, 'Reply with OK.', 'ping', 8);
+        const out = r.P.kind === 'anthropic' ? await callAnthropic(r, 'Reply with OK.', 'ping', 16) : await callOpenAICompat(r, 'Reply with OK.', 'ping', 512);
         return res.status(200).json({ ok: true, message: `연결 성공 — ${r.P.label} · ${out.model}`, models });
-      } catch (e) { return res.status(200).json({ ok: false, message: e.message, models }); }
+      } catch (e) {
+        // 키·모델은 정상인데 추론형 모델이 짧은 시험 응답에서 한도에 닿은 경우 → 연결 자체는 성공
+        if (e.code === 'THINKING_LIMIT') return res.status(200).json({ ok: true, message: `연결 성공 — ${r.P.label} · ${r.model} (추론형 모델: 실제 검토는 충분한 토큰으로 호출합니다)`, models });
+        return res.status(200).json({ ok: false, message: e.message, models });
+      }
     }
 
     // ── 검토 호출 ──
@@ -215,7 +222,7 @@ export default async function handler(req, res) {
       const system = String(body.system || '').slice(0, 4000);
       const prompt = String(body.prompt || '').slice(0, 24000);
       if (!prompt) return res.status(400).json({ error: '검토 내용이 비어 있습니다.' });
-      const maxTokens = Math.min(Math.max(Number(body.maxTokens) || 2500, 256), 6000);
+      const maxTokens = Math.min(Math.max(Number(body.maxTokens) || 4000, 256), 8000);
       const out = r.P.kind === 'anthropic' ? await callAnthropic(r, system, prompt, maxTokens) : await callOpenAICompat(r, system, prompt, maxTokens);
       return res.status(200).json({ text: out.text, provider: r.provider, label: r.P.label, model: out.model, sameAsGenerator: r.P.kind === 'anthropic' });
     }
