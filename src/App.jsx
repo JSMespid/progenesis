@@ -9982,7 +9982,50 @@ function BuiltinDeliverables({ label }) {
   );
 }
 
-function OSSPAssets({ osspId }) {
+// OSSP 자산 묶음 다운로드 — 서명 URL로 원본 바이트를 받아 "분류/원래 경로" 그대로 ZIP으로 묶는다(재업로드 시 + 폴더로 그대로 복원 가능).
+// 자산목록.csv(분류·경로·크기·등록일)를 함께 넣어 누락 여부를 대조할 수 있게 한다.
+async function downloadOsspZip(fileList, zipName, onProgress) {
+  const list = (fileList || []).filter(f => f && f.file_url);
+  if (!list.length) throw new Error("내려받을 파일이 없습니다.");
+  const out = new Array(list.length), failed = [];
+  let done = 0, next = 0;
+  async function worker() {
+    while (next < list.length) {
+      const i = next++, f = list[i];
+      try {
+        const sr = await fetch(`/api/ossp-files?path=${encodeURIComponent(f.file_url)}`);
+        const sd = await sr.json().catch(() => ({}));
+        if (!sr.ok || !sd.url) throw new Error(sd.error || "서명 URL 발급 실패");
+        const br = await fetch(sd.url);
+        if (!br.ok) throw new Error(`HTTP ${br.status}`);
+        out[i] = { f, bytes: new Uint8Array(await br.arrayBuffer()) };
+      } catch (e) { failed.push(`${f.file_name}: ${e.message}`); }
+      done++; onProgress && onProgress(done, list.length);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(4, list.length) }, worker));
+  const used = new Set(), files = [];
+  const csv = [["분류", "경로", "크기(byte)", "등록일"]];
+  out.forEach(o => {
+    if (!o) return;
+    let path = `${o.f.category}/${String(o.f.file_name).replace(/^\/+/, "")}`;
+    if (used.has(path)) { const dot = path.lastIndexOf("."); let k = 2; while (used.has(`${path.slice(0, dot)} (${k})${path.slice(dot)}`)) k++; path = `${path.slice(0, dot)} (${k})${path.slice(dot)}`; }
+    used.add(path); files.push({ path, content: o.bytes });
+    csv.push([o.f.category, o.f.file_name, o.bytes.length, String(o.f.created_at || "").slice(0, 10)]);
+  });
+  if (!files.length) throw new Error(`모든 파일 다운로드 실패 — ${failed.slice(0, 2).join(" / ")}`);
+  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  files.push({ path: "_자산목록.csv", content: "\uFEFF" + csv.map(r => r.map(q).join(",")).join("\r\n") });
+  const blob = new Blob([zipBytes(files)], { type: "application/zip" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = zipName;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  return { count: files.length - 1, failed };
+}
+
+function OSSPAssets({ osspId, osspLabel }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null);   // 업로드 중인 category
@@ -9992,6 +10035,20 @@ function OSSPAssets({ osspId }) {
   const [openMap, setOpenMap] = useState({});    // 폴더 경로별 펼침 상태
   const [selected, setSelected] = useState({});  // 선택된 파일 id 맵 (다중 삭제·이동용)
   const [moveReq, setMoveReq] = useState(null);  // 이동·이름 변경 대화상자 요청
+  const [zipState, setZipState] = useState(null); // { label, done, total } — 묶음 다운로드 진행
+  const [zipMsg, setZipMsg] = useState(null);
+  async function zipDownload(list, scopeLabel) {
+    if (zipState) return;
+    const san = x => String(x || "").replace(/[\\/:*?"<>|]/g, "_").trim();
+    const d = new Date(), ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+    const name = `${san(osspLabel) || "OSSP"}${scopeLabel ? `_${san(scopeLabel)}` : ""}_자산_${ymd}.zip`;
+    setErr(null); setZipMsg(null); setZipState({ label: scopeLabel || "전체", done: 0, total: list.length });
+    try {
+      const r = await downloadOsspZip(list, name, (done, total) => setZipState(z => z && { ...z, done, total }));
+      setZipMsg(r.failed.length ? `ZIP ${r.count}개 완료 — ${r.failed.length}개 실패: ${r.failed.slice(0, 3).join(" / ")}` : `ZIP 다운로드 완료 — 파일 ${r.count}개 (+ 자산목록.csv)`);
+    } catch (e) { setErr(e.message); }
+    setZipState(null);
+  }
   async function applyMoves(moves) {
     const res = await fetch("/api/ossp-files", { method:"POST", headers:{ "Content-Type":"application/json" },
       body: JSON.stringify({ action:"move", ossp_id: osspId, items: moves.map(m => ({ id: m.id, file_name: m.file_name, category: m.category })) }) });
@@ -10137,10 +10194,15 @@ function OSSPAssets({ osspId }) {
   return (
     <div style={{ marginTop:14, paddingTop:14, borderTop:`1px solid ${T.border}` }}>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-        <div style={{ fontSize:12, fontWeight:700, color:T.muted }}>표준 프로세스 자산 (8종)</div>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:T.muted }}>표준 프로세스 자산 (8종)</div>
+          <Btn variant="outline" disabled={!!zipState || !files.length} onClick={()=>zipDownload(files, "")} title="이 방법론의 모든 자산을 분류·폴더 구조 그대로 ZIP으로 내려받습니다"
+            style={{ fontSize:11, padding:"4px 10px" }}>{zipState ? `ZIP 만드는 중… ${zipState.done}/${zipState.total}` : `⬇ 전체 ZIP (${files.length})`}</Btn>
+        </div>
         {selectedFiles.length > 0 && (
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
             <span style={{ fontSize:11, color:T.accent, fontWeight:600 }}>{selectedFiles.length}개 선택됨</span>
+            <Btn variant="outline" disabled={!!zipState} onClick={()=>zipDownload(selectedFiles, "선택")} style={{ fontSize:11, padding:"4px 10px" }}>선택 ZIP</Btn>
             <Btn variant="ghost" onClick={()=>setSelected({})} style={{ fontSize:11, padding:"4px 10px" }}>선택 해제</Btn>
             <Btn variant="outline" onClick={()=>{ const cats = new Set(selectedFiles.map(f => f.category)); if (cats.size > 1) { setErr("서로 다른 자산 분류의 파일은 한 번에 옮길 수 없습니다. 분류별로 선택하세요."); return; } setMoveReq({ type:"selection", files: selectedFiles }); }} style={{ fontSize:11, padding:"4px 10px" }}>선택 이동</Btn>
             <Btn variant="danger" onClick={()=>removeMany(selectedFiles)} style={{ fontSize:11, padding:"4px 10px" }}>선택 삭제</Btn>
@@ -10148,6 +10210,7 @@ function OSSPAssets({ osspId }) {
         )}
       </div>
       {err && <div style={{ color:T.red, fontSize:11, marginBottom:8 }}>{err}</div>}
+      {zipMsg && <div style={{ color:zipMsg.includes("실패") ? T.amber : T.green, fontSize:11, marginBottom:8 }}>{zipMsg}</div>}
       {moveReq && <AssetMoveDialog req={moveReq} files={files} categories={OSSP_ASSET_CATEGORIES} onClose={()=>setMoveReq(null)} onApply={applyMoves} />}
       {loading ? <Spinner text="자산 불러오는 중…" /> : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10 }}>
@@ -10169,6 +10232,8 @@ function OSSPAssets({ osspId }) {
                   </span>
                 ) : (
                   <span style={{ display:"flex", gap:8 }}>
+                    {(byCat[cat]||[]).length > 0 && <span onClick={()=>zipDownload(byCat[cat], cat)} title={`${cat} 자산을 ZIP으로 내려받기`}
+                      style={{ fontSize:10, color: zipState ? T.muted : T.accent, cursor: zipState ? "default" : "pointer", fontWeight:600 }}>⬇ ZIP</span>}
                     <label style={{ fontSize:10, color:T.accent, cursor:"pointer", fontWeight:600 }}>
                       + 파일
                       <input type="file" multiple style={{ display:"none" }} disabled={!!busy}
@@ -10431,7 +10496,7 @@ function OSSPPage({ nav, customOSSP=[], builtinOSSP=[], onAdd, onDelete }) {
           <>
             {kind === "builtin" && <BuiltinDeliverables label={o.label} />}
             {hasDbId
-              ? <OSSPAssets osspId={o.id} />
+              ? <OSSPAssets osspId={o.id} osspLabel={o.label} />
               : <div style={{ marginTop:12, fontSize:11, color:T.muted }}>※ 파일 업로드 준비 중입니다. 페이지를 새로고침하면 기본 방법론이 서버에 자동 등록됩니다.</div>}
           </>
         )}
