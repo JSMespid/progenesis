@@ -992,7 +992,7 @@ export default function SpiderQaAgent() {
   // PBS(Product Breakdown Structure) 초안 추천 — WBS 생성 자체는 매트릭스 기반 결정적 로직으로 수행
   // pbsNoAi(AI 미사용 모드)가 켜져 있으면 API 호출 없이 프로젝트 유형별 표준 프리셋을 그대로 적용한다.
   function applyPbsPreset() {
-    const preset = PBS_PRESETS[projectForm.type] || PBS_PRESETS["신규개발"];
+    const preset = projectForm.track === "aspice" ? aspicePbsPreset(projectForm) : (PBS_PRESETS[projectForm.type] || PBS_PRESETS["신규개발"]);
     setWbsSetup(s => ({ ...s, pbsText: preset.join("\n") }));
     return preset.length;
   }
@@ -1005,6 +1005,31 @@ export default function SpiderQaAgent() {
       return;
     }
     setGenerating(true); setGenError(null);
+    if (projectForm.track === "aspice") {   // ASPICE 과제: 시스템 요소(HW·SW) 분해 — 개발 범위(SW / HW+SW / HW)를 반드시 반영
+      try {
+        const dev = aspiceDevOf(projectForm);
+        const sys = (projectForm.systemName || projectForm.name || "대상 시스템").trim();
+        const scopeRule = dev === "SW" ? "개발 범위는 SW만이다. L2는 'SW'만 사용한다 (HW는 고객·협력사 개발이므로 포함하지 않는다)."
+          : dev === "HW" ? "개발 범위는 HW만이다. L2는 'HW'만 사용한다."
+          : "개발 범위는 HW+SW다. L2에 'HW'와 'SW'를 모두 반드시 포함한다. HW는 회로 블록(예: MCU, 전원, 센싱·측정, 통신 트랜시버, 구동·출력, 보호·커넥터) 단위로, SW는 소프트웨어 컴포넌트(예: 애플리케이션 기능, 통신 스택, 진단, BSW·드라이버, 부트로더) 단위로 분해한다.";
+        const result = await callClaude(`당신은 Automotive SPICE 4.0 SYS.3(시스템 아키텍처 설계)에 정통한 차량 전장 시스템 엔지니어입니다. 아래 과제의 PBS(제품 분해 구조)를 시스템 요소 단위로 작성하세요.
+과제명: ${projectForm.name}, 시스템명: ${sys}, 고객사: ${projectForm.client}
+규칙:
+1) "${sys} > (HW 또는 SW) > 구성요소" 형식으로 한 줄에 하나씩 작성한다.
+2) ${scopeRule}
+3) 요구사항 분석·설계·구현·테스트·검증·문서 같은 개발 활동이나 단계는 쓰지 않는다 (활동은 산출물 매트릭스에서 WBS로 자동 생성된다). 제품의 물리적·논리적 구성요소만 쓴다.
+4) 8~14줄, 한국어. 입력에 없는 부품 번호·수치는 만들지 않는다.
+JSON만 출력: {"pbs":["string"]}`, 2000);
+        const lines = cleanAspicePbs(result?.pbs, dev, sys);
+        if (lines.length < 4) throw new Error("시스템 요소가 충분하지 않음");
+        setWbsSetup(s => ({ ...s, pbsText: lines.join("\n") }));
+      } catch (e) {
+        applyPbsPreset();
+        setGenError("AI PBS 추천 결과가 시스템 요소 기준에 맞지 않아 ASPICE 표준 프리셋을 적용했습니다. 내용을 편집해 사용하세요. (" + e.message + ")");
+      }
+      setGenerating(false);
+      return;
+    }
     try {
       const result = await callClaude(`당신은 PMBOK 8판에 정통한 프로젝트 관리 전문가입니다. 아래 프로젝트의 PBS(Product Breakdown Structure, 제품 분해 구조)를 작성하세요.
 프로젝트명: ${projectForm.name}, 고객사: ${projectForm.client}, 유형: ${projectForm.type}, OSSP: ${selectedOSSP?.label||"-"}
@@ -2284,6 +2309,36 @@ function deriveDeliverablePurpose(name) {
   const n = String(name || "");
   for (const [re, purpose] of PURPOSE_RULES) if (re.test(n)) return purpose;
   return `${n} 작성을 통한 단계 품질 확보`;
+}
+
+// ── ASPICE 과제 PBS — 시스템 요소(HW·SW) 기준. 개발 범위(SW / HW+SW / HW)에 따라 HW·SW 분기를 결정한다 ──
+const ASPICE_PBS_HW = ["MCU 회로", "전원 회로", "센싱·측정 회로", "통신 트랜시버", "구동·출력 회로", "보호·커넥터 회로"];
+const ASPICE_PBS_SW = ["애플리케이션 기능 SWC", "통신 스택(CAN/LIN)", "진단(UDS)", "BSW·드라이버", "부트로더"];
+function aspicePbsPreset(form) {
+  const dev = aspiceDevOf(form), sys = String(form?.systemName || form?.name || "대상 시스템").trim();
+  return [...(dev !== "HW" ? ASPICE_PBS_SW.map(x => `${sys} > SW > ${x}`) : []), ...(dev !== "SW" ? ASPICE_PBS_HW.map(x => `${sys} > HW > ${x}`) : [])];
+}
+// AI가 낸 PBS를 시스템 요소 기준으로 정리: 활동·단계 노드 제거, 개발 범위 밖 분기 제거, HW 포함 과제에 HW가 없으면 표준 HW 요소 보충
+const PBS_ACTIVITY_RE = /요구사항|분석|설계|구현|테스트|시험|검증|문서|지원|교육|개발$/;
+function cleanAspicePbs(list, dev, sys) {
+  const out = [];
+  (Array.isArray(list) ? list : []).forEach(raw => {
+    const parts = String(raw || "").split(">").map(x => x.trim()).filter(Boolean);
+    if (parts.length < 2) return;
+    if (parts.slice(1).some(p => PBS_ACTIVITY_RE.test(p))) return;           // 활동·단계 노드
+    const lv = /^HW$|하드웨어/i.test(parts[1]) ? "HW" : /^SW$|소프트웨어/i.test(parts[1]) ? "SW" : null;
+    if (!lv) return;                                                        // HW/SW 분기가 아닌 노드
+    if ((lv === "HW" && dev === "SW") || (lv === "SW" && dev === "HW")) return;
+    const line = [sys, lv, ...parts.slice(2)].join(" > ");
+    if (!out.includes(line)) out.push(line);
+  });
+  // 범위 안의 분기(HW·SW)마다 요소가 3개 미만이면 표준 요소로 보충 (AI가 낸 고유 요소는 유지)
+  for (const [lv, std, on] of [["HW", ASPICE_PBS_HW, dev !== "SW"], ["SW", ASPICE_PBS_SW, dev !== "HW"]]) {
+    if (!on) continue;
+    const have = out.filter(l => l.split(" > ")[1] === lv).length;
+    if (have < 3) std.slice(0, Math.max(0, std.length - have)).forEach(x => { const l = `${sys} > ${lv} > ${x}`; if (!out.includes(l)) out.push(l); });
+  }
+  return out;
 }
 
 // ── PBS 프리셋 (AI 실패 시 폴백) — 프로젝트 유형별 기본 제품 분해 구조 ──
