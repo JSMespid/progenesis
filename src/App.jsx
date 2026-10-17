@@ -1249,6 +1249,14 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       savingRef.current = false; setSavingProject(false);
       return;
     }
+    resetWizardState();
+    clearDraft();   // 완료된 프로젝트의 임시저장본 제거
+    savingRef.current = false; setSavingProject(false);
+    nav("dashboard");
+  }
+
+  // 위저드 메모리 상태 초기화 — 완료 저장 후, 작성 중 항목 삭제 시 공통 사용
+  function resetWizardState() {
     setEditingId(null);
     setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",systemName:"",startDate:"",endDate:"",pm:"",
       ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=""; return o; }, {}) });
@@ -1257,20 +1265,47 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     setSelectedSDLC(null); setSdlcRecommendation(null);
     setSdlcFactors({ req_clarity:"보통", req_volatility:"보통", delivery:"단계적", risk:"보통", regulation:"보통", team:"집중" });
     setPdpData(null); setWbsData(null); setWbsSetup({ pbsText: "", selected: {} }); setDeliverablesData(null); setRequirements(null);
-    clearDraft();   // 완료된 프로젝트의 임시저장본 제거
-    savingRef.current = false; setSavingProject(false);
-    nav("dashboard");
+  }
+
+  // 삭제 진행 표시 (작성 중 항목·저장된 프로젝트 공통)
+  const [busyOp, setBusyOp] = useState(null);   // { label, percent, error? }
+  const [, setDraftVer] = useState(0);          // 작성 중 항목 삭제 후 대시보드 즉시 갱신용
+  const finishBusy = (label) => { setBusyOp({ label, percent: 100 }); setTimeout(() => setBusyOp(null), 900); };
+
+  // 작성 중(임시저장) 항목 삭제: 브라우저 임시저장본 + 메모리의 위저드 상태를 함께 비운다.
+  // (이전에는 임시저장본만 지우고 화면을 다시 그리지 않아, 카드가 남고 '새 프로젝트'에 이전 입력값이 보였다)
+  function discardDraft() {
+    setBusyOp({ label: "작성 중인 내용 삭제 중…", percent: 40 });
+    clearDraft();
+    resetWizardState();
+    setBusyOp({ label: "작성 중인 내용 삭제 중…", percent: 80 });
+    setDraftVer(v => v + 1);
+    finishBusy(loadDraft() ? "삭제 확인 실패 — 새로고침 후 다시 시도하세요" : "작성 중인 내용을 삭제했습니다");
   }
 
   async function deleteProject(id) {
-    await fetch(`/api/projects?id=${id}`, { method:'DELETE' });
-    await fetchProjects();
-    nav("dashboard");
+    if (busyOp) return;
+    setBusyOp({ label: "프로젝트 삭제 중…", percent: 25 });
+    try {
+      const res = await fetch(`/api/projects?id=${encodeURIComponent(id)}`, { method:'DELETE' });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.error || `HTTP ${res.status}`);
+      }
+      setBusyOp({ label: "목록 새로고침 중…", percent: 70 });
+      await fetchProjects();
+      if (currentProject && currentProject.id === id) setCurrentProject(null);
+      nav("dashboard");
+      finishBusy("프로젝트를 삭제했습니다");
+    } catch (e) {
+      setBusyOp(null);
+      alert("삭제하지 못했습니다: " + e.message + "\n권한(조회자 계정은 삭제 불가)이나 네트워크 상태를 확인해 주세요.");
+    }
   }
 
   const pages = {
     dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={nav} setCurrentProject={setCurrentProject} canCreate={role !== "viewer"} onDelete={deleteProject}
-      draft={loadDraft()} onContinueDraft={()=>{ restoreDraft(); nav("new_project"); }} onDiscardDraft={()=>{ clearDraft(); setPage("dashboard"); }} />,
+      draft={loadDraft()} onContinueDraft={()=>{ restoreDraft(); nav("new_project"); }} onDiscardDraft={discardDraft} />,
     new_project: <NewProjectWizard step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
       pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError} genProgress={genProgress}
@@ -1391,6 +1426,11 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
 
         <main style={{ flex:1, overflow:"auto", animation:"fadeIn .3s ease" }}>
           {pages[page]||pages.dashboard}
+          {busyOp && (
+            <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)", zIndex:400, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+              <div style={{ width:"100%", maxWidth:420 }}><GenProgressBar progress={busyOp} subText="창을 닫지 마세요" /></div>
+            </div>
+          )}
         </main>
       </div>
     </div>
