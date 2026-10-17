@@ -162,7 +162,8 @@ export const DEVOPS_TAILORING_MATRIX = [
 ];
 
 
-// ── 5) 자동차 SW(ASPICE 4.0) — 등록 자산 "자동차SW 테일러링 가이드 V1.1" 기준 (41건) + HWE.1~4 하드웨어 엔지니어링 산출물 6건 (ASPICE 프로세스 산출물로 한정)
+// ── 5) 자동차 SW(ASPICE 4.0) — 등록 자산 "자동차SW 테일러링 가이드 V1.1" 기준 (41건) + HWE.1~4 하드웨어 엔지니어링 산출물 6건 = 47건 (ASPICE 프로세스 산출물로 한정)
+// 등록 자산 docx(as.g.TG0001 V1.1)는 이 매트릭스에서 생성한다 — 코드가 단일 기준(Single Source)이다.
 // HWE 산출물은 적용 범위에서 HWE를 켠 과제에만 포함된다. 4.0 정식 프로세스이며, 3.1 단독 심사는 PAM 확장(4.0 HWE 준용)으로 표기한다.
 // HW 산출물의 code는 aspiceEngineering.js ASPICE_DOCS의 code와 같아야 한다 (문서번호·V-모델 실문서 생성 연결).
 // 목표 능력수준 매핑: CL3(테일러링 적용, PA 3.2 프로세스 전개)→large / CL2(표준 프로세스 전면 적용)→medium / CL1(프로세스 결과물 중심)→small.
@@ -198,7 +199,7 @@ export const ASPICE_TAILORING_MATRIX = [
   {"code": "SW4103", "name": "SW 유닛 검증 명세서", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.4 · 08-60, 08-58"},
   {"code": "SW4104", "name": "정적분석 결과서", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.4 · 15-52"},
   {"code": "SW4105", "name": "코드 리뷰 기록", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.4 · 13-19, 15-52"},
-  {"code": "SW4106", "name": "SW 유닛 검증 결과서", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.4 · 15-52, 03-50 · 커버리지 기준 A: MC/DC · B: Branch · C: Statement"},
+  {"code": "SW4106", "name": "SW 유닛 검증 결과서", "phase": "SW 상세설계·구현", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SWE.4 · 15-52, 03-50 · 구조 커버리지 목표(Statement·Branch·MC/DC)는 프로젝트 계획서에서 정함"},
   {"code": "HW3101", "name": "HW 요구사항 명세서", "phase": "HW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "HWE.1 · 17-00, 17-54, 15-51 · 3.1: PAM 확장(4.0 HWE.1 준용)"},
   {"code": "HW3102", "name": "HW 아키텍처 설계서", "phase": "HW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "HWE.2 · 04-52, 04-53, 15-51 · 3.1: PAM 확장(4.0 HWE.2 준용)"},
   {"code": "HW5101", "name": "HW 설계 검증 명세서", "phase": "HW 요구·설계", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "HWE.3 · 08-60, 08-58 · 3.1: PAM 확장(4.0 HWE.3 준용)"},
