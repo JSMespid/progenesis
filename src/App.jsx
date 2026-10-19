@@ -7567,9 +7567,9 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   const oi = [["미결 사항(Open Issues) — 입력자료 확보·고객 합의가 필요한 항목"], [], ["ID", "관련 문서·요구", "내용", "필요 조치", "담당", "목표 시점", "상태"],
     ...(fullModel.openIssues || []).map(x => [x.id, x.ref || "", x.item || "", x.action || "", x.owner || "", x.due || "", x.status || "Open"])];
   // 이해관계자 요구(STK) → 시스템 요구 (SYS.1 → SYS.2) — 원문 발췌 기준 추적
-  const stk2 = [["이해관계자 요구(STK) → 시스템 요구 추적"], [`근거: ${AE.bpLabel("STK_TRACE", model.version)} · STK ${fullModel.reqs.STK.length}건 · 시스템 요구 미도출 ${fullModel.reqs.STK.filter(k => !fullModel.reqs.SYS.some(r => (r.parents || []).includes(k.id))).length}건`],
+  const stk2 = [["이해관계자 요구(STK) → 시스템 요구 추적"], [`근거: ${AE.bpLabel("STK_TRACE", model.version)} · STK ${fullModel.reqs.STK.length}건 · 시스템 요구 미도출 ${fullModel.reqs.STK.filter(k => !AE.stkClosed(k) && !fullModel.reqs.SYS.some(r => (r.parents || []).includes(k.id))).length}건 · 해당 없음(사유) ${fullModel.reqs.STK.filter(AE.stkClosed).length}건`],
     ["STK ID", "요구 문장(원문 발췌)", "출처", "주체", "합의 상태", "도출 시스템 요구", "판정"],
-    ...fullModel.reqs.STK.map(k => { const ds = fullModel.reqs.SYS.filter(r => (r.parents || []).includes(k.id)); return [k.id, k.text || "", k.source || "", k.stakeholder || "", k.status || "", ds.map(r => `${r.id} ${r.title || ""}`).join("\n") || "-", ds.length ? (openUp.has(k.id) ? "변경 검토 필요" : "OK") : "미도출"]; })];
+    ...fullModel.reqs.STK.map(k => { const ds = fullModel.reqs.SYS.filter(r => (r.parents || []).includes(k.id)); return [k.id, k.text || "", k.source || "", k.stakeholder || "", k.status || "", ds.map(r => `${r.id} ${r.title || ""}`).join("\n") || "-", ds.length ? (openUp.has(k.id) ? "변경 검토 필요" : "OK") : AE.stkClosed(k) ? `해당 없음 — ${k.naReason}` : k.status === "해당 없음" ? "해당 없음(사유 미기록)" : "미도출"]; })];
   // SW 요구 → 유닛 (SWE.3) — 골격 추적
   const unitRows = [["SW 요구 → 유닛 추적 (SWE.3 골격)"], [`근거: ${AE.bpLabel("SW_UNIT", model.version)} · 유닛 ${fullModel.units.SW.length}개 (헤더 근거 ${fullModel.units.SW.filter(u => u.origin === "header").length})`], ["SW 요구", "요구사항명", "할당 유닛", "유닛 검증(SWE.4)", "판정"],
     ...model.reqs.SW.map(r => { const us = fullModel.units.SW.filter(u => (u.reqs || []).includes(r.id)); return [r.id, r.title || "", us.map(u => `${u.id} ${u.name}`).join(", ") || "-", [...new Set(us.flatMap(u => tOf("SWE4", u.id)))].join(", "), us.length ? "할당" : "미할당"]; })];
@@ -8358,7 +8358,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                 그래서 SPIDer는 원문 발췌(STK)를 따로 두고, 각 시스템 요구에 <b>근거 STK</b>를 연결합니다. STK 문장이 바뀌면 연결된 시스템 요구가 "변경 검토 필요"로 표시되고, 추적 매트릭스에 STK → SYS가 함께 출력됩니다. 합의 상태(검토 중·합의·보류)는 고객과의 합의 증적입니다.
               </WhyBox>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
-                <div style={{ fontSize:12, fontWeight:600 }}>이해관계자 요구 (SYS.1) <span style={{ color:T.accent }}>{stk.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 원문 그대로. 합의 {stk.filter(k => k.status === "합의").length} · 검토 중 {stk.filter(k => k.status !== "합의" && k.status !== "보류").length} · 보류 {stk.filter(k => k.status === "보류").length} · 시스템 요구 미도출 {stk.filter(k => !sysCount[k.id]).length}</span></div>
+                <div style={{ fontSize:12, fontWeight:600 }}>이해관계자 요구 (SYS.1) <span style={{ color:T.accent }}>{stk.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 원문 그대로. 합의 {stk.filter(k => k.status === "합의").length} · 검토 중 {stk.filter(k => !["합의", "보류", "해당 없음"].includes(k.status)).length} · 보류 {stk.filter(k => k.status === "보류").length}{stk.some(k => k.status === "해당 없음") ? ` · 해당 없음 ${stk.filter(k => k.status === "해당 없음").length}` : ""} · 시스템 요구 미도출 {stk.filter(k => !sysCount[k.id] && !AE.stkClosed(k)).length}</span></div>
                 <button onClick={addS} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>+ 행 추가</button>
               </div>
               <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:14 }}>
@@ -8366,15 +8366,20 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                   <span>ID</span><span>요구 문장 (원문 발췌)</span><span>출처</span><span>주체</span><span>유형</span><span>합의</span><span>SYS</span><span></span>
                 </div>
                 {stk.map((k, i) => (!focusIds || !stk.some(x => focusIds.has(x.id)) || focusIds.has(k.id)) && (
-                  <div key={k.id || i} style={{ display:"grid", gridTemplateColumns:"72px 1fr 90px 92px 90px 84px 44px 24px", gap:6, alignItems:"center", background:T.bg, border:`1px solid ${sysCount[k.id] ? T.border : T.amber + "66"}`, borderRadius:8, padding:"5px 8px" }}>
+                  <div key={k.id || i} style={{ display:"grid", gridTemplateColumns:"72px 1fr 90px 92px 90px 84px 44px 24px", gap:6, alignItems:"center", background:T.bg, border:`1px solid ${sysCount[k.id] || AE.stkClosed(k) ? T.border : T.amber + "66"}`, borderRadius:8, padding:"5px 8px", opacity: AE.stkClosed(k) ? 0.8 : 1 }}>
                     <span style={{ fontFamily:"monospace", fontSize:10, color:T.accent }}>{k.id}</span>
                     <input value={k.text} onChange={e=>updS(i,"text",e.target.value)} placeholder="원문 그대로" style={inp} />
                     <input value={k.source || ""} onChange={e=>updS(i,"source",e.target.value)} placeholder="조항" style={inp} />
                     <select value={k.stakeholder || "OEM"} onChange={e=>updS(i,"stakeholder",e.target.value)} style={inp}>{["OEM","법규·표준","내부","기타"].map(x=><option key={x}>{x}</option>)}</select>
                     <select value={k.type || "기능"} onChange={e=>updS(i,"type",e.target.value)} style={inp}>{["기능","비기능","규제","인터페이스"].map(x=><option key={x}>{x}</option>)}</select>
-                    <select value={k.status || "검토 중"} onChange={e=>updS(i,"status",e.target.value)} style={{ ...inp, color: k.status === "합의" ? T.green : k.status === "보류" ? T.amber : T.text }}>{["검토 중","합의","보류"].map(x=><option key={x}>{x}</option>)}</select>
-                    <span title={sysCount[k.id] ? "도출된 시스템 요구 수" : "도출된 시스템 요구 없음"} style={{ fontSize:11, color: sysCount[k.id] ? T.green : T.amber, textAlign:"center" }}>{sysCount[k.id] || 0}건</span>
+                    <select value={k.status || "검토 중"} onChange={e=>updS(i,"status",e.target.value)} title="해당 없음: 시스템 요구로 도출하지 않기로 결정 — 사유 필수" style={{ ...inp, color: k.status === "합의" ? T.green : k.status === "보류" ? T.amber : k.status === "해당 없음" ? T.muted : T.text }}>{["검토 중","합의","보류","해당 없음"].map(x=><option key={x}>{x}</option>)}</select>
+                    <span title={sysCount[k.id] ? "도출된 시스템 요구 수" : AE.stkClosed(k) ? "해당 없음(사유 기록) — 도출 대상 아님" : "도출된 시스템 요구 없음"} style={{ fontSize:11, color: sysCount[k.id] ? T.green : AE.stkClosed(k) ? T.muted : T.amber, textAlign:"center" }}>{sysCount[k.id] ? `${sysCount[k.id]}건` : AE.stkClosed(k) ? "N/A" : "0건"}</span>
                     <button onClick={()=>delS(i)} title="삭제" style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:12 }}>✕</button>
+                    {k.status === "해당 없음" && (
+                      <div style={{ gridColumn:"2 / -1", display:"flex", alignItems:"center", gap:6 }}>
+                        <span style={{ fontSize:10, color: String(k.naReason || "").trim() ? T.muted : T.red, whiteSpace:"nowrap" }}>해당 없음 사유{String(k.naReason || "").trim() ? "" : " (필수)"}</span>
+                        <input value={k.naReason || ""} onChange={e=>updS(i,"naReason",e.target.value)} placeholder="예: VCU 담당 기능 — 인터페이스 합의서 IF-03에 따라 BMS 범위 제외 (고객 합의 2026-10-xx)" style={{ ...inp, borderColor: String(k.naReason || "").trim() ? undefined : T.red + "88" }} />
+                      </div>)}
                   </div>
                 ))}
                 {!stk.length && <div style={{ fontSize:11, color:T.muted, padding:6 }}>AI 도출을 실행하면 원문에서 이해관계자 요구가 먼저 발췌됩니다. 직접 입력하려면 '+ 행 추가'.</div>}

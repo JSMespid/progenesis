@@ -599,6 +599,8 @@ export function syncSysReqs(items, prev) {
 }
 
 // 확정된 이해관계자 요구(requirements.stk.items) → STK 레벨 요구로 동기화 (원문 그대로 — 변경 감지 대상: 제목·내용·유형)
+// 이해관계자 요구 '해당 없음' — 시스템 요구로 도출하지 않기로 결정하고 사유를 남긴 요구 (사유가 있어야 종결로 인정)
+export const stkClosed = k => k?.status === "해당 없음" && !!String(k?.naReason || "").trim();
 export function syncStkReqs(items, prev) {
   const old = Object.fromEntries((prev || []).map(r => [r.id, r]));
   return (items || []).filter(it => it && it.id).map(it => {
@@ -606,7 +608,7 @@ export function syncStkReqs(items, prev) {
     const text = String(it.text || "");
     return { id: it.id, level: "STK", title: String(it.title || text).slice(0, 60), text, type: it.type || "기능",
       source: it.source || "", stakeholder: it.stakeholder || "", status: it.status || "검토 중", verifCriteria: "",
-      note: o.note || "" };
+      naReason: String(it.naReason || ""), note: o.note || "" };
   });
 }
 
@@ -832,13 +834,19 @@ export function checkConsistency(model) {
   // 이해관계자 요구(STK) ↔ 시스템 요구 추적 (SYS.1 → SYS.2)
   if (m.reqs.STK.length) {
     const covStk = new Set(m.reqs.SYS.flatMap(r => r.parents || []));
-    const noDerive = m.reqs.STK.filter(k => covStk.has(k.id) ? false : true).map(k => k.id);
+    const noDerive = m.reqs.STK.filter(k => !covStk.has(k.id) && !stkClosed(k)).map(k => k.id);
     if (noDerive.length) add("warn", "STK_TRACE", `시스템 요구가 도출되지 않은 이해관계자 요구 ${noDerive.length}건 — 분석·합의 후 도출하거나 '해당 없음' 사유 기록`, noDerive);
+    const naNoReason = m.reqs.STK.filter(k => k.status === "해당 없음" && !stkClosed(k)).map(k => k.id);
+    if (naNoReason.length) add("warn", "STK_TRACE", `'해당 없음'으로 정했지만 사유가 없는 이해관계자 요구 ${naNoReason.length}건 — 사유를 기록해야 종결로 인정`, naNoReason);
+    const naDerived = m.reqs.STK.filter(k => k.status === "해당 없음" && covStk.has(k.id)).map(k => k.id);
+    if (naDerived.length) add("warn", "STK_TRACE", `'해당 없음'인데 시스템 요구가 연결된 이해관계자 요구 ${naDerived.length}건 — 처리 구분과 연결 중 하나를 바로잡을 것`, naDerived);
+    const na = m.reqs.STK.filter(stkClosed).length;
+    if (na) add("info", "STK_TRACE", `'해당 없음'(사유 기록)으로 종결한 이해관계자 요구 ${na}건 — 추적 매트릭스에 사유와 함께 출력`, m.reqs.STK.filter(stkClosed).map(k => k.id));
     const stkIds = new Set(m.reqs.STK.map(k => k.id));
     const noStk = m.reqs.SYS.filter(r => r?.reqClass !== "project" && !(r.parents || []).some(p => stkIds.has(p))).map(r => r.id);
     if (noStk.length) add("info", "STK_TRACE", `근거 이해관계자 요구가 지정되지 않은 시스템 요구 ${noStk.length}건`, noStk);
-    const pending = m.reqs.STK.filter(k => k.status !== "합의").length;
-    if (pending) add("info", "STK_TRACE", `합의되지 않은 이해관계자 요구 ${pending}건 (합의 상태: 검토 중·보류)`, m.reqs.STK.filter(k => k.status !== "합의").map(k => k.id));
+    const pend = m.reqs.STK.filter(k => k.status !== "합의" && k.status !== "해당 없음");
+    if (pend.length) add("info", "STK_TRACE", `합의되지 않은 이해관계자 요구 ${pend.length}건 (합의 상태: 검토 중·보류)`, pend.map(k => k.id));
   }
   // SWE.3 유닛 골격 — SW 요구 ↔ 유닛
   if (m.scope.SW && (m.units.SW || []).length) {
@@ -864,7 +872,7 @@ export function coverageMetrics(model) {
   const out = {};
   const ci = new Set(m.comps.SYS.map(c => c.id));
   out.sysAlloc = pct(m.reqs.SYS.filter(r => (m.alloc.SYS[r.id] || []).some(c => ci.has(c))).length, m.reqs.SYS.length);
-  if (m.reqs.STK.length) { const covStk = new Set(m.reqs.SYS.flatMap(r => r.parents || [])); out.stkDerive = pct(m.reqs.STK.filter(k => covStk.has(k.id)).length, m.reqs.STK.length); }
+  if (m.reqs.STK.length) { const covStk = new Set(m.reqs.SYS.flatMap(r => r.parents || [])); const live = m.reqs.STK.filter(k => !stkClosed(k)); out.stkDerive = pct(live.filter(k => covStk.has(k.id)).length, live.length); }
   if (m.scope.SW && (m.units.SW || []).length) { const covU = new Set(m.units.SW.flatMap(u => u.reqs || [])); out.swUnit = pct(m.reqs.SW.filter(r => covU.has(r.id)).length, m.reqs.SW.length); }
   ["SW", "HW"].forEach(lv => {
     if (!m.scope[lv]) return;
@@ -1310,7 +1318,8 @@ export function coverageDetail(model) {
   const push = (o) => out.push({ ...o, covered: o.total - o.missing.length, pct: pct(o.total - o.missing.length, o.total) });
   if (m.reqs.STK.length) {
     const cov = new Set(m.reqs.SYS.flatMap(r => r.parents || []));
-    push({ key: "stkDerive", group: "req", q: "고객(OEM) 요구가 시스템 요구로 분석됐나", sub: "이해관계자 요구 → 시스템 요구 · SYS.1→SYS.2", tab: "req", total: m.reqs.STK.length, missing: m.reqs.STK.filter(k => !cov.has(k.id)).map(k => k.id) });
+    const naN = m.reqs.STK.filter(stkClosed).length;
+    push({ key: "stkDerive", group: "req", q: "고객(OEM) 요구가 시스템 요구로 분석됐나", sub: `이해관계자 요구 → 시스템 요구 · SYS.1→SYS.2${naN ? ` · 해당 없음(사유) ${naN}건 제외` : ""}`, tab: "req", total: m.reqs.STK.length - naN, missing: m.reqs.STK.filter(k => !cov.has(k.id) && !stkClosed(k)).map(k => k.id) });
   }
   const ci = new Set(m.comps.SYS.map(c => c.id));
   const sysP = m.reqs.SYS.filter(r => r?.reqClass !== "project");
