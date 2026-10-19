@@ -72,6 +72,8 @@ const PROJECT_TYPES = {
     { value: "양산유지보수", label: "양산 유지보수",               desc: "SOP 이후 결함 수정·소규모 개선 — 문제해결(SUP.9)·형상관리(SUP.8) 중심" },
   ],
 };
+// ASPICE 매트릭스 기본값에서 SW 구성요소별로 작성하는 산출물 (나머지는 공통)
+const ASPICE_PER_COMPONENT_CODES = ["SW3101", "SW4101", "SW4106"];
 const projectTypesFor = track => PROJECT_TYPES[track === "aspice" ? "aspice" : "si"];
 const fitProjectType = (track, type) => projectTypesFor(track).some(t => t.value === type) ? type : "신규개발";
 const aspiceDevOf = form => ASPICE_DEVS.some(d => d.id === form?.aspiceDev) ? form.aspiceDev : "SW";
@@ -3736,6 +3738,32 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
   });
   const commonCount = Object.values(common).filter(Boolean).length;
 
+  // ── ASPICE 매트릭스 기본값: 모든 산출물 '공통'(과제 전체 1건) — 단, SW 컴포넌트·유닛 단위로 작성하는 산출물은 SW 구성요소별 ──
+  //   SW3101 SW 요구사항 명세서(SWE.1, 모듈별 분할 명세) · SW4101 SW 상세설계서(SWE.3) · SW4106 SW 유닛 검증 결과서(SWE.4)
+  //   '전체' 체크는 HW 블록까지 포함하므로 쓰지 않고 SW 분기(L2 = SW)만 고른다. SW 구성요소가 없으면 이 행들도 공통.
+  //   자동 적용은 매트릭스가 비어 있고 WBS를 아직 만들지 않았을 때 1회만 — 이미 고른 값·저장된 프로젝트는 건드리지 않는다.
+  const isAspiceWbs = form?.track === "aspice" || guide?.id === "aspice";
+  const swLeafIdx = leaves.map((l, i) => (String(l.l2).trim().toUpperCase() === "SW" ? i : -1)).filter(i => i >= 0);
+  function aspiceMatrixDefault() {
+    const sel = {}, com = {};
+    fbs.forEach(d => {
+      if (ASPICE_PER_COMPONENT_CODES.includes(d.code) && swLeafIdx.length) swLeafIdx.forEach(li => { sel[selKey(d, li)] = true; });
+      else com[comKey(d)] = true;
+    });
+    return { selected: sel, common: com };
+  }
+  const matrixEmpty = selectedCount === 0 && commonCount === 0;
+  const fbsSig = fbs.map(d => `${d.phase}|${d.code}`).join(",");
+  useEffect(() => {
+    if (!isAspiceWbs || !matrixEmpty || !leaves.length || !fbs.length) return;
+    if (wbsSetup?.defaultsApplied || wbsData?.tasks?.length) return;
+    setWbsSetup(s => ({ ...s, ...aspiceMatrixDefault(), defaultsApplied: true }));
+  }, [isAspiceWbs, matrixEmpty, leaves.length, fbsSig, !!wbsData?.tasks?.length]);   // eslint-disable-line react-hooks/exhaustive-deps
+  function reapplyMatrixDefault() {
+    if (!matrixEmpty && !window.confirm("매트릭스 선택을 기본값(공통 + SW 구성요소별 3행)으로 바꿉니다. 지금 선택은 사라집니다. 계속할까요?")) return;
+    setWbsSetup(s => ({ ...s, ...aspiceMatrixDefault(), defaultsApplied: true }));
+  }
+
   // ── 공휴일 토글: 설정 저장 + 기존 일정 즉시 재계산 ──
   const toggleHoliday = (ds) => {
     const nh = holidays.includes(ds) ? holidays.filter(x => x !== ds) : [...holidays, ds].sort();
@@ -3934,8 +3962,19 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
       <div style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>② 단계별 산출물 × 시스템 구성요소 매트릭스 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· 선택 {selectedCount}칸{commonCount > 0 ? ` · 공통 ${commonCount}건` : ""}</span></div>
-          <Btn onClick={buildWBS} disabled={selectedCount === 0 && commonCount === 0 && mgmtItems.length === 0} style={{ fontSize: 12, padding: "6px 12px" }}>⚙ WBS 생성</Btn>
+          <div style={{ display: "flex", gap: 6 }}>
+            {isAspiceWbs && leaves.length > 0 && <Btn variant="outline" onClick={reapplyMatrixDefault} style={{ fontSize: 11, padding: "6px 10px" }}>기본값 다시 적용</Btn>}
+            <Btn onClick={buildWBS} disabled={selectedCount === 0 && commonCount === 0 && mgmtItems.length === 0} style={{ fontSize: 12, padding: "6px 12px" }}>⚙ WBS 생성</Btn>
+          </div>
         </div>
+        {isAspiceWbs && leaves.length > 0 && (
+          <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8, lineHeight: 1.6 }}>
+            기본값: 모든 산출물은 <b style={{ color: T.text }}>공통</b>(과제 전체 1건)으로 작성합니다. 단, SW 컴포넌트·유닛 단위로 작성하는
+            <b style={{ color: T.text }}> SW 요구사항 명세서(SWE.1)·SW 상세설계서(SWE.3)·SW 유닛 검증 결과서(SWE.4)</b>는
+            {swLeafIdx.length ? <> SW 구성요소({swLeafIdx.length}개)별로 선택됩니다.</> : <> SW 구성요소가 없어 공통으로 두었습니다.</>}
+            {" "}필요에 따라 칸을 바꾸면 되고, 「기본값 다시 적용」으로 언제든 이 구성으로 되돌릴 수 있습니다.
+          </div>
+        )}
         {buildMsg && (
           <div style={{ fontSize: 11, padding: "8px 12px", borderRadius: 8, marginBottom: 8,
             color: buildMsg.ok ? T.green : T.red, background: (buildMsg.ok ? T.green : T.red) + "11",
