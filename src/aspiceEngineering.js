@@ -1381,7 +1381,9 @@ export const REVIEW_CRITERIA = [
   { code: "FEASIBLE", label: "실현 가능성",   desc: "기술·자원 측면에서 달성 여부가 의심됨" },
 ];
 export const REVIEW_SEV = { major: "중대", minor: "경미", info: "제안" };
-export const REVIEW_JUDGE = { valid: "유효 (수정 필요)", invalid: "무효 (지적 부적절)", opinion: "의견 (참고·보류)" };
+// QA 판정 — 화면 표기는 '지적이 맞는가'가 바로 읽히도록. (내부 값 valid/invalid/opinion은 저장·내보내기 호환을 위해 유지)
+export const REVIEW_JUDGE = { valid: "지적 맞음 → 산출물 수정", invalid: "지적 틀림 → 수정 불필요", opinion: "보류 → 참고만" };
+export const REVIEW_JUDGE_SHORT = { valid: "✓ 맞음 → 고침", invalid: "✕ 틀림", opinion: "△ 보류" };
 export const REVIEW_BATCH = 4;   // 한 번에 보내는 요구 수 — Vercel 약 10초 제한 대응
 
 export function reviewSystemPrompt() {
@@ -1775,9 +1777,9 @@ const EASY = {
 Object.entries(EASY).forEach(([k, m]) => (REVIEW_KINDS[k]?.criteria || []).forEach(c => { const e = m[c.code]; if (e) Object.assign(c, { easy: e[0], bad: e[1], good: e[2] }); }));
 export const REVIEW_SEV_ABOUT = { major: "이대로면 구현하거나 검증할 수 없는 수준", minor: "고치는 것이 좋음", info: "개선 아이디어" };
 export const REVIEW_JUDGE_ABOUT = {
-  valid: "AI 지적이 맞음 → 산출물을 수정합니다. 수정하면 '수정함 — 재검토로 확인' 상태가 됩니다.",
-  invalid: "AI 지적이 틀렸거나 맞지 않음 → 산출물은 그대로 둡니다. 사유를 남겨야 심사 증적이 됩니다.",
-  opinion: "지금 판단하기 어렵거나 참고만 함 → 보류 사유를 남깁니다.",
+  valid: "AI 지적이 맞습니다 → 산출물을 고칩니다. '✎ 대상 수정'으로 고치면 '수정함' 표시가 붙습니다.",
+  invalid: "AI 지적이 틀렸거나 이 과제에 맞지 않습니다 → 산출물은 그대로 둡니다. 왜 틀렸는지 사유를 적어야 심사 증적이 됩니다.",
+  opinion: "지금 판단하기 어렵거나 참고만 합니다 → 보류 사유를 적어 둡니다.",
 };
 
 // 검토 대상 항목 직접 수정 — 화면에서 고칠 수 있는 필드 정의와 현재 값, 적용

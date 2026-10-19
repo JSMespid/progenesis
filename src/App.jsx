@@ -7580,7 +7580,7 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   const critName = (k, c) => (AE.reviewKindOf(k).criteria.find(x => x.code === c) || {}).label || c;
   const rvRows = [["3단 교차검토 — 검토 AI 의견 및 QA 판정 기록"],
     [`검토 기준: ${Object.values(AE.REVIEW_KINDS).map(K => `${K.ver} (${K.basis})`).join(" / ")} · 의견 ${rvw.list.length}건 · 미판정 ${rvw.count().open}건`],
-    ["산출물", "검토 기준", "항목", "검토됨(현재 내용)", "미판정", "유효(수정 필요)", "상태"],
+    ["산출물", "검토 기준", "항목", "검토됨(현재 내용)", "미판정", "지적 맞음(수정 필요)", "상태"],
     ...rvCov.map(c => [`${c.proc} ${c.label}`, AE.REVIEW_KINDS[c.kind].ver, c.total, c.reviewedAny, c.open, c.valid, !c.total ? "항목 없음" : c.reviewedAny < c.total ? "검토 필요" : c.open ? "판정 필요" : "완료"]),
     [`AI 검토 대상 제외: ${AE.REVIEW_EXCLUDED.map(x => `${x.doc ? AE.ASPICE_DOCS[x.doc].title : x.label}(${x.why})`).join(" · ")}`],
     [`실행 이력(최근 5회): ${rvw.runs.slice(-5).map(r => `${String(r.at).slice(0, 16).replace("T", " ")} ${scopeName(r.level)} ${r.label || r.provider} ${r.model} ${r.criteria || ""}`).join(" / ") || "-"}`],
@@ -9509,7 +9509,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             const judge = (f, state) => {
               let note = "";
               if (state === "invalid" || state === "opinion") {
-                note = window.prompt(state === "invalid" ? "무효 사유 — 지적이 부적절한 이유를 적어 주세요" : "의견 — 참고·보류 사유를 적어 주세요", f.judge?.note || "");
+                note = window.prompt(state === "invalid" ? "지적이 틀렸다고 보는 이유를 적어 주세요 (심사 증적으로 남습니다)" : "보류 사유를 적어 주세요 (예: 고객 확인 필요)", f.judge?.note || "");
                 if (note === null) return;
               }
               setModel(m => AE.judgeReview(m, [f.key], state, note));
@@ -9525,7 +9525,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 <b style={{ color: T.text }}>3단 교차검토</b> — 생성한 V-모델 산출물 전부(요구·아키텍처·상세설계·검증 명세)를 대상으로 ① 규칙 엔진이 결정론적으로 점검하고, ② 생성 AI와 <b>다른</b> 검토 AI가 산출물 종류별 기준으로 의견을 내며(의견의 대상 ID·기준·근거 인용은 규칙으로 다시 검증), ③ QA 담당자가 유효·무효·의견으로 판정합니다. 심사 증적은 ③ 판정 기록입니다.
               </div>
 
-              <AeSec title={`검토 범위·현황 — 산출물 ${cov.length}종 · 항목 ${totItems}건 중 현재 내용으로 검토됨 ${totAny}건 · 미판정 ${totOpen} · 유효(수정 필요) ${totValid}`}
+              <AeSec title={`검토 범위·현황 — 산출물 ${cov.length}종 · 항목 ${totItems}건 중 현재 내용으로 검토됨 ${totAny}건 · 미판정 ${totOpen} · 맞음(고칠 것) ${totValid}`}
                 right={rvRunning
                   ? <button onClick={() => { rvStop.current = true; }} title="지금 보내고 있는 묶음이 끝나면 멈춥니다. 그때까지 받은 의견은 반영되고, 남은 항목은 '변경분 검토'로 이어서 할 수 있습니다" style={{ ...small, color: T.red, borderColor: T.red + "88" }}>■ 검토 중지</button>
                   : <button disabled={busy || !rvSel?.ready || !allChangedN} onClick={() => aiReviewMany(scopes.map(x => x.key), "changed")} title="개발 범위의 모든 산출물에서 아직 검토하지 않았거나 바뀐 항목만 차례로 보냅니다 (선택한 검토 AI 기준)" style={{ ...small, background: allChangedN ? T.accent : "none", color: allChangedN ? "#fff" : T.muted, borderColor: allChangedN ? T.accent : T.border }}>전체 산출물 변경분 검토 ({allChangedN})</button>}>
@@ -9544,7 +9544,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       <th style={{ padding: "4px 6px", width: 26 }}><input type="checkbox" disabled={busy} checked={cov.filter(c => c.total).length > 0 && cov.filter(c => c.total).every(c => pick.includes(c.key))} onChange={e => setRvPick(e.target.checked ? cov.filter(c => c.total).map(c => c.key) : [])} title="모두 선택" /></th>
                       <th style={{ padding: "4px 6px", width: 46 }}>구분</th><th style={{ padding: "4px 6px" }}>산출물</th><th style={{ padding: "4px 6px", width: 70 }}>검토 기준</th>
                       <th style={{ padding: "4px 6px", width: 54, textAlign: "right" }}>항목</th><th style={{ padding: "4px 6px", width: 150 }}>검토됨 (현재 내용 기준)</th>
-                      <th style={{ padding: "4px 6px", width: 54, textAlign: "right" }}>미판정</th><th style={{ padding: "4px 6px", width: 54, textAlign: "right" }}>유효</th><th style={{ padding: "4px 6px", width: 70 }}>상태</th>
+                      <th style={{ padding: "4px 6px", width: 54, textAlign: "right" }}>미판정</th><th style={{ padding: "4px 6px", width: 70, textAlign: "right" }} title="AI 지적이 맞다고 판정해 산출물을 고쳐야 하는 의견 수">맞음(고칠 것)</th><th style={{ padding: "4px 6px", width: 70 }}>상태</th>
                     </tr></thead>
                     <tbody>{cov.map(c => {
                       const pct = c.total ? Math.round(c.reviewedAny / c.total * 100) : 0;
@@ -9685,7 +9685,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     </div>
                     <div style={{ marginTop: 8, color: T.muted }}>
                       심각도 — {["major", "minor", "info"].map(k => `${AE.REVIEW_SEV[k]}: ${AE.REVIEW_SEV_ABOUT[k]}`).join(" · ")}<br />
-                      판정 — {["valid", "invalid", "opinion"].map(k => `${AE.REVIEW_JUDGE[k].split(" ")[0]}: ${AE.REVIEW_JUDGE_ABOUT[k]}`).join(" / ")}
+                      판정 — {["valid", "invalid", "opinion"].map(k => `${AE.REVIEW_JUDGE_SHORT[k]}: ${AE.REVIEW_JUDGE_ABOUT[k]}`).join(" / ")}
                       {S.kind === "unit" && <><br />상세설계가 TBD(코드 확정 후 작성)인 유닛은 그 미작성 자체를 지적하지 않습니다.</>}
                       {S.kind === "test" && <><br />TBD로 명시된 부분은 지적하지 않습니다.</>}
                     </div>
@@ -9696,10 +9696,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </AeSec>
 
               <div id="rv-judge" />
-              <AeSec title={`③ QA 담당자 판정 — 미판정 ${cnt.open} · 유효 ${cnt.valid} · 무효 ${cnt.invalid} · 의견 ${cnt.opinion}${cnt.edited ? ` · ✎ 수정함 ${cnt.edited}` : ""}${cnt.stale ? ` · 내용 변경됨 ${cnt.stale}` : ""}`}
-                right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정"], ["valid", "유효"], ["invalid", "무효"], ["opinion", "의견"], ["edited", "✎ 수정함"], ["validTodo", "유효·미수정"], ["all", "전체"]].map(([k, l]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.accent }}>{l}</button>)}</div>}>
+              <AeSec title={`③ QA 담당자 판정 — 미판정 ${cnt.open} · 맞음 ${cnt.valid} · 틀림 ${cnt.invalid} · 보류 ${cnt.opinion}${cnt.edited ? ` · ✎ 수정함 ${cnt.edited}` : ""}${cnt.stale ? ` · 내용 변경됨 ${cnt.stale}` : ""}`}
+                right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정"], ["valid", "✓ 맞음"], ["invalid", "✕ 틀림"], ["opinion", "△ 보류"], ["edited", "✎ 수정함"], ["validTodo", "맞음인데 아직 안 고침"], ["all", "전체"]].map(([k, l]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.accent }}>{l}</button>)}</div>}>
                 <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 6, lineHeight: 1.6 }}>
-                  <b style={{ color: T.green }}>유효</b> = AI 지적이 맞음 → 산출물 수정 · <b>무효</b> = 지적이 틀림 → 그대로 두고 사유 기록 · <b style={{ color: T.accent }}>의견</b> = 보류·참고. 판정과 관계없이 <b>✎ 대상 수정</b>으로 산출물을 바로 고칠 수 있습니다.
+                  각 의견마다 <b>"AI의 이 지적이 맞는가?"</b>를 판정합니다. <b style={{ color: T.green }}>✓ 맞음</b> = 지적이 맞다 → 산출물을 고친다(✎ 대상 수정) · <b>✕ 틀림</b> = 지적이 틀리거나 이 과제에 맞지 않다 → 그대로 두고 사유를 적는다 · <b style={{ color: T.accent }}>△ 보류</b> = 지금 판단하기 어렵다 → 참고로 남긴다. ⑦ 변경 영향 검토의 '영향 없음·하위 수정 필요'와는 다른 판정입니다.
                 </div>
                 {!cnt.total && <div style={{ fontSize: 11, color: T.muted }}>아직 검토 AI 의견이 없습니다. ②에서 검토를 실행하세요.</div>}
                 {cnt.total > 0 && !list.length && <div style={{ fontSize: 11, color: T.muted }}>해당하는 항목이 없습니다.</div>}
@@ -9738,7 +9738,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                             <div style={{ fontSize: 10, marginBottom: 3, color: f.judge ? jColor[f.judge.state] : T.amber }}>{f.judge ? `판정: ${AE.REVIEW_JUDGE[f.judge.state]}` : "○ 미판정 — 아래에서 선택"}</div>
                             <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                               {/* 선택 전에는 세 버튼 모두 같은 회색 — 색이 있으면 이미 선택된 것으로 오인됨. 선택된 판정만 색을 채운다 */}
-                              {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...small, padding: "2px 7px", background: on ? jColor[st] : "none", color: on ? "#fff" : T.muted, borderColor: on ? jColor[st] : T.border, fontWeight: on ? 700 : 400 }}>{on ? "✓ " : ""}{AE.REVIEW_JUDGE[st].split(" ")[0]}</button>; })}
+                              {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...small, padding: "2px 7px", background: on ? jColor[st] : "none", color: on ? "#fff" : T.muted, borderColor: on ? jColor[st] : T.border, fontWeight: on ? 700 : 400 }}>{AE.REVIEW_JUDGE_SHORT[st]}</button>; })}
                               {f.judge && <button onClick={() => setModel(m => AE.judgeReview(m, [f.key], null))} style={{ ...small, padding: "2px 7px", color: T.muted }} title="판정 취소">↺</button>}
                             </div>
                             {f.judge && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 3 }}>{String(f.judge.at).slice(0, 16).replace("T", " ")}{f.judge.note ? ` — ${f.judge.note}` : ""}</div>}
