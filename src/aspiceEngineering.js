@@ -900,7 +900,13 @@ export function coverageMetrics(model) {
 // ═══════════════════════════════════════════════════════════════════════════
 export function modelTextFor(model, group) {
   const m = normalizeModel(model);
-  const reqTxt = lv => m.reqs[lv].map(r => `${r.title} ${r.text} ${r.verifCriteria} ${r.type} ${r.source} 우선순위 상태 ${r.parents ? "상위 추적" : ""}`).join("\n");
+  // 요구 목록 텍스트 + 구조 토큰: 검증 기준·검증 방법이 요구의 80% 이상에 있으면 '적격성(검증) 요구·검증 기준' 특성 충족,
+  // 요구 ID·우선순위·상태·출처는 항상 속성으로 기록되므로 토큰 포함, 설계 제약 성격 요구가 있으면 '제약' 토큰
+  const reqTxt = lv => { const rs = m.reqs[lv]; if (!rs.length) return "";
+    const vc = rs.filter(r => nz(r.verifCriteria)).length / rs.length, vm = rs.filter(r => r.verifMethod).length / rs.length;
+    const cons = rs.some(r => /제약|constraint/i.test(`${r.type} ${r.title}`) || qualityFlags(r).some(f => f.code === "design"));
+    return rs.map(r => `${r.title} ${r.text} ${r.verifCriteria} ${r.type} ${r.source} ${r.verifMethod || ""} ${r.parents?.length ? "상위 추적 근거" : ""}`).join("\n")
+      + "\n요구사항 ID 우선순위 상태 release" + (vc >= 0.8 ? " 검증 기준 검증 방법 합격 기준 verification" : "") + (cons ? " 제약 constraint" : ""); };
   const compTxt = lv => m.comps[lv].map(c => `${c.name} ${c.kind} ${c.desc} ${c.behavior || ""} 컴포넌트 element`).join("\n")
     + "\n" + m.interfaces[lv].map(i => `인터페이스 ${i.kind} ${i.signals || ""} ${i.desc || ""}`).join("\n")
     + (Object.keys(m.alloc[lv]).length ? "\n할당 allocation" : "");
@@ -927,11 +933,14 @@ export function charStatusList(model, group) {
     const inputs = INPUT_CHECKLIST.filter(i => i.chars.includes(c.id));
     const haveInput = inputs.some(i => m.inputs[i.id] === "have");
     const allNa = inputs.length > 0 && inputs.every(i => m.inputs[i.id] === "na");
-    let state = byModel ? "ok" : haveInput ? "input" : "gap";
-    if (c.origin !== "ASPICE" && !haveInput && !byModel) state = "na";
-    if (allNa && !byModel) state = "na";
-    if (ov && ov.state) state = ov.state;
-    return { ...c, source: charSource(c, m.version), state, byModel, byTpl, note: (ov && ov.note) || "", inputs: inputs.map(i => i.id) };
+    // 판정 순서: 모델 내용에 있음 → 충족 / 등록 템플릿에 해당 항목이 있음 → 충족(문서에서 작성되는 항목) / 입력자료 확보 → 대기 / 그 밖에 → 누락
+    const byTplOnly = !byModel && byTpl === true;
+    let state = byModel || byTplOnly ? "ok" : haveInput ? "input" : "gap";
+    if (c.origin !== "ASPICE" && !haveInput && !byModel && !byTplOnly) state = "na";
+    if (allNa && !byModel && !byTplOnly) state = "na";
+    const manual = !!(ov && ov.state);
+    if (manual) state = ov.state;
+    return { ...c, source: charSource(c, m.version), state, byModel, byTpl, byTplOnly, manual, note: (ov && ov.note) || "", inputs: inputs.map(i => i.id) };
   });
 }
 

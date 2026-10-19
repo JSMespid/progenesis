@@ -6934,7 +6934,7 @@ function aspiceCharAppendix(model, group, secNo) {
   const list = AE.charStatusList(model, group);
   if (!list.length) return "";
   const rows = [["No", "WP 특성", "출처(버전별)", "구분", "판정", "비고"]];
-  list.forEach((c, i) => rows.push([String(i + 1), c.label, c.source, c.origin === "ASPICE" ? "ASPICE" : `${c.origin}(선택)`, charStateLabel[c.state] || c.state, c.note || (c.state === "gap" ? "입력자료 확보 후 작성 (TBD)" : "")]));
+  list.forEach((c, i) => rows.push([String(i + 1), c.label, c.source, c.origin === "ASPICE" ? "ASPICE" : `${c.origin}(선택)`, charStateLabel[c.state] || c.state, [c.manual ? `수동 판정${c.note ? `: ${c.note}` : " (사유 미기록)"}` : c.byTplOnly ? "템플릿 절에서 작성" : c.byModel ? "모델 내용으로 확인" : "", !c.manual && c.state === "gap" ? "입력자료 확보 후 작성 (TBD)" : ""].filter(Boolean).join(" · ")]));
   const s = list.reduce((o, c) => { o[c.state] = (o[c.state] || 0) + 1; return o; }, {});
   return docxP(`${secNo}. 부록 — ASPICE WP 특성 충족 점검표`, { bold: true, size: 26, spacingAfter: 120 }) +
     docxP(`충족 ${s.ok || 0} · 작성 대기 ${s.input || 0} · 누락(TBD) ${s.gap || 0} · 해당 없음 ${s.na || 0} — 판정은 모델 내용·입력자료 체크리스트·수동 판정 순으로 결정됨`, { size: 18, spacingAfter: 100 }) +
@@ -9898,6 +9898,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               {!findings.length && <div style={{ fontSize: 11, color: T.green }}>✓ 발견된 문제 없음</div>}
             </AeSec>
             <AeSec title="ASPICE WP 특성 충족도 — 모델 내용 · 입력자료 · 템플릿 점검 · 수동 판정 (각 문서 부록에 점검표로 수록)">
+              <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8, lineHeight: 1.6 }}>
+                ASPICE 정보항목(WP)이 요구하는 특성을 문서마다 점검합니다. <b style={{ color: T.green }}>충족</b> = V-모델 내용에 있음, 또는 등록 템플릿에 그 절이 있어 문서에서 작성됨(템플릿 항목) · <b style={{ color: T.accent }}>대기</b> = 입력자료는 있으나 아직 모델에 반영 안 됨 · <b style={{ color: T.red }}>누락</b> = 내용 없음(문서 부록에 TBD로 기록) · <b>N/A</b> = 이 과제에 해당 없음.
+                자동 판정은 요구·설계 문장의 키워드로 하므로, 실제로는 있는데 누락으로 나오거나 이 과제에 없는 특성(예: HMI가 없는 제어기의 사용자 인터페이스)은 오른쪽에서 <b>수동 판정</b>하고 사유를 적으세요. 수동 판정과 사유는 문서 부록 점검표에 그대로 실립니다.
+              </div>
               {["SYS_RS", "SYS_AD", ...(model.scope.SW ? ["SW_RS", "SW_AD"] : []), ...(model.scope.HW ? ["HW_RS", "HW_AD"] : []), "VERIF"].map(g => {
                 const list = AE.charStatusList(model, g);
                 const s = list.reduce((o, c) => { o[c.state] = (o[c.state] || 0) + 1; return o; }, {});
@@ -9910,10 +9914,15 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     {open["c" + g] && list.map(c => (
                       <div key={c.id} style={{ display: "grid", gridTemplateColumns: "1fr 170px 120px", gap: 6, alignItems: "center", padding: "3px 6px", fontSize: 10.5 }}>
                         <span>{c.label}{c.origin !== "ASPICE" && <span style={{ color: T.muted }}> ({c.origin})</span>}<span style={{ color: T.muted, fontSize: 9.5 }}> · {c.source}{c.byTpl === true ? " · 템플릿 ✓" : c.byTpl === false ? " · 템플릿 ✕" : ""}</span></span>
-                        <span style={{ color: { ok: T.green, input: T.accent, gap: T.red, na: T.muted }[c.state] }}>{charStateLabel[c.state]}</span>
-                        <select value={(model.charOverride[c.id] || {}).state || ""} onChange={e => set(n => { if (e.target.value) n.charOverride[c.id] = { state: e.target.value }; else delete n.charOverride[c.id]; })} style={inp}>
+                        <span style={{ color: { ok: T.green, input: T.accent, gap: T.red, na: T.muted }[c.state] }}>{charStateLabel[c.state]}{c.manual ? " (수동)" : c.byTplOnly ? " (템플릿 항목)" : ""}</span>
+                        <select value={(model.charOverride[c.id] || {}).state || ""} onChange={e => set(n => { if (e.target.value) n.charOverride[c.id] = { ...(n.charOverride[c.id] || {}), state: e.target.value }; else delete n.charOverride[c.id]; })} style={inp}>
                           <option value="">자동 판정</option><option value="ok">충족(수동)</option><option value="gap">누락(수동)</option><option value="na">해당 없음</option>
                         </select>
+                        {c.manual && (
+                          <div style={{ gridColumn: "1 / -1", display: "flex", gap: 6, alignItems: "center", paddingLeft: 12 }}>
+                            <span style={{ fontSize: 10, color: c.note ? T.muted : T.red, whiteSpace: "nowrap" }}>판정 사유{c.note ? "" : " (필수 — 심사 증적)"}</span>
+                            <input value={c.note} onChange={e => { const v = e.target.value; set(n => { n.charOverride[c.id] = { ...(n.charOverride[c.id] || {}), note: v }; }); }} placeholder={c.state === "na" ? "예: 본 제어기는 HMI가 없어 사용자 인터페이스 요구 없음 (OEM 사양서 §1.2)" : c.state === "ok" ? "예: RN0003·RN0004가 운용 모드 요구를 기술함" : "예: 고객 입력자료 미제공 — 미결 사항 OI-03"} style={{ ...inp, borderColor: c.note ? undefined : T.red + "88" }} />
+                          </div>)}
                       </div>))}
                   </div>);
               })}
