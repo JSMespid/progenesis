@@ -1236,6 +1236,26 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     } catch (e) { console.error(e); return false; }
   }
 
+  // V-모델(요구사항·검토 결과·판정)이 바뀌면 임시저장본에 자동 저장 — 새로고침·탭 닫힘으로 AI 검토 결과를 잃지 않도록.
+  // (서버 DB 저장은 기존대로 위저드 마지막 단계의 '완료'에서 한다)
+  const draftTimer = useRef(null);
+  const draftWarned = useRef(false);
+  const prevReqRef = useRef(null);
+  useEffect(() => {
+    const prev = prevReqRef.current; prevReqRef.current = requirements;
+    // 불러오기(프로젝트 수정 시작·임시저장본 복원)로 처음 채워진 경우는 저장하지 않고, 위저드 안에서 바뀐 경우만 저장
+    if (!requirements?.aspice || !prev) return;
+    clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      const ok = saveDraft();
+      if (!ok && !draftWarned.current) {
+        draftWarned.current = true;
+        alert("브라우저 임시저장 공간이 부족해 V-모델 작업 내용을 자동 저장하지 못했습니다.\n작업을 잃지 않으려면 위저드 마지막 단계에서 '완료'로 서버에 저장하세요.");
+      }
+    }, 800);
+    return () => clearTimeout(draftTimer.current);
+  }, [requirements]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   function loadDraft() {
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
@@ -1348,6 +1368,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
 
   // 위저드 메모리 상태 초기화 — 완료 저장 후, 작성 중 항목 삭제 시 공통 사용
   function resetWizardState() {
+    clearTimeout(draftTimer.current);
     setEditingId(null);
     setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",systemName:"",startDate:"",endDate:"",pm:"",
       ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=""; return o; }, {}) });
@@ -8572,6 +8593,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [rvPick, setRvPick] = useState([]);          // 선택 검토할 산출물(검토 범위 key)
   const [rvRunning, setRvRunning] = useState(false);  // 검토 AI 호출 진행 중 (중지 버튼 표시)
   const rvStop = useRef(false);
+  const rvApplied = useRef(false);                     // 이번 실행에서 검토 결과가 모델에 반영됨 → 끝나면 자동 저장
   const [rvGuide, setRvGuide] = useState(false);
   const [rvRule, setRvRule] = useState(null);          // ① 규칙 검사 상세 펼침: error | warn | info | qf(요구 품질 플래그) | here(이 산출물 관련)       // 검토 기준 안내 펼침
   const [rvEdit, setRvEdit] = useState(null);          // ③에서 검토 대상 직접 수정 { fkey, key, id, vals }
@@ -8627,6 +8649,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     }
     res.done = done.length; res.kept = kept.length;
     // 받은 의견은 중간에 멈췄더라도 반영 (검토한 항목만 '검토됨'으로 기록)
+    if (done.length) rvApplied.current = true;
     if (done.length) setModel(m => AE.applyReviewRun(m, { level: lv, reviewedIds: done, kept, meta: { ...meta, dropped: res.dropped, failed: res.failed } }));
     return res;
   }
@@ -8643,13 +8666,13 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     return run(`검토 AI 의견 수집 (${S?.proc} ${S?.label})`, async () => {
       needReviewer();
       if (!AE.reviewTargets(model, lv, mode, rvSel.id).length) return "다시 검토할 항목이 없습니다 — 마지막 검토 이후 바뀐 항목이 없습니다.";
-      rvStop.current = false; setRvRunning(true);
+      rvStop.current = false; rvApplied.current = false; setRvRunning(true);
       try {
         const r = await reviewScopeRun(lv, mode, (f, label) => setProg({ percent: 5 + f * 90, label: `${rvSel.label} 검토 중… ${label}` }));
         if (!r.done) { if (rvStop.current) return "검토를 중지했습니다 — 반영된 의견 없음"; throw r.fatal || r.lastErr || new Error("모든 검토 호출이 실패했습니다."); }
         setRvFilter("open");
         return (rvStop.current ? "중지함 — " : "") + reviewSummary(r);
-      } finally { setRvRunning(false); }
+      } finally { setRvRunning(false); if (rvApplied.current) setAutoSaveTick(t => t + 1); }
     });
   }
   // 여러 산출물 차례로 검토 — keys: 검토 범위 key 목록(선택 또는 전체), mode: "changed"(변경분) | "all"(전체)
@@ -8660,7 +8683,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       const plan = AE.reviewScopesFor(model).filter(S => keys.includes(S.key)).map(S => ({ S, n: AE.reviewTargets(model, S.key, mode, rvSel.id).length })).filter(x => x.n > 0);
       const total = plan.reduce((a, x) => a + x.n, 0);
       if (!total) return `다시 검토할 항목이 없습니다 — ${rvSel.label} 기준으로 ${title}이 현재 내용으로 검토되어 있습니다.`;
-      rvStop.current = false; setRvRunning(true);
+      rvStop.current = false; rvApplied.current = false; setRvRunning(true);
       try {
         let base = 0; const results = [];
         for (const { S, n } of plan) {
@@ -8674,7 +8697,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         if (!sum("done")) { if (rvStop.current) return "검토를 중지했습니다 — 반영된 의견 없음"; throw fatal || results.find(r => r.lastErr)?.lastErr || new Error("모든 검토 호출이 실패했습니다."); }
         setRvFilter("open");
         return `${rvStop.current ? "중지함 — " : ""}산출물 ${results.length}종 · 검토 ${sum("done")}건 · 판정 대기 의견 ${sum("kept")}건 · 걸러낸 의견 ${sum("dropped")}건${sum("failed") ? ` · 실패 ${sum("failed")}건(다시 누르면 실패·미검토분만 보냅니다)` : ""}${fatal ? ` · 중단: ${fatal.message}` : ""}${rvStop.current ? " · 남은 항목은 '변경분 검토'로 이어서 할 수 있습니다" : ""}`;
-      } finally { setRvRunning(false); }
+      } finally { setRvRunning(false); if (rvApplied.current) setAutoSaveTick(t => t + 1); }
     });
   }
 
@@ -8929,7 +8952,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     } catch (x) { setErr("OSSP 템플릿 점검 실패: " + x.message); }
   }
 
-  function save() {
+  function save(quiet) {
     // 저장 시: 이번 세션에 새로 생긴 연결만 기준선 등록 (미해결 '변경 검토 필요' 연결은 그대로 유지), 사라진 연결 기록 정리
     const out = { ...AE.baselineLinks({ ...model, reqs: { ...model.reqs, STK: AE.syncStkReqs(requirements?.stk?.items || [], model.reqs.STK), SYS: AE.syncSysReqs(items, model.reqs.SYS) } }), updatedAt: new Date().toISOString() };
     setRequirements({ ...(requirements || {}), items, aspice: out, idRegistry: nextIdRegistry(requirements, items), updatedAt: requirements?.updatedAt || new Date().toISOString(),
@@ -8938,12 +8961,25 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     setModel(out);
     savedSig.current = aeSig(out, items);
     setErr(null);
-    setNote(`저장했습니다 (${new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}) — 창은 그대로 열려 있으니 계속 작업하세요. 닫을 때는 '닫기' 또는 ✕를 누르세요.`);
+    const hm = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+    setNote(quiet === "review"
+      ? `검토 AI 결과를 자동 저장했습니다 (${hm}) — 브라우저 임시저장본에도 보관됩니다. 서버 저장은 위저드 마지막 단계의 '완료'에서 합니다.`
+      : `저장했습니다 (${hm}) — 프로젝트에 반영하고 브라우저 임시저장본에도 보관했습니다. 서버(DB) 저장은 위저드 마지막 단계의 '완료'에서 합니다.`);
   }
+  // 검토 AI 결과는 호출 비용·시간이 크므로 실행이 끝나면 자동 저장한다 (모델 반영이 끝난 다음 렌더에서 실행)
+  const [autoSaveTick, setAutoSaveTick] = useState(0);
+  useEffect(() => { if (autoSaveTick) save("review"); }, [autoSaveTick]);   // eslint-disable-line react-hooks/exhaustive-deps
   // 저장되지 않은 변경 감지 — 마지막 저장(또는 창을 연 시점) 상태와 비교
   const savedSig = useRef(null);
   if (savedSig.current === null) savedSig.current = aeSig(model, items);
   const dirty = React.useMemo(() => aeSig(model, items) !== savedSig.current, [model, items]);
+  // 저장 안 된 변경이 있으면 새로고침·탭 닫기 전에 브라우저가 확인을 묻는다
+  useEffect(() => {
+    if (!dirty) return;
+    const h = e => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [dirty]);
   // 닫기(✕·닫기 버튼·바깥 클릭) — 저장 안 된 변경이 있으면 확인
   function requestClose() {
     if (dirty && !window.confirm("저장하지 않은 변경 내용이 있습니다.\n저장하지 않고 닫을까요?\n\n(취소를 누르면 창으로 돌아갑니다)")) return;
@@ -9745,7 +9781,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="이해관계자 요구 목록·시스템 요구사항 명세서·아키텍처·하위 요구·상세설계·검증 명세·추적 매트릭스를 한 번에 내려받습니다 (저장 전 편집 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 산출물 ZIP</Btn>
             <span style={{ alignSelf: "center", fontSize: 10.5, color: dirty ? T.amber : T.green, whiteSpace: "nowrap" }}>{dirty ? "● 저장 안 된 변경 있음" : "✓ 저장됨"}</span>
             <Btn variant="outline" onClick={requestClose} style={{ fontSize: 12, padding: "7px 14px" }}>닫기</Btn>
-            <Btn onClick={save} disabled={busy} title="작업 내용을 프로젝트에 반영합니다. 창은 닫히지 않습니다." style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
+            <Btn onClick={() => save()} disabled={busy} title="작업 내용을 프로젝트에 반영하고 브라우저 임시저장본에도 보관합니다. 창은 닫히지 않습니다." style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
           </div>
         </div>
       </div>
