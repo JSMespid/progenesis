@@ -1814,3 +1814,4 @@ export function reviewedIds(model, key) {
   const snaps = Object.entries(m.aiReview.hashes || {}).filter(([k]) => k === key || k.endsWith(`:${key}`)).map(([, x]) => x || {});
   return new Set(reviewItems(m, key).filter(it => snaps.some(sn => sn[it.id] === it.hash)).map(it => it.id));
 }
+export const bpKnown = key => !!BP[key];

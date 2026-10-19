@@ -8548,7 +8548,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [rvPick, setRvPick] = useState([]);          // 선택 검토할 산출물(검토 범위 key)
   const [rvRunning, setRvRunning] = useState(false);  // 검토 AI 호출 진행 중 (중지 버튼 표시)
   const rvStop = useRef(false);
-  const [rvGuide, setRvGuide] = useState(false);       // 검토 기준 안내 펼침
+  const [rvGuide, setRvGuide] = useState(false);
+  const [rvRule, setRvRule] = useState(null);          // ① 규칙 검사 상세 펼침: error | warn | info | qf(요구 품질 플래그) | here(이 산출물 관련)       // 검토 기준 안내 펼침
   const [rvEdit, setRvEdit] = useState(null);          // ③에서 검토 대상 직접 수정 { fkey, key, id, vals }
   // ③ 판정 화면에서 검토 대상 산출물을 바로 고친다. SYS 요구의 제목·내용은 확정 요구(items)가 원본이므로 items도 함께 고친다.
   function applyReviewEditUI() {
@@ -9315,7 +9316,33 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               }
               setModel(m => AE.judgeReview(m, [f.key], state, note));
             };
-            const chip = (label, val, color) => <span style={{ padding: "4px 10px", borderRadius: 8, background: color + "18", border: `1px solid ${color}44`, color, fontSize: 11 }}>{label} <b>{val}</b></span>;
+            const chip = (label, val, color, key) => <button onClick={key ? () => setRvRule(r => r === key ? null : key) : undefined} title={key ? "눌러서 검사 결과 보기" : undefined}
+              style={{ padding: "4px 10px", borderRadius: 8, background: rvRule === key && key ? color + "33" : color + "18", border: `1px solid ${rvRule === key && key ? color : color + "44"}`, color, fontSize: 11, cursor: key ? "pointer" : "default", fontFamily: "inherit" }}>{label} <b>{val}</b>{key ? (rvRule === key ? " ▴" : " ▾") : ""}</button>;
+            // 검토 대상 수정 편집기 (③ 의견 행과 ① 규칙 검사 결과에서 함께 사용) — rvEdit.key(검토 범위)·id 기준
+            const editorBox = (suggestion) => {
+              const sp = rvEdit && AE.reviewEditSpec(model, rvEdit.key, rvEdit.id);
+              if (!sp) return null;
+              return (
+                <div style={{ border: `1px solid ${T.accent}66`, borderRadius: 8, padding: 10, background: T.accent + "0A" }}>
+                  <div style={{ fontSize: 11, marginBottom: 6 }}><b>{rvEdit.id}</b> 수정 {suggestion && <span style={{ color: T.green }}>— 제안: {suggestion}</span>}</div>
+                  {sp.fields.map(fd => (
+                    <div key={fd.k} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 5 }}>
+                      <span style={{ width: 120, flexShrink: 0, fontSize: 10.5, color: T.muted, paddingTop: 5 }}>{fd.label}{fd.sysItem && <div style={{ fontSize: 9.5 }}>(확정 요구에 반영)</div>}</span>
+                      {fd.rows > 1
+                        ? <textarea rows={fd.rows} value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...ta, minHeight: 0, flex: 1 }} />
+                        : <input value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...inp, flex: 1 }} />}
+                    </div>))}
+                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center", marginTop: 4 }}>
+                    <span style={{ fontSize: 10, color: T.muted, marginRight: "auto" }}>적용하면 이 항목의 검토 의견은 '내용 변경됨'이 되고, 연결된 하위 항목에는 변경 영향 검토가 표시될 수 있습니다.{AE.reviewScope(rvEdit.key)?.kind === "test" ? " 수정한 시험은 수동 작성으로 바뀌어 규칙 재생성 때 덮어쓰지 않습니다." : ""}</span>
+                    <button onClick={() => setTab(sp.tab)} style={small}>원래 탭에서 열기</button>
+                    <button onClick={() => setRvEdit(null)} style={small}>취소</button>
+                    <button onClick={applyReviewEditUI} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>적용</button>
+                  </div>
+                </div>);
+            };
+            // 규칙 지적의 ID → 그 ID를 가진 검토 범위(수정 가능 여부) — 이해관계자 요구 등 범위 밖 ID는 null
+            const scopeOfId = id => (scopes.find(x => AE.reviewEditSpec(model, x.key, id)) || {}).key || null;
+            const openEdit = (fkey, key, id) => { if (rvEdit?.fkey === fkey) { setRvEdit(null); return; } const sp = AE.reviewEditSpec(model, key, id); if (!sp) { setErr("수정할 대상을 찾지 못했습니다."); return; } setRvEdit({ fkey, key, id, vals: { ...sp.values } }); };
             const totItems = cov.reduce((a, c) => a + c.total, 0), totAny = cov.reduce((a, c) => a + c.reviewedAny, 0);
             const totOpen = cov.reduce((a, c) => a + c.open, 0), totValid = cov.reduce((a, c) => a + c.valid, 0);
             const cell = { padding: "5px 6px", borderTop: `1px solid ${T.border}` };
@@ -9373,14 +9400,52 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
 
               <AeSec title="① 규칙 검사 — 결정론적 (같은 입력이면 같은 결과)" right={<button onClick={() => setTab("trace")} style={small}>추적성·충족도에서 보기</button>}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {chip("V-모델 오류", sevN("error"), sevN("error") ? T.red : T.green)}
-                  {chip("경고", sevN("warn"), sevN("warn") ? T.amber : T.green)}
-                  {chip("정보", sevN("info"), T.muted)}
+                  {chip("V-모델 오류", sevN("error"), sevN("error") ? T.red : T.green, "error")}
+                  {chip("경고", sevN("warn"), sevN("warn") ? T.amber : T.green, "warn")}
+                  {chip("정보", sevN("info"), T.muted, "info")}
                   {S.kind === "req"
-                    ? chip(`${S.proc} 요구 품질 플래그`, `${qf} / ${lvItems.length}`, qf ? T.amber : T.green)
-                    : chip(`${S.proc} 관련 규칙 지적`, ruleHere.length, ruleHere.some(f => f.sev === "error") ? T.red : ruleHere.length ? T.amber : T.green)}
+                    ? chip(`${S.proc} 요구 품질 플래그`, `${qf} / ${lvItems.length}`, qf ? T.amber : T.green, "qf")
+                    : chip(`${S.proc} 관련 규칙 지적`, ruleHere.length, ruleHere.some(f => f.sev === "error") ? T.red : ruleHere.length ? T.amber : T.green, "here")}
                 </div>
-                {S.kind !== "req" && ruleHere.length > 0 && <div style={{ marginTop: 6 }}>{ruleHere.slice(0, 6).map((f, i) => <div key={i} style={{ fontSize: 10.5, color: f.sev === "error" ? T.red : f.sev === "warn" ? T.amber : T.muted }}>· {f.msg}</div>)}</div>}
+                {rvRule && (() => {
+                  const sevC = { error: T.red, warn: T.amber, info: T.muted };
+                  const sevL = { error: "오류", warn: "경고", info: "정보" };
+                  const idBtn = (id, fkey) => { const k = scopeOfId(id); return <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 2, marginRight: 6, marginBottom: 3 }}>
+                    <span style={{ fontFamily: "monospace", fontSize: 10.5 }}>{id}</span>
+                    {k && <button onClick={() => openEdit(fkey + "|" + id, k, id)} title={`${id} 바로 수정`} style={{ ...small, padding: "0 5px", fontSize: 10, background: rvEdit?.fkey === fkey + "|" + id ? T.accent : "none", color: rvEdit?.fkey === fkey + "|" + id ? "#fff" : T.accent }}>✎</button>}
+                  </span>; };
+                  if (rvRule === "qf") {
+                    const rows = (model.reqs[S.lv] || []).map(r => [r, AE.qualityFlags(r)]).filter(([, fl]) => fl.length);
+                    return (
+                      <div style={{ marginTop: 8, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px" }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 4 }}>{S.proc} 요구 품질 플래그 — {rows.length}건 <span style={{ fontWeight: 400, color: T.muted, fontSize: 10.5 }}>(모호어·검증 기준 없음·정량 기준 없음·복합 요구 의심·설계 제약 성격을 규칙으로 찾음)</span></div>
+                        {!rows.length && <div style={{ fontSize: 11, color: T.green }}>플래그가 붙은 요구가 없습니다.</div>}
+                        {rows.map(([r, fl]) => (
+                          <div key={r.id} style={{ borderTop: `1px solid ${T.border}`, padding: "5px 0" }}>
+                            <div style={{ fontSize: 11 }}>{idBtn(r.id, "qf")} <span style={{ color: T.muted }}>{r.title}</span></div>
+                            <div style={{ fontSize: 10.5, color: T.amber }}>{fl.map(x => x.msg).join(" · ")}</div>
+                            {rvEdit?.fkey === `qf|${r.id}` && <div style={{ marginTop: 6 }}>{editorBox()}</div>}
+                          </div>))}
+                      </div>);
+                  }
+                  const fs = rvRule === "here" ? ruleHere : findings.filter(f => f.sev === rvRule);
+                  return (
+                    <div style={{ marginTop: 8, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 4 }}>{rvRule === "here" ? `${S.proc} 관련 규칙 지적` : `V-모델 전체 ${sevL[rvRule]}`} — {fs.length}건 <span style={{ fontWeight: 400, color: T.muted, fontSize: 10.5 }}>(✎가 있는 ID는 여기서 바로 고칠 수 있습니다)</span></div>
+                      {!fs.length && <div style={{ fontSize: 11, color: T.green }}>해당하는 검사 결과가 없습니다.</div>}
+                      {fs.map((f, i) => {
+                        const fk = `rule${i}`, ids = f.ids || [];
+                        const ed = rvEdit?.fkey?.startsWith(fk + "|");
+                        return (
+                          <div key={i} style={{ borderTop: `1px solid ${T.border}`, padding: "6px 0" }}>
+                            <div style={{ fontSize: 11 }}><span style={{ color: sevC[f.sev], fontWeight: 700, marginRight: 6 }}>{sevL[f.sev]}</span>{f.msg}</div>
+                            {f.bp && AE.bpKnown(f.bp) && <div style={{ fontSize: 10, color: T.muted }}>근거: {AE.bpLabel(f.bp, model.version)}</div>}
+                            {ids.length > 0 && <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap" }}>{ids.map(id => idBtn(id, fk))}{f.count > ids.length && <span style={{ fontSize: 10, color: T.muted }}>… 외 {f.count - ids.length}건 (⑦ 추적성·충족도에서 전체 보기)</span>}</div>}
+                            {ed && <div style={{ marginTop: 6 }}>{editorBox()}</div>}
+                          </div>);
+                      })}
+                    </div>);
+                })()}
                 <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>추적성 단절·할당 누락·검증 기준 누락·시험 미연결·모호어·복합 요구 등은 AI 없이 규칙으로 판정합니다.</div>
               </AeSec>
 
@@ -9491,33 +9556,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                               {f.judge && <button onClick={() => setModel(m => AE.judgeReview(m, [f.key], null))} style={{ ...small, padding: "2px 7px", color: T.muted }} title="판정 취소">↺</button>}
                             </div>
                             {f.judge && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 3 }}>{String(f.judge.at).slice(0, 16).replace("T", " ")}{f.judge.note ? ` — ${f.judge.note}` : ""}</div>}
-                            {!f.removed && <button disabled={busy} onClick={() => { if (rvEdit?.fkey === f.key) { setRvEdit(null); return; } const sp = AE.reviewEditSpec(model, rvLevel, f.reqId); if (!sp) { setErr("수정할 대상을 찾지 못했습니다."); return; } setRvEdit({ fkey: f.key, key: rvLevel, id: f.reqId, vals: { ...sp.values } }); }}
+                            {!f.removed && <button disabled={busy} onClick={() => openEdit(f.key, rvLevel, f.reqId)}
                               style={{ ...small, padding: "2px 8px", marginTop: 5, background: rvEdit?.fkey === f.key ? T.accent : "none", color: rvEdit?.fkey === f.key ? "#fff" : (f.judge?.state === "valid" && !f.stale ? T.green : T.accent), borderColor: f.judge?.state === "valid" && !f.stale ? T.green + "88" : undefined }}>✎ 대상 수정{f.judge?.state === "valid" && !f.stale ? " (수정 필요)" : ""}</button>}
                           </td>
                         </tr>
-                        {rvEdit?.fkey === f.key && (() => {
-                          const sp = AE.reviewEditSpec(model, rvLevel, f.reqId);
-                          if (!sp) return null;
-                          return (
-                            <tr><td colSpan={4} style={{ padding: "4px 6px 12px" }}>
-                              <div style={{ border: `1px solid ${T.accent}66`, borderRadius: 8, padding: 10, background: T.accent + "0A" }}>
-                                <div style={{ fontSize: 11, marginBottom: 6 }}><b>{f.reqId}</b> 수정 {f.suggestion && <span style={{ color: T.green }}>— 제안: {f.suggestion}</span>}</div>
-                                {sp.fields.map(fd => (
-                                  <div key={fd.k} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 5 }}>
-                                    <span style={{ width: 120, flexShrink: 0, fontSize: 10.5, color: T.muted, paddingTop: 5 }}>{fd.label}{fd.sysItem && <div style={{ fontSize: 9.5 }}>(확정 요구에 반영)</div>}</span>
-                                    {fd.rows > 1
-                                      ? <textarea rows={fd.rows} value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...ta, minHeight: 0, flex: 1 }} />
-                                      : <input value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...inp, flex: 1 }} />}
-                                  </div>))}
-                                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center", marginTop: 4 }}>
-                                  <span style={{ fontSize: 10, color: T.muted, marginRight: "auto" }}>적용하면 이 항목의 의견은 '내용 변경됨'이 되고, 연결된 하위 항목에는 변경 영향 검토가 표시될 수 있습니다.{AE.reviewScope(rvLevel)?.kind === "test" ? " 수정한 시험은 수동 작성으로 바뀌어 규칙 재생성 때 덮어쓰지 않습니다." : ""}</span>
-                                  <button onClick={() => setTab(sp.tab)} style={small}>원래 탭에서 열기</button>
-                                  <button onClick={() => setRvEdit(null)} style={small}>취소</button>
-                                  <button onClick={applyReviewEditUI} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>적용</button>
-                                </div>
-                              </div>
-                            </td></tr>);
-                        })()}
+                        {rvEdit?.fkey === f.key && <tr><td colSpan={4} style={{ padding: "4px 6px 12px" }}>{editorBox(f.suggestion)}</td></tr>}
                       </React.Fragment>))}
                       </tbody>
                     </table>
