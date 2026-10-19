@@ -1832,3 +1832,53 @@ export function reviewedIds(model, key) {
   return new Set(reviewItems(m, key).filter(it => snaps.some(sn => sn[it.id] === it.hash)).map(it => it.id));
 }
 export const bpKnown = key => !!BP[key];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11-d) 증분 생성 — '빠진 것만' 추가 (기존 유닛·시험의 ID·내용·교차검토 연결을 바꾸지 않는다)
+//  · ruleUnits / generateRuleTests는 규칙 생성분을 통째로 다시 만들며 ID를 다시 매기므로,
+//    요구 몇 건을 추가한 뒤에는 이 함수로 빠진 대상만 채운다.
+// ═══════════════════════════════════════════════════════════════════════════
+export function addMissingUnits(model) {
+  const m = normalizeModel(model);
+  const out = [...(m.units.SW || [])], added = [];
+  const covered = new Set(out.flatMap(u => u.reqs || []));
+  const compOf = r => (m.comps.SW || []).find(c => (m.alloc.SW[r.id] || []).includes(c.id));
+  // 기능 요구: 유닛 1개씩
+  m.reqs.SW.filter(r => r.type !== "비기능" && !covered.has(r.id)).forEach(r => {
+    const c = compOf(r); if (!c) return;
+    const u = { id: nextId(UNIT_PREFIX, out), comp: c.id, name: r.title || r.id,
+      desc: `[상세설계 TBD] ${r.title || r.id} 처리 — 할당 요구 ${r.id}. 알고리즘·자료구조·동적 동작은 코드·플랫폼 확정 후 기술`,
+      reqs: [r.id], funcs: [], types: [], macros: [], origin: "rule", file: "", designDone: false };
+    out.push(u); added.push(u.id); covered.add(r.id);
+  });
+  // 비기능 요구: 같은 컴포넌트의 첫 유닛에 제약으로 덧붙임(없으면 새 유닛)
+  m.reqs.SW.filter(r => r.type === "비기능" && !covered.has(r.id)).forEach(r => {
+    const c = compOf(r); if (!c) return;
+    const i = out.findIndex(u => u.comp === c.id);
+    if (i >= 0) { out[i] = { ...out[i], reqs: [...new Set([...(out[i].reqs || []), r.id])] }; added.push(`${out[i].id}(+${r.id})`); }
+    else { const u = { id: nextId(UNIT_PREFIX, out), comp: c.id, name: `${c.name} 메인`, desc: `[상세설계 TBD] ${c.name} — 제약 ${r.id}`, reqs: [r.id], funcs: [], types: [], macros: [], origin: "rule", file: "", designDone: false }; out.push(u); added.push(u.id); }
+    covered.add(r.id);
+  });
+  const unalloc = m.reqs.SW.filter(r => !covered.has(r.id)).map(r => r.id);   // 컴포넌트 미할당이라 유닛을 못 만든 요구
+  return { units: out, added, unalloc };
+}
+export function addMissingTests(model, levels) {
+  const m = normalizeModel(model);
+  const lv = (levels || Object.keys(TEST_LEVELS)).filter(L => m.scope[TEST_LEVELS[L].level]);
+  const gen = generateRuleTests({ ...m, tests: [] }, lv);
+  const all = [...m.tests], added = [];
+  const has = (L, tgt) => m.tests.some(x => x.level === L && (x.targets || []).includes(tgt));
+  gen.forEach(t => {
+    if (has(t.level, (t.targets || [])[0])) return;
+    const nt = { ...t, id: nextId(TEST_LEVELS[t.level].prefix, all.filter(x => x.level === t.level), 4) };
+    all.push(nt); added.push(nt.id);
+  });
+  return { tests: all, added };
+}
+// 시험이 하나도 없는 대상 수 (레벨별) — '빠진 시험만 생성' 버튼 표시용
+export function missingTestTargets(model, levels) {
+  const m = normalizeModel(model);
+  const lv = (levels || Object.keys(TEST_LEVELS)).filter(L => m.scope[TEST_LEVELS[L].level]);
+  const gen = generateRuleTests({ ...m, tests: [] }, lv);
+  return [...new Set(gen.filter(t => !m.tests.some(x => x.level === t.level && (x.targets || []).includes((t.targets || [])[0]))).map(t => `${t.level}|${(t.targets || [])[0]}`))].length;
+}

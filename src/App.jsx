@@ -8587,7 +8587,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [focus, setFocus] = useState(null);
   const focusOn = tab === focus?.tab ? focus : null;
   const applyFocus = (list) => (focusOn && list.some(x => focusOn.ids.has(x.id))) ? list.filter(x => focusOn.ids.has(x.id)) : list;
-  const goMissing = (c) => { setFocus({ tab: c.tab, level: c.level || null, ids: new Set(c.missing), q: c.q, n: c.missing.length }); setTab(c.tab); if (c.level) setVFilter(c.level); };
+  const goMissing = (c) => { setFocus({ key: c.key, tab: c.tab, level: c.level || null, ids: new Set(c.missing), q: c.q, n: c.missing.length }); setTab(c.tab); if (c.level) setVFilter(c.level); };
   const [guides, setGuides] = useState([]);
   useEffect(() => { fetchWritingGuides().then(gs => setGuides(gs.filter(g => g.is_active !== false))).catch(() => {}); }, []);
   const guideBlock = buildGuideBlock(guides);
@@ -9217,6 +9217,15 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               <span style={{ flex: 1 }}>🔎 <b>"{focusOn.q}"</b>에서 빠진 {focusOn.n}건만 표시 중{(() => { const ids = [...focusOn.ids]; return ids.length <= 12 ? ` — ${ids.join(", ")}` : ` — ${ids.slice(0, 12).join(", ")} 외 ${ids.length - 12}건`; })()}</span>
               <button onClick={() => setFocus(null)} style={small}>전체 보기</button>
             </div>)}
+          {focusOn && (() => {
+            const k = String(focusOn.key || "");
+            const tip = /Alloc$/.test(k) && /^(sw|hw)/.test(k) ? "처리: 아래 요구의 '할당 →'에서 담당 컴포넌트 칩을 눌러 지정하세요(여러 개 가능, 다시 누르면 해제). 'AI 컴포넌트 설계·할당'은 전체를 다시 만들므로 누르지 마세요."
+              : k === "swUnit" ? "처리: 먼저 이 요구에 담당 컴포넌트를 할당한 뒤, 아래 'SW 유닛·상세설계 골격'의 [빠진 유닛만 추가]를 누르세요. 기존 유닛은 그대로 둡니다."
+              : /Derive$/.test(k) && k !== "stkDerive" ? "처리: 아래 주황 상자의 [이 요구에서 파생]을 누르세요. 기존 하위 요구·할당은 그대로 둡니다."
+              : focusOn.tab === "verif" ? "처리: 위의 [빠진 시험만 생성]을 누르세요. 기존 시험의 ID·내용·검토 기록은 그대로 둡니다. 생성 후 기대 결과·합격 기준을 다듬으세요."
+              : "";
+            return tip ? <div style={{ fontSize: 11, color: T.text, padding: "6px 10px", background: T.green + "10", border: `1px solid ${T.green}44`, borderRadius: 8, marginTop: -4, marginBottom: 10 }}>💡 {tip}</div> : null;
+          })()}
           {!model.reqs.SYS.length && tab !== "req" && <div style={{ color: T.amber, fontSize: 11.5, padding: 9, background: T.amber + "11", borderRadius: 8, marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}><span style={{ flex: 1 }}>확정된 시스템 요구사항이 없습니다. ② 요구 도출·명세 탭에서 SYS.2를 먼저 확정하거나, ① 입력자료 탭에서 DBC를 가져오세요.</span><button onClick={() => setTab("req")} style={{ ...small, color: T.amber, borderColor: T.amber + "88" }}>② 탭으로</button></div>}
 
           {/* ② 요구 도출·명세 (SYS.1·2) — 탭을 옮겨도 작성 중인 내용이 유지되도록 항상 마운트하고 숨김 처리 */}
@@ -9347,7 +9356,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               {ReqList({ lv: lv })}
               <button onClick={() => set(n => { n.reqs[lv].push({ id: AE.nextId(AE.REQ_PREFIX[lv], n.reqs[lv], 4), level: lv, parents: [], sysElems: [], title: "", text: "", type: "기능", priority: "중", verifMethod: "Test", verifCriteria: "", status: "Draft", origin: "manual" }); })} style={{ ...small, marginTop: 6 }}>＋ {lv} 요구 추가</button>
             </AeSec>
-            <AeSec title={`${L.compLabel} ${model.comps[lv].length}개 (${AE.procLabel(L.archProc, V)})`} right={<Btn onClick={() => compose(lv)} disabled={busy || !model.reqs[lv].length} style={{ fontSize: 11, padding: "4px 12px" }}>{aiLabel} 컴포넌트 설계·할당</Btn>}>
+            <AeSec title={`${L.compLabel} ${model.comps[lv].length}개 (${AE.procLabel(L.archProc, V)})`} right={<Btn variant={model.comps[lv].length ? "outline" : undefined} onClick={() => { if (model.comps[lv].length && !window.confirm(`${L.compLabel} 설계·할당을 처음부터 다시 만듭니다.\n기존 컴포넌트·할당·인터페이스와 그에 연결된 유닛·시험·교차검토가 바뀔 수 있습니다.\n요구 몇 건만 할당하려면 요구의 '할당 →' 칩을 누르세요.\n\n계속할까요?`)) return; compose(lv); }} disabled={busy || !model.reqs[lv].length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.comps[lv].length ? "전체 다시 설계·할당" : `${aiLabel} 컴포넌트 설계·할당`}</Btn>}>
               {CompList({ lv: lv })}
             </AeSec>
             <AeSec title={`${lv} 인터페이스 ${model.interfaces[lv].length}건`}>{IfList({ lv: lv })}</AeSec>
@@ -9356,7 +9365,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               <AeSec title={`SW 유닛·상세설계 골격 ${model.units.SW.length}개 (${AE.procLabel("SWE.3", V)})`}
                 right={<div style={{ display: "flex", gap: 6 }}>
                   <label title="헤더 파일을 이 섹션으로 끌어다 놓아도 됩니다" style={{ ...small, display: "inline-block", padding: "4px 10px" }}>📎 .h 헤더 가져오기 (끌어다 놓기 가능)<input type="file" accept=".h,.hpp,.txt" multiple onChange={onHeaders} style={{ display: "none" }} /></label>
-                  <Btn onClick={genUnits} disabled={busy || !model.comps.SW.length} style={{ fontSize: 11, padding: "4px 12px" }}>⚙ 규칙 골격 생성</Btn>
+                  {(() => { const r = AE.addMissingUnits(model); return model.units.SW.length > 0 && r.added.length > 0
+                    ? <Btn onClick={() => { const x = AE.addMissingUnits(model); set(n => { n.units.SW = x.units; }); setNote(`유닛 ${x.added.join(", ")}을(를) 추가했습니다 — 기존 유닛은 그대로입니다. SWE.4 유닛 시험은 ⑥ 검증 수단의 [빠진 시험만 생성]으로 추가하세요.`); }} disabled={busy} title="기존 유닛(수정·헤더 반영분 포함)은 그대로 두고, 유닛이 없는 SW 요구에만 골격을 추가합니다" style={{ fontSize: 11, padding: "4px 12px" }}>빠진 유닛만 추가 ({r.added.length})</Btn>
+                    : null; })()}
+                  <Btn variant={model.units.SW.length ? "outline" : undefined} onClick={() => { if (model.units.SW.some(u => u.origin === "rule") && !window.confirm("규칙으로 만든 유닛을 모두 다시 만들고 유닛 번호를 다시 매깁니다.\n이 화면이나 교차검토에서 고친 유닛 설계, SWE.4 유닛 시험, 유닛 교차검토 기록이 바뀔 수 있습니다(헤더로 가져온 유닛은 유지).\n빠진 것만 채우려면 [빠진 유닛만 추가]를 쓰세요.\n\n계속할까요?")) return; genUnits(); }} disabled={busy || !model.comps.SW.length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.units.SW.length ? "⚙ 골격 다시 생성" : "⚙ 규칙 골격 생성"}</Btn>
                 </div>}>
                 <WhyBox title="상세설계는 왜 '골격'까지만 만들고, 헤더 파일로 채우나요?">
                   상세설계서(SWE.3)의 핵심은 <b>유닛의 알고리즘·자료구조·동적 동작</b>인데, 이것은 실제 코드가 있어야 맞게 쓸 수 있습니다. 착수 단계에서 AI가 지어내면 나중에 코드와 다른 "그럴듯한 설계서"가 되고, 심사에서는 설계와 코드의 일관성을 보기 때문에 오히려 불리합니다.
@@ -9403,8 +9415,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               <div data-aesec="verif-bar" style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
                 {lvKeys.map(k => <button key={k} onClick={() => setVFilter(k)} style={{ ...small, padding: "5px 10px", color: cur === k ? "#fff" : T.muted, background: cur === k ? T.accent : "transparent", borderColor: cur === k ? T.accent : T.border }}>{AE.TEST_LEVELS[k].proc} {AE.TEST_LEVELS[k].label} ({model.tests.filter(t => t.level === k).length})</button>)}
                 <div style={{ flex: 1 }} />
-                <Btn variant="outline" onClick={() => genTests([cur])} disabled={busy} style={{ fontSize: 11, padding: "4px 10px" }}>이 레벨만 생성</Btn>
-                <Btn onClick={() => genTests(lvKeys)} disabled={busy} style={{ fontSize: 11, padding: "4px 12px" }}>{model.useAI ? "⚡ 규칙+AI" : "⚙ 규칙"} 전체 생성</Btn>
+                {(() => { const mt = AE.missingTestTargets(model, lvKeys); return mt > 0 && model.tests.length > 0
+                  ? <Btn onClick={() => { const x = AE.addMissingTests(model, lvKeys); set(n => { n.tests = x.tests; }); setNote(`시험 ${x.added.length}건(${x.added.slice(0, 8).join(", ")}${x.added.length > 8 ? " …" : ""})을 추가했습니다 — 기존 시험은 그대로입니다. 새 시험의 기대 결과·합격 기준을 다듬으세요.`); }} disabled={busy} title="시험이 하나도 없는 요구·인터페이스·유닛에만 규칙 시험을 추가합니다. 기존 시험의 ID·내용·교차검토 기록은 그대로입니다" style={{ fontSize: 11, padding: "4px 12px" }}>빠진 시험만 생성 ({mt}개 대상)</Btn>
+                  : null; })()}
+                <Btn variant="outline" onClick={() => { if (model.tests.some(t => t.level === cur && t.origin !== "manual") && !window.confirm(`${AE.TEST_LEVELS[cur].proc} 시험을 다시 생성합니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.\n\n계속할까요?`)) return; genTests([cur]); }} disabled={busy} style={{ fontSize: 11, padding: "4px 10px" }}>이 레벨 다시 생성</Btn>
+                <Btn variant={model.tests.length ? "outline" : undefined} onClick={() => { if (model.tests.some(t => t.origin !== "manual") && !window.confirm("모든 레벨의 시험을 다시 생성합니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.\n빠진 것만 채우려면 [빠진 시험만 생성]을 쓰세요.\n\n계속할까요?")) return; genTests(lvKeys); }} disabled={busy} style={{ fontSize: 11, padding: "4px 12px" }}>{model.useAI ? "⚡ 규칙+AI" : "⚙ 규칙"} 전체 {model.tests.length ? "다시 " : ""}생성</Btn>
               </div>
               {runCtx.anchor === "verif-bar" && (busy || prog) && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
               {runCtx.anchor === "verif-bar" && runErr && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{runErr}</div>}
