@@ -8780,10 +8780,42 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   }
 
   // ── SWE.1 / HWE.1: 하위 요구 파생 ──
-  function derive(level) {
-    return run(`${level} 요구사항 파생`, async () => {
+  // only: 시스템 요구 ID 목록 — 주어지면 '빠진 것만 파생': 기존 하위 요구·할당은 그대로 두고 그 시스템 요구에서만 새로 파생
+  function derive(level, only = null) {
+    return run(only ? `${level} 요구 파생 (빠진 ${only.length}건만)` : `${level} 요구사항 파생`, async () => {
       const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
       const parents = AE.parentsForLevel(n, level);
+      if (only) {
+        const want = new Set(only);
+        const todo0 = parents.filter(p => want.has(p.id) && !n.reqs[level].some(r => (r.parents || []).includes(p.id)));
+        if (!todo0.length) return "빠진 상위 요구가 없습니다 — 이미 모두 파생되어 있습니다.";
+        const out0 = [...n.reqs[level]], added = [];
+        const names0 = sysCompName();
+        for (let i = 0; i < todo0.length; i += 5) {
+          const grp = todo0.slice(i, i + 5);
+          setProg({ percent: 5 + (i / todo0.length) * 90, label: `${n.useAI ? "AI: " : ""}${level} 요구 파생 중… (${Math.min(i + 5, todo0.length)}/${todo0.length})` });
+          let got = [];
+          if (n.useAI) { try { const r = await callClaudeJson(AE.promptDerive({ level, parents: grp, sysCompName: names0, version: V }), 5000); got = Array.isArray(r?.items) ? r.items : []; } catch (_) {} }
+          grp.forEach(p => {
+            const mine = got.filter(x => x?.parent === p.id && String(x.text || x.title || "").trim());
+            if (!mine.length) {   // AI 미사용·누락분은 상위 요구를 상속한 초안으로
+              const tmp = AE.ruleDeriveReqs({ ...n, reqs: { ...n.reqs, [level]: [] } }, level).filter(r => (r.parents || []).includes(p.id));
+              tmp.forEach(t => { const x = { ...t, id: AE.nextId(AE.REQ_PREFIX[level], out0, 4) }; out0.push(x); added.push(x.id); });
+              return;
+            }
+            mine.slice(0, 3).forEach(x => {
+              const base = { title: String(x.title || "").slice(0, 60), text: String(x.text || ""), type: ["기능", "비기능", "인터페이스"].includes(x.type) ? x.type : p.type };
+              const r = { id: AE.nextId(AE.REQ_PREFIX[level], out0, 4), level, parents: [p.id], sysElems: p.elems, ...base, priority: p.priority,
+                verifMethod: AE.defaultVerifMethod(base), verifCriteria: String(x.verifCriteria || ""), safety: p.safety || "", security: !!p.security, status: "Draft", origin: "ai" };
+              out0.push(r); added.push(r.id);
+            });
+          });
+        }
+        n.reqs[level] = out0;
+        setModel(n);
+        setFocus(null);
+        return `${todo0.map(p => p.id).join(", ")}에서 ${level} 요구 ${added.length}건(${added.join(", ")})을 추가했습니다 — 기존 요구·할당은 그대로입니다. 새 요구 아래 '할당 →'에서 담당 ${AE.LEVELS[level].compLabel}를 눌러 지정하세요.`;
+      }
       if (!parents.length) throw new Error(`${level} 포함 시스템 요소(구분 ${level === "SW" ? "SW·HW+SW" : "HW·HW+SW"})에 할당된 시스템 요구가 없습니다. ② 시스템 탭에서 요소 구분과 할당을 먼저 확인하세요.`);
       if (!n.useAI) { n.reqs[level] = AE.ruleDeriveReqs(n, level); setModel(n); return `규칙 기반: 상위 요구 ${parents.length}건을 상속한 ${level} 요구 초안 생성 — ${level} 관점으로 구체화하세요.`; }
       const keep = n.reqs[level].filter(r => r.origin === "manual");
@@ -9285,8 +9317,33 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
 
           {(tab === "SW" || tab === "HW") && (() => { const lv = tab; const L = AE.LEVELS[lv]; const parents = AE.parentsForLevel(model, lv); return (<>
             {lv === "HW" && V === "3.1" && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 8 }}>※ ASPICE 3.1에는 HWE 프로세스가 없어 4.0 HWE.1~4를 PAM 확장으로 준용합니다 (문서에 명기됨).</div>}
-            <AeSec title={`${lv} 요구사항 ${model.reqs[lv].length}건 (${AE.procLabel(L.reqProc, V)}) — 파생 대상 시스템 요구 ${parents.length}건`} right={<Btn onClick={() => derive(lv)} disabled={busy || !parents.length} style={{ fontSize: 11, padding: "4px 12px" }}>{aiLabel} 요구 파생</Btn>}>
+            <AeSec title={`${lv} 요구사항 ${model.reqs[lv].length}건 (${AE.procLabel(L.reqProc, V)}) — 파생 대상 시스템 요구 ${parents.length}건`} right={(() => { const miss = parents.filter(p => !model.reqs[lv].some(r => (r.parents || []).includes(p.id))).map(p => p.id); return (<div style={{ display: "flex", gap: 6 }}>
+                {miss.length > 0 && model.reqs[lv].length > 0 && <Btn onClick={() => derive(lv, miss)} disabled={busy} title="기존 하위 요구·할당은 그대로 두고, 아직 파생되지 않은 시스템 요구에서만 새로 만듭니다" style={{ fontSize: 11, padding: "4px 12px" }}>빠진 {miss.length}건만 파생</Btn>}
+                <Btn variant={model.reqs[lv].length ? "outline" : undefined} onClick={() => { const auto = model.reqs[lv].filter(r => r.origin !== "manual").length; if (auto && !window.confirm(`전체 다시 파생하면 직접 추가하지 않은 ${lv} 요구 ${auto}건을 새로 만듭니다.\n기존 요구의 컴포넌트 할당·유닛·시험·교차검토 연결이 바뀔 수 있습니다.\n빠진 것만 채우려면 '빠진 N건만 파생'을 쓰세요.\n\n계속할까요?`)) return; derive(lv); }} disabled={busy || !parents.length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.reqs[lv].length ? `전체 다시 파생` : `${aiLabel} 요구 파생`}</Btn>
+              </div>); })()}>
               {!parents.length && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 6 }}>'{lv}'가 포함된 시스템 요소에 할당된 요구가 없습니다. ② 시스템 탭에서 요소 구분(HW/SW/HW+SW)과 할당을 확인하세요.</div>}
+              {(() => {
+                // ⑦에서 '빠짐'으로 들어왔을 때: 빠진 것은 하위 요구가 아니라 '아직 내려오지 않은 시스템 요구' — 여기서 바로 처리
+                const miss = parents.filter(p => !model.reqs[lv].some(r => (r.parents || []).includes(p.id)));
+                const show = focus && focus.tab === lv ? miss.filter(p => focus.ids.has(p.id)) : [];
+                if (!show.length) return null;
+                const cn = Object.fromEntries(model.comps.SYS.map(c => [c.id, c.name]));
+                return (
+                  <div style={{ border: `1px solid ${T.amber}88`, background: T.amber + "10", borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 4 }}>아직 {lv} 요구로 내려오지 않은 시스템 요구 {show.length}건</div>
+                    <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>아래 시스템 요구는 {lv}가 포함된 요소에 할당돼 있지만 {lv} 요구가 하나도 없습니다. <b>[이 요구에서 파생]</b>을 누르면 기존 {lv} 요구·할당은 그대로 두고 이 요구에서만 새로 만듭니다. {lv}가 할 일이 없는 요구라면 ③ 시스템 탭에서 요소 할당을 바로잡으세요.</div>
+                    {show.map(p => (
+                      <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", borderTop: `1px solid ${T.border}`, padding: "6px 0" }}>
+                        <div style={{ flex: 1, fontSize: 11 }}>
+                          <span style={{ fontFamily: "monospace", color: T.accent, marginRight: 6 }}>{p.id}</span><b>{p.title}</b>
+                          <div style={{ color: T.muted, fontSize: 10.5 }}>{String(p.text || "").slice(0, 160)}</div>
+                          <div style={{ color: T.muted, fontSize: 10 }}>할당 요소: {(p.elems || []).map(id => `${id} ${cn[id] || ""}`).join(", ") || "-"}</div>
+                        </div>
+                        <Btn onClick={() => derive(lv, [p.id])} disabled={busy} style={{ fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }}>{aiLabel} 이 요구에서 파생</Btn>
+                        <button onClick={() => { set(n => { n.reqs[lv].push({ id: AE.nextId(AE.REQ_PREFIX[lv], n.reqs[lv], 4), level: lv, parents: [p.id], sysElems: p.elems || [], title: p.title || "", text: "", type: p.type || "기능", priority: p.priority || "중", verifMethod: "Test", verifCriteria: "", status: "Draft", origin: "manual" }); }); setFocus(null); setNote(`${p.id}를 근거로 ${lv} 요구를 직접 추가했습니다 — 목록 맨 끝에서 내용을 작성하고 담당 ${L.compLabel}를 할당하세요.`); }} disabled={busy} style={{ ...small, whiteSpace: "nowrap" }}>＋ 직접 작성</button>
+                      </div>))}
+                  </div>);
+              })()}
               {ReqList({ lv: lv })}
               <button onClick={() => set(n => { n.reqs[lv].push({ id: AE.nextId(AE.REQ_PREFIX[lv], n.reqs[lv], 4), level: lv, parents: [], sysElems: [], title: "", text: "", type: "기능", priority: "중", verifMethod: "Test", verifCriteria: "", status: "Draft", origin: "manual" }); })} style={{ ...small, marginTop: 6 }}>＋ {lv} 요구 추가</button>
             </AeSec>
