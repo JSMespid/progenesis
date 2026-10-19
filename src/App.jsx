@@ -7554,10 +7554,19 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
     ...model.reqs.SW.map(r => { const us = fullModel.units.SW.filter(u => (u.reqs || []).includes(r.id)); return [r.id, r.title || "", us.map(u => `${u.id} ${u.name}`).join(", ") || "-", [...new Set(us.flatMap(u => tOf("SWE4", u.id)))].join(", "), us.length ? "할당" : "미할당"]; })];
   // 3단 교차검토 — 검토 AI 의견과 QA 담당자 판정 기록 (판정 기록이 심사 증적)
   const rvw = AE.reviewView(fullModel);
+  const rvCov = AE.reviewCoverage(fullModel);
+  const scopeName = k => { const S = AE.reviewScope(k); return S ? `${S.proc} ${S.label}` : (AE.LEVELS[k]?.reqProc || k); };
+  const critName = (k, c) => (AE.reviewKindOf(k).criteria.find(x => x.code === c) || {}).label || c;
   const rvRows = [["3단 교차검토 — 검토 AI 의견 및 QA 판정 기록"],
-    [`검토 기준 ${AE.REVIEW_CRITERIA_VER} (${AE.REVIEW_CRITERIA_BASIS}) · 의견 ${rvw.list.length}건 · 미판정 ${rvw.count().open}건 · 실행 이력: ${rvw.runs.slice(-5).map(r => `${String(r.at).slice(0, 16).replace("T", " ")} ${r.level} ${r.label || r.provider} ${r.model}`).join(" / ") || "-"}`],
-    ["레벨", "요구 ID", "요구사항명", "기준", "심각도", "근거 인용", "검토 의견", "개선 제안", "검토 AI·모델·일시", "판정", "판정 의견", "판정일시"],
-    ...rvw.list.map(f => { const run = rvw.runs.find(r => r.at === f.runAt); return [AE.LEVELS[f.level]?.reqProc || f.level, f.reqId, f.reqTitle || (f.removed ? "(삭제됨)" : ""), (AE.REVIEW_CRITERIA.find(c => c.code === f.criterion) || {}).label || f.criterion, AE.REVIEW_SEV[f.severity] || f.severity, f.evidence || "", f.issue, f.suggestion || "", `${f.reviewer ? `${f.reviewer} ${f.reviewerModel || ""}` : run ? `${run.label || run.provider} ${run.model}` : ""} ${String(f.runAt || "").slice(0, 16).replace("T", " ")}`.trim(), f.judge ? AE.REVIEW_JUDGE[f.judge.state] : (f.stale ? "미판정 (요구 변경됨)" : "미판정"), f.judge?.note || "", f.judge ? String(f.judge.at).slice(0, 16).replace("T", " ") : ""]; })];
+    [`검토 기준: ${Object.values(AE.REVIEW_KINDS).map(K => `${K.ver} (${K.basis})`).join(" / ")} · 의견 ${rvw.list.length}건 · 미판정 ${rvw.count().open}건`],
+    ["산출물", "검토 기준", "항목", "검토됨(현재 내용)", "미판정", "유효(수정 필요)", "상태"],
+    ...rvCov.map(c => [`${c.proc} ${c.label}`, AE.REVIEW_KINDS[c.kind].ver, c.total, c.reviewedAny, c.open, c.valid, !c.total ? "항목 없음" : c.reviewedAny < c.total ? "검토 필요" : c.open ? "판정 필요" : "완료"]),
+    [`AI 검토 대상 제외: ${AE.REVIEW_EXCLUDED.map(x => `${x.doc ? AE.ASPICE_DOCS[x.doc].title : x.label}(${x.why})`).join(" · ")}`],
+    [`실행 이력(최근 5회): ${rvw.runs.slice(-5).map(r => `${String(r.at).slice(0, 16).replace("T", " ")} ${scopeName(r.level)} ${r.label || r.provider} ${r.model} ${r.criteria || ""}`).join(" / ") || "-"}`],
+    [],
+    ["산출물", "대상 ID", "대상명", "기준", "심각도", "근거 인용", "검토 의견", "개선 제안", "검토 AI·모델·일시", "판정", "판정 의견", "판정일시"],
+    ...rvw.list.map(f => { const run = rvw.runs.find(r => r.at === f.runAt); return [scopeName(f.level), f.reqId, f.reqTitle || (f.removed ? "(삭제됨)" : ""), critName(f.level, f.criterion), AE.REVIEW_SEV[f.severity] || f.severity, f.evidence || "", f.issue, f.suggestion || "", `${f.reviewer ? `${f.reviewer} ${f.reviewerModel || ""}` : run ? `${run.label || run.provider} ${run.model}` : ""} ${String(f.runAt || "").slice(0, 16).replace("T", " ")}`.trim(), f.judge ? AE.REVIEW_JUDGE[f.judge.state] : (f.removed ? "미판정 (대상 삭제됨)" : f.stale ? "미판정 (내용 변경됨)" : "미판정"), f.judge?.note || "", f.judge ? String(f.judge.at).slice(0, 16).replace("T", " ") : ""]; })];
+  const rvHdr2 = 3 + rvCov.length + 3;   // 의견 목록 머리행 위치 (제목·기준·현황 머리 + 현황 행 + 제외·이력·빈 줄)
   const w = [...(hasStk ? [16] : []), 12, 26, 16, 22, 16, 16, ...(sc.SW ? [16, 14, 16, 16] : []), ...(sc.HW ? [16, 14, 16, 16] : []), 18];
   const std = xlsxStdParts({ title: doc?.name || AE.ASPICE_DOCS.RTM.title, docCode: projectDocNo(meta, doc?.code || "SY2105"), phase: "SYS.2~SWE.6", meta, infoRows: [["적용 기준", `Automotive SPICE ${AE.ASPICE_VERSIONS.find(v => v.id === model.version)?.label || model.version}`], ["정보항목(WP)", AE.wpLabel("RTM", model.version)]] });
   return makeXlsxBook([
@@ -7571,7 +7580,7 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
     ...((sc.SW && fullModel.units.SW.length) ? [{ name: "SW 요구→유닛", rows: unitRows, widths: [12, 30, 40, 24, 10], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...((fullModel.stakeholders || []).length ? [{ name: "이해관계자 요구 추적", rows: stk, widths: [12, 22, 46, 16, 40, 40], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...(prjReqs.length ? [{ name: "프로젝트·프로세스 요구", rows: prj, widths: [10, 30, 16, 18, 40, 30, 14], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
-    ...(rvw.list.length ? [{ name: "교차검토·판정 기록", rows: rvRows, widths: [8, 12, 26, 12, 8, 22, 44, 36, 22, 16, 30, 16], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
+    ...((rvw.list.length || rvw.runs.length) ? [{ name: "교차검토·판정 기록", rows: rvRows, widths: [22, 12, 26, 12, 8, 22, 44, 36, 22, 16, 30, 16], headerRows: [2, rvHdr2], titleRows: [0], freezeRow: 3 }] : []),
     ...((fullModel.openIssues || []).length ? [{ name: "미결 사항", rows: oi, widths: [8, 26, 54, 44, 12, 12, 8], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
   ], std.opts);
 }
@@ -8538,44 +8547,78 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [rvBy, setRvBy] = useState("all");           // 판정 목록: 검토 AI별 보기
   useEffect(() => { apiFetch("/api/review").then(c => { setRv(c); const ready = (c.available || []).filter(a => a.ready); setRvProv(ready.some(a => a.id === c.defaultProvider) ? c.defaultProvider : (ready[0]?.id || "")); }).catch(e => setRv({ error: e.message })); }, []);
   const rvSel = (rv?.available || []).find(a => a.id === rvProv) || null;
-  function aiReview(mode) {
-    const lv = rvLevel;
-    return run(`검토 AI 의견 수집 (${AE.LEVELS[lv].reqProc})`, async () => {
-      if (!rv || rv.error) throw new Error(rv?.error || "검토 AI 설정을 불러오지 못했습니다.");
-      if (!rvSel || !rvSel.ready) throw new Error("사용 가능한 검토 AI가 없습니다. 설정 → AI 연동 → 검토 AI에서 Gemini 또는 ChatGPT의 API 키와 모델을 등록하세요.");
-      const targets = AE.reviewTargets(model, lv, mode, rvSel.id);
-      if (!targets.length) return "다시 검토할 요구가 없습니다 — 마지막 검토 이후 바뀐 요구가 없습니다.";
-      const parents = lv === "SYS" ? model.reqs.STK : AE.parentsForLevel(model, lv);
-      const kept = [], done = []; let dropped = 0, failed = 0, meta = {}, lastErr = null;
-      let fatal = null, timeouts = 0;
-      const isTimeout = e => e?.status === 504 || e?.data?.code === "REVIEW_TIMEOUT" || /FUNCTION_INVOCATION_TIMEOUT|시간 초과/.test(String(e?.message || "") + String(e?.data?.raw || ""));
-      // 묶음 1회 호출 — 시간 초과면 1건씩 나눠 다시 보낸다(추론형 모델은 건수에 비례해 느려짐)
-      async function callBatch(batch) {
-        try {
-          const r = await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "review", provider: rvSel.id, system: AE.reviewSystemPrompt(), prompt: AE.promptReview({ level: lv, reqs: batch, parents, version: V }) }) });
-          meta = { provider: r.provider, label: r.label, model: r.model, sameAsGenerator: r.sameAsGenerator };
-          const v = AE.validateReview(AE.parseReviewJson(r.text), batch);
-          kept.push(...v.kept); dropped += v.dropped.length; done.push(...batch.map(b => b.id));
-        } catch (e) {
-          if ([401, 403, 409, 428, 500].includes(e.status)) { fatal = e; return; }   // 설정·권한 문제는 즉시 중단
-          if (isTimeout(e)) {
-            timeouts++;
-            if (batch.length > 1) { for (const one of batch) { if (fatal) return; await callBatch([one]); } return; }
-          }
-          failed += batch.length; lastErr = e;
+  // ── ② 검토 AI 의견 — 검토 범위(요구·아키텍처·상세설계·검증 명세) 1개를 검토 ──
+  // onProg(fraction 0~1, 표시 문구): 진행률 보고. 반환: { done, kept, dropped, failed, timeouts, fatal } (검토 기록은 이 안에서 모델에 반영)
+  async function reviewScopeRun(lv, mode, onProg) {
+    const S = AE.reviewScope(lv);
+    const targets = AE.reviewTargets(model, lv, mode, rvSel.id);
+    const res = { key: lv, label: S?.label || lv, total: targets.length, done: 0, kept: 0, dropped: 0, failed: 0, timeouts: 0, fatal: null, lastErr: null };
+    if (!targets.length) return res;
+    const kept = [], done = []; let meta = {};
+    const isTimeout = e => e?.status === 504 || e?.data?.code === "REVIEW_TIMEOUT" || /FUNCTION_INVOCATION_TIMEOUT|시간 초과/.test(String(e?.message || "") + String(e?.data?.raw || ""));
+    // 묶음 1회 호출 — 시간 초과면 1건씩 나눠 다시 보낸다(추론형 모델은 건수에 비례해 느려짐)
+    async function callBatch(batch) {
+      try {
+        const r = await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "review", provider: rvSel.id, system: AE.reviewSystemPrompt(), prompt: AE.reviewPrompt(model, lv, batch, V) }) });
+        meta = { provider: r.provider, label: r.label, model: r.model, sameAsGenerator: r.sameAsGenerator };
+        const v = AE.validateReviewScope(AE.parseReviewJson(r.text), batch, lv);
+        kept.push(...v.kept); res.dropped += v.dropped.length; done.push(...batch.map(b => b.id));
+      } catch (e) {
+        if ([401, 403, 409, 428, 500].includes(e.status)) { res.fatal = e; return; }   // 설정·권한 문제는 즉시 중단
+        if (isTimeout(e)) {
+          res.timeouts++;
+          if (batch.length > 1) { for (const one of batch) { if (res.fatal) return; await callBatch([one]); } return; }
         }
+        res.failed += batch.length; res.lastErr = e;
       }
-      for (let i = 0; i < targets.length && !fatal; i += AE.REVIEW_BATCH) {
-        const batch = targets.slice(i, i + AE.REVIEW_BATCH);
-        setProg({ percent: 5 + (i / targets.length) * 90, label: `${rvSel.label} 검토 중… (${Math.min(i + batch.length, targets.length)}/${targets.length})${timeouts ? " · 응답이 느려 1건씩 나눠 보내는 중" : ""}` });
-        await callBatch(batch);
-      }
-      // 중간에 설정·권한 오류로 멈춰도, 그 전까지 받은 의견은 버리지 않고 반영한다
-      if (fatal && !done.length) throw fatal;
-      if (!done.length) throw lastErr || new Error("모든 검토 호출이 실패했습니다.");
-      setModel(m => AE.applyReviewRun(m, { level: lv, reviewedIds: done, kept, meta: { ...meta, dropped, failed } }));
+    }
+    for (let i = 0; i < targets.length && !res.fatal; i += AE.REVIEW_BATCH) {
+      const batch = targets.slice(i, i + AE.REVIEW_BATCH);
+      onProg?.(i / targets.length, `${S?.proc || ""} ${S?.label || lv} ${Math.min(i + batch.length, targets.length)}/${targets.length}${res.timeouts ? " · 응답이 느려 1건씩 나눠 보내는 중" : ""}`);
+      await callBatch(batch);
+    }
+    res.done = done.length; res.kept = kept.length;
+    // 받은 의견은 중간에 멈췄더라도 반영 (검토한 항목만 '검토됨'으로 기록)
+    if (done.length) setModel(m => AE.applyReviewRun(m, { level: lv, reviewedIds: done, kept, meta: { ...meta, dropped: res.dropped, failed: res.failed } }));
+    return res;
+  }
+  function reviewSummary(r) {
+    return `검토 ${r.done}건 · 판정 대기 의견 ${r.kept}건 · 규칙으로 걸러낸 의견 ${r.dropped}건${r.failed ? ` · 실패 ${r.failed}건('변경분 검토'를 누르면 실패분만 다시 보냅니다)` : ""}${r.fatal ? ` · 중단: ${r.fatal.message}` : ""}${r.timeouts ? ` · 시간 초과로 나눠 보낸 묶음 ${r.timeouts}회` : ""}`;
+  }
+  function needReviewer() {
+    if (!rv || rv.error) throw new Error(rv?.error || "검토 AI 설정을 불러오지 못했습니다.");
+    if (!rvSel || !rvSel.ready) throw new Error("사용 가능한 검토 AI가 없습니다. 설정 → AI 연동 → 검토 AI에서 Gemini 또는 ChatGPT의 API 키와 모델을 등록하세요.");
+  }
+  // 선택한 산출물 1개 검토
+  function aiReview(mode) {
+    const lv = rvLevel, S = AE.reviewScope(lv);
+    return run(`검토 AI 의견 수집 (${S?.proc} ${S?.label})`, async () => {
+      needReviewer();
+      if (!AE.reviewTargets(model, lv, mode, rvSel.id).length) return "다시 검토할 항목이 없습니다 — 마지막 검토 이후 바뀐 항목이 없습니다.";
+      const r = await reviewScopeRun(lv, mode, (f, label) => setProg({ percent: 5 + f * 90, label: `${rvSel.label} 검토 중… ${label}` }));
+      if (!r.done) throw r.fatal || r.lastErr || new Error("모든 검토 호출이 실패했습니다.");
       setRvFilter("open");
-      return `검토 ${done.length}건 · 판정 대기 의견 ${kept.length}건 · 규칙으로 걸러낸 의견 ${dropped}건${failed ? ` · 실패 ${failed}건('변경분 검토'를 누르면 실패분만 다시 보냅니다)` : ""}${fatal ? ` · 중단: ${fatal.message}` : ""}${timeouts ? ` · 시간 초과로 나눠 보낸 묶음 ${timeouts}회` : ""}`;
+      return reviewSummary(r);
+    });
+  }
+  // 검토 범위 전체(현재 개발 범위의 모든 V-모델 산출물) — 변경분만 차례로 검토
+  function aiReviewAll() {
+    return run("V-모델 산출물 전체 교차검토 (변경분)", async () => {
+      needReviewer();
+      const plan = AE.reviewScopesFor(model).map(S => ({ S, n: AE.reviewTargets(model, S.key, "changed", rvSel.id).length })).filter(x => x.n > 0);
+      const total = plan.reduce((a, x) => a + x.n, 0);
+      if (!total) return `다시 검토할 항목이 없습니다 — ${rvSel.label} 기준으로 모든 산출물이 현재 내용으로 검토되어 있습니다.`;
+      let base = 0; const results = [];
+      for (const { S, n } of plan) {
+        const r = await reviewScopeRun(S.key, "changed", (f, label) => setProg({ percent: 3 + ((base + f * n) / total) * 94, label: `${rvSel.label} 검토 중… [${results.length + 1}/${plan.length}] ${label}` }));
+        results.push(r); base += n;
+        if (r.fatal) break;   // 설정·권한 오류는 다른 산출물에서도 같으므로 중단
+      }
+      const sum = k => results.reduce((a, r) => a + r[k], 0);
+      const fatal = results.find(r => r.fatal)?.fatal;
+      if (!sum("done")) throw fatal || results.find(r => r.lastErr)?.lastErr || new Error("모든 검토 호출이 실패했습니다.");
+      setRvFilter("open");
+      return `산출물 ${results.length}종 · 검토 ${sum("done")}건 · 판정 대기 의견 ${sum("kept")}건 · 걸러낸 의견 ${sum("dropped")}건${sum("failed") ? ` · 실패 ${sum("failed")}건(다시 누르면 실패·미검토분만 보냅니다)` : ""}${fatal ? ` · 중단: ${fatal.message}` : ""}`;
     });
   }
 
@@ -9208,18 +9251,25 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
 
           {tab === "review" && (() => {
             const v = AE.reviewView(model);
+            const S = AE.reviewScope(rvLevel) || AE.reviewScope("SYS");
+            const K = AE.REVIEW_KINDS[S.kind];
             const cnt = v.count(rvLevel);
-            const levels = ["SYS", ...(model.scope.SW ? ["SW"] : [])];
-            const lvReqs = model.reqs[rvLevel] || [];
-            const qf = lvReqs.filter(r => AE.qualityFlags(r).length).length;
+            const scopes = AE.reviewScopesFor(model);
+            const cov = AE.reviewCoverage(model, rvSel?.id || "");
+            const covOf = Object.fromEntries(cov.map(c => [c.key, c]));
+            const lvItems = AE.reviewItems(model, rvLevel);
+            const itemIds = new Set(lvItems.map(it => it.id));
+            const qf = S.kind === "req" ? (model.reqs[S.lv] || []).filter(r => AE.qualityFlags(r).length).length : 0;
+            const ruleHere = findings.filter(f => (f.ids || []).some(id => itemIds.has(id)));
             const sevN = k => findings.filter(f => f.sev === k).length;
-            const critLabel = Object.fromEntries(AE.REVIEW_CRITERIA.map(c => [c.code, c.label]));
+            const critLabel = Object.fromEntries(K.criteria.map(c => [c.code, c.label]));
             const sevColor = { major: T.red, minor: T.amber, info: T.muted };
             const jColor = { valid: T.green, invalid: T.muted, opinion: T.accent };
             const reviewers = [...new Set(v.list.filter(f => f.level === rvLevel).map(f => f.reviewer || f.provider || "검토 AI"))];
             const list = v.list.filter(f => f.level === rvLevel).filter(f => rvBy === "all" || (f.reviewer || f.provider || "검토 AI") === rvBy).filter(f => rvFilter === "all" ? true : rvFilter === "open" ? !f.judge : f.judge?.state === rvFilter);
             const lastRun = [...v.runs].reverse().find(r => r.level === rvLevel && (!rvSel || r.provider === rvSel.id));
-            const changedN = AE.reviewTargets(model, rvLevel, "changed", rvSel?.id || "").length;
+            const changedN = rvSel ? AE.reviewTargets(model, rvLevel, "changed", rvSel.id).length : lvItems.length;
+            const allChangedN = rvSel ? scopes.reduce((a, x) => a + AE.reviewTargets(model, x.key, "changed", rvSel.id).length, 0) : 0;
             const readyList = (rv?.available || []).filter(a => a.ready);
             const judge = (f, state) => {
               let note = "";
@@ -9230,27 +9280,64 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               setModel(m => AE.judgeReview(m, [f.key], state, note));
             };
             const chip = (label, val, color) => <span style={{ padding: "4px 10px", borderRadius: 8, background: color + "18", border: `1px solid ${color}44`, color, fontSize: 11 }}>{label} <b>{val}</b></span>;
+            const totItems = cov.reduce((a, c) => a + c.total, 0), totAny = cov.reduce((a, c) => a + c.reviewedAny, 0);
+            const totOpen = cov.reduce((a, c) => a + c.open, 0), totValid = cov.reduce((a, c) => a + c.valid, 0);
+            const cell = { padding: "5px 6px", borderTop: `1px solid ${T.border}` };
             return (<>
               <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8, lineHeight: 1.6 }}>
-                <b style={{ color: T.text }}>3단 교차검토</b> — ① 규칙 엔진이 결정론적으로 점검하고, ② 생성 AI와 <b>다른</b> 검토 AI가 요구 품질 의견을 내며(의견의 대상 ID·기준·근거 인용은 규칙으로 다시 검증), ③ QA 담당자가 유효·무효·의견으로 판정합니다. 심사 증적은 ③ 판정 기록입니다.
+                <b style={{ color: T.text }}>3단 교차검토</b> — 생성한 V-모델 산출물 전부(요구·아키텍처·상세설계·검증 명세)를 대상으로 ① 규칙 엔진이 결정론적으로 점검하고, ② 생성 AI와 <b>다른</b> 검토 AI가 산출물 종류별 기준으로 의견을 내며(의견의 대상 ID·기준·근거 인용은 규칙으로 다시 검증), ③ QA 담당자가 유효·무효·의견으로 판정합니다. 심사 증적은 ③ 판정 기록입니다.
               </div>
-              <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
-                {levels.map(lv => <button key={lv} onClick={() => setRvLevel(lv)} style={{ ...small, background: rvLevel === lv ? T.accent : "none", color: rvLevel === lv ? "#fff" : T.accent }}>{AE.LEVELS[lv].reqProc} {AE.LEVELS[lv].label} 요구 ({(model.reqs[lv] || []).length})</button>)}
-              </div>
+
+              <AeSec title={`검토 범위·현황 — 산출물 ${cov.length}종 · 항목 ${totItems}건 중 현재 내용으로 검토됨 ${totAny}건 · 미판정 ${totOpen} · 유효(수정 필요) ${totValid}`}
+                right={<button disabled={busy || !rvSel?.ready || !allChangedN} onClick={aiReviewAll} title="개발 범위의 모든 산출물에서 아직 검토하지 않았거나 바뀐 항목만 차례로 보냅니다 (선택한 검토 AI 기준)" style={{ ...small, background: allChangedN ? T.accent : "none", color: allChangedN ? "#fff" : T.muted, borderColor: allChangedN ? T.accent : T.border }}>전체 산출물 변경분 검토 ({allChangedN})</button>}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead><tr style={{ color: T.muted, textAlign: "left" }}>
+                      <th style={{ padding: "4px 6px", width: 46 }}>구분</th><th style={{ padding: "4px 6px" }}>산출물</th><th style={{ padding: "4px 6px", width: 70 }}>검토 기준</th>
+                      <th style={{ padding: "4px 6px", width: 54, textAlign: "right" }}>항목</th><th style={{ padding: "4px 6px", width: 150 }}>검토됨 (현재 내용 기준)</th>
+                      <th style={{ padding: "4px 6px", width: 54, textAlign: "right" }}>미판정</th><th style={{ padding: "4px 6px", width: 54, textAlign: "right" }}>유효</th><th style={{ padding: "4px 6px", width: 70 }}>상태</th>
+                    </tr></thead>
+                    <tbody>{cov.map(c => {
+                      const pct = c.total ? Math.round(c.reviewedAny / c.total * 100) : 0;
+                      const st = !c.total ? ["항목 없음", T.muted] : c.reviewedAny < c.total ? ["검토 필요", T.amber] : c.open ? ["판정 필요", T.accent] : ["완료", T.green];
+                      return (
+                        <tr key={c.key} onClick={() => setRvLevel(c.key)} style={{ cursor: "pointer", background: rvLevel === c.key ? T.accent + "14" : "transparent" }}>
+                          <td style={{ ...cell, color: T.muted }}>{c.group}</td>
+                          <td style={{ ...cell }}><span style={{ color: T.muted }}>{c.proc}</span> {c.label}</td>
+                          <td style={{ ...cell, color: T.muted }}>{AE.REVIEW_KINDS[c.kind].ver}</td>
+                          <td style={{ ...cell, textAlign: "right" }}>{c.total}</td>
+                          <td style={{ ...cell }}>{c.total ? <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ flex: 1, height: 5, background: T.border, borderRadius: 3, overflow: "hidden" }}><span style={{ display: "block", width: `${pct}%`, height: "100%", background: pct === 100 ? T.green : T.amber }} /></span>{c.reviewedAny}/{c.total}</span> : "-"}</td>
+                          <td style={{ ...cell, textAlign: "right", color: c.open ? T.accent : T.muted }}>{c.open}</td>
+                          <td style={{ ...cell, textAlign: "right", color: c.valid ? T.red : T.muted }}>{c.valid}</td>
+                          <td style={{ ...cell, color: st[1] }}>{st[0]}{c.stale ? <div style={{ fontSize: 9.5, color: T.amber }}>내용 변경 {c.stale}</div> : null}</td>
+                        </tr>);
+                    })}</tbody>
+                  </table>
+                </div>
+                <div style={{ fontSize: 10, color: T.muted, marginTop: 6, lineHeight: 1.6 }}>
+                  '검토됨'은 어느 검토 AI든 <b>지금 내용 그대로</b> 검토한 항목 수입니다. 검토 후 내용이 바뀌면 다시 '검토 필요'가 됩니다. 행을 누르면 아래 ②·③이 그 산출물로 바뀝니다.<br />
+                  AI 검토 대상이 아닌 산출물: {AE.REVIEW_EXCLUDED.map(x => `${x.doc ? AE.ASPICE_DOCS[x.doc].title : x.label}(${x.why})`).join(" · ")}
+                </div>
+              </AeSec>
+
+              <div style={{ fontSize: 12, fontWeight: 700, margin: "4px 0 8px" }}>선택한 산출물: <span style={{ color: T.accent }}>{S.proc} {S.label}</span> <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· {K.noun} {lvItems.length}건</span></div>
 
               <AeSec title="① 규칙 검사 — 결정론적 (같은 입력이면 같은 결과)" right={<button onClick={() => setTab("trace")} style={small}>추적성·충족도에서 보기</button>}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {chip("V-모델 오류", sevN("error"), sevN("error") ? T.red : T.green)}
                   {chip("경고", sevN("warn"), sevN("warn") ? T.amber : T.green)}
                   {chip("정보", sevN("info"), T.muted)}
-                  {chip(`${AE.LEVELS[rvLevel].reqProc} 요구 품질 플래그`, `${qf} / ${lvReqs.length}`, qf ? T.amber : T.green)}
+                  {S.kind === "req"
+                    ? chip(`${S.proc} 요구 품질 플래그`, `${qf} / ${lvItems.length}`, qf ? T.amber : T.green)
+                    : chip(`${S.proc} 관련 규칙 지적`, ruleHere.length, ruleHere.some(f => f.sev === "error") ? T.red : ruleHere.length ? T.amber : T.green)}
                 </div>
-                <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>추적성 단절·할당 누락·검증 기준 누락·모호어·복합 요구 등은 AI 없이 규칙으로 판정합니다.</div>
+                {S.kind !== "req" && ruleHere.length > 0 && <div style={{ marginTop: 6 }}>{ruleHere.slice(0, 6).map((f, i) => <div key={i} style={{ fontSize: 10.5, color: f.sev === "error" ? T.red : f.sev === "warn" ? T.amber : T.muted }}>· {f.msg}</div>)}</div>}
+                <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>추적성 단절·할당 누락·검증 기준 누락·시험 미연결·모호어·복합 요구 등은 AI 없이 규칙으로 판정합니다.</div>
               </AeSec>
 
-              <AeSec title="② 검토 AI 의견 — 의미 품질 (참고 의견)" right={<>
-                <button disabled={busy || !lvReqs.length} onClick={() => aiReview("changed")} style={small} title="아직 검토하지 않았거나 마지막 검토 이후 바뀐 요구만 보냅니다">변경분 검토 ({changedN})</button>
-                <button disabled={busy || !lvReqs.length} onClick={() => aiReview("all")} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>전체 검토 ({lvReqs.length})</button>
+              <AeSec title={`② 검토 AI 의견 — ${S.label} (참고 의견)`} right={<>
+                <button disabled={busy || !lvItems.length} onClick={() => aiReview("changed")} style={small} title="아직 검토하지 않았거나 마지막 검토 이후 바뀐 항목만 보냅니다 (선택한 검토 AI 기준)">변경분 검토 ({changedN})</button>
+                <button disabled={busy || !lvItems.length} onClick={() => aiReview("all")} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }} title="이 산출물의 항목을 변경 여부와 관계없이 모두 다시 보냅니다">전체 검토 ({lvItems.length})</button>
               </>}>
                 {!rv && <div style={{ fontSize: 11, color: T.muted }}>검토 AI 설정을 불러오는 중…</div>}
                 {rv?.error && <div style={{ fontSize: 11, color: T.red }}>검토 AI 설정 조회 실패: {rv.error}</div>}
@@ -9262,16 +9349,18 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     {rvSel && !rvSel.sameAsGenerator && <span style={{ color: T.green, fontSize: 10.5 }}>✓ 생성 AI(Claude)와 다른 모델 — 독립 검토</span>}
                     {rvSel?.sameAsGenerator && <span style={{ color: T.amber, fontSize: 10.5 }}>⚠ 생성 AI와 같은 계열 — 독립성 낮음 (다른 검토 AI 권장)</span>}
                   </div>)}
-                {readyList.length > 1 && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 4 }}>같은 요구를 여러 검토 AI로 각각 검토할 수 있습니다. 검토 AI별 의견은 따로 보관되며 ③에서 함께 판정합니다.</div>}
+                {readyList.length > 1 && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 4 }}>같은 항목을 여러 검토 AI로 각각 검토할 수 있습니다. 검토 AI별 의견은 따로 보관되며 ③에서 함께 판정합니다.</div>}
                 <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6, lineHeight: 1.6 }}>
-                  검토 기준 {AE.REVIEW_CRITERIA_VER} ({AE.REVIEW_CRITERIA_BASIS}): {AE.REVIEW_CRITERIA.map(c => c.label).join(" · ")}
+                  검토 기준 {K.ver} ({K.basis}): {K.criteria.map(c => c.label).join(" · ")}
+                  {S.kind === "unit" && <><br />상세설계가 TBD(코드 확정 후 작성)인 유닛은 그 미작성 자체를 지적하지 않고, 유닛명·할당 요구·인터페이스의 일관성과 책임을 봅니다.</>}
+                  {S.kind === "test" && <><br />TBD로 명시된 부분은 지적하지 않고, 시험이 대상을 실제로 검증하는지·합격 여부를 판정할 수 있는지를 중심으로 봅니다.</>}
                 </div>
                 {lastRun && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 4 }}>
-                  마지막 검토 {String(lastRun.at).slice(0, 16).replace("T", " ")} · {lastRun.label || lastRun.provider} {lastRun.model} · 검토 {lastRun.reviewed}건 · 판정 대기로 등록 {lastRun.kept}건 · 규칙으로 걸러냄 {lastRun.dropped}건{lastRun.failed ? ` · 실패 ${lastRun.failed}건` : ""}
+                  마지막 검토 {String(lastRun.at).slice(0, 16).replace("T", " ")} · {lastRun.label || lastRun.provider} {lastRun.model} · 기준 {lastRun.criteria} · 검토 {lastRun.reviewed}건 · 판정 대기로 등록 {lastRun.kept}건 · 규칙으로 걸러냄 {lastRun.dropped}건{lastRun.failed ? ` · 실패 ${lastRun.failed}건` : ""}
                 </div>}
               </AeSec>
 
-              <AeSec title={`③ QA 담당자 판정 — 미판정 ${cnt.open} · 유효 ${cnt.valid} · 무효 ${cnt.invalid} · 의견 ${cnt.opinion}${cnt.stale ? ` · 요구 변경됨 ${cnt.stale}` : ""}`}
+              <AeSec title={`③ QA 담당자 판정 — 미판정 ${cnt.open} · 유효 ${cnt.valid} · 무효 ${cnt.invalid} · 의견 ${cnt.opinion}${cnt.stale ? ` · 내용 변경됨 ${cnt.stale}` : ""}`}
                 right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정"], ["valid", "유효"], ["invalid", "무효"], ["opinion", "의견"], ["all", "전체"]].map(([k, l]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.accent }}>{l}</button>)}</div>}>
                 {!cnt.total && <div style={{ fontSize: 11, color: T.muted }}>아직 검토 AI 의견이 없습니다. ②에서 검토를 실행하세요.</div>}
                 {cnt.total > 0 && !list.length && <div style={{ fontSize: 11, color: T.muted }}>해당하는 항목이 없습니다.</div>}
@@ -9279,14 +9368,14 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                       <thead><tr style={{ color: T.muted, textAlign: "left" }}>
-                        <th style={{ padding: "4px 6px", width: 80 }}>요구</th><th style={{ padding: "4px 6px", width: 92 }}>기준·심각도</th>
+                        <th style={{ padding: "4px 6px", width: 96 }}>대상</th><th style={{ padding: "4px 6px", width: 92 }}>기준·심각도</th>
                         <th style={{ padding: "4px 6px" }}>검토 의견</th><th style={{ padding: "4px 6px", width: 200 }}>판정</th>
                       </tr></thead>
                       <tbody>{list.map(f => (
                         <tr key={f.key} style={{ borderTop: `1px solid ${T.border}`, verticalAlign: "top", opacity: f.judge?.state === "invalid" ? 0.6 : 1 }}>
-                          <td style={{ padding: "6px", fontFamily: "monospace" }}>{f.reqId}
-                            {f.stale && <div style={{ color: T.amber, fontSize: 9.5, fontFamily: "inherit" }}>요구 변경됨</div>}
-                            {f.removed && <div style={{ color: T.red, fontSize: 9.5, fontFamily: "inherit" }}>요구 삭제됨</div>}</td>
+                          <td style={{ padding: "6px", fontFamily: "monospace", wordBreak: "break-all" }}>{f.reqId}
+                            {f.stale && <div style={{ color: T.amber, fontSize: 9.5, fontFamily: "inherit" }}>내용 변경됨 — 재검토 권장</div>}
+                            {f.removed && <div style={{ color: T.red, fontSize: 9.5, fontFamily: "inherit" }}>대상 삭제됨</div>}</td>
                           <td style={{ padding: "6px" }}><div>{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }} title={f.reviewerModel}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}</td>
                           <td style={{ padding: "6px", lineHeight: 1.5 }}>
                             <div style={{ color: T.muted, fontSize: 10 }}>{f.reqTitle}</div>
