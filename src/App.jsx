@@ -455,8 +455,50 @@ const josaEun = w => hasJongseong(w) ? "은" : "는";   // 보조사
 // 이유: 작업자는 로그인 계정이 아니라 문서에 기재되는 이름이므로, 계정 기반
 //       도구(Jira·Asana)식 제한은 부적합하다. 착수 시점에 명단이 미확정인
 //       경우가 많은 SI 프로젝트 특성상 입력 차단은 작업을 막는 부작용이 크다.
+// 역할 목록 — 과제 유형(track)에 종속. 역할 칸은 자유 입력이며 목록은 입력 제안(datalist)이다.
+// PM·PL·QA·CM·기타는 두 과제 유형 공통 표기(같은 문자열)로 두어 과제 유형을 바꿔도 그대로 맞는다.
 const TEAM_ROLE_OPTIONS = ["PM", "PL", "품질보증담당자(QA)", "형상관리담당자(CM)",
   "분석/설계", "개발", "테스트", "아키텍트", "DBA", "인프라", "기술지원", "고객담당", "기타"];
+// ASPICE 자동차 과제 — 역할 ↔ 주로 맡는 프로세스. when: 개발 범위·적용 범위에 따라 표시 여부 결정
+const ASPICE_TEAM_ROLES = [
+  { value: "PM",                  note: "MAN.3 프로젝트 관리" },
+  { value: "SW PL",               note: "SW 개발 리드" },
+  { value: "시스템 엔지니어",      note: "SYS.2·SYS.3 시스템 요구·아키텍처" },
+  { value: "SW 아키텍트",          note: "SWE.2 SW 아키텍처" },
+  { value: "SW 개발자",            note: "SWE.3·SWE.4 상세설계·구현·단위검증" },
+  { value: "SW 통합·검증 담당",     note: "SWE.5·SWE.6 SW 통합·검증" },
+  { value: "시스템 통합·검증 담당", note: "SYS.4·SYS.5 시스템 통합·검증" },
+  { value: "HW 엔지니어",          note: "HWE.1~4 HW 엔지니어링", when: "HW" },
+  { value: "품질보증담당자(QA)",   note: "SUP.1 품질보증" },
+  { value: "형상관리담당자(CM)",   note: "SUP.8 형상관리 (SUP.9·10 겸임 흔함)" },
+  { value: "협력사 관리 담당",      note: "ACQ.4 공급자 모니터링", when: "ACQ" },
+  { value: "고객 대응(OEM·Tier1)", note: "고객 요구·변경 요청 창구" },
+  { value: "기타",                note: "" },
+];
+// 두 과제 유형 모두에서 자연스러운 역할 — 과제 유형을 바꿔도 경고하지 않는다
+const TEAM_ROLE_COMMON = ["PM", "PL", "품질보증담당자(QA)", "형상관리담당자(CM)", "기타"];
+// 과제 유형·개발 범위·적용 범위에 맞는 역할 제안 목록 [{ value, note }]
+function teamRolesFor(form, tailoring) {
+  if (form?.track !== "aspice") return TEAM_ROLE_OPTIONS.map(v => ({ value: v, note: "" }));
+  const dev = aspiceDevOf(form);
+  const scope = tailoring?.aspiceScope || aspiceScopeDefault(dev);
+  return ASPICE_TEAM_ROLES.filter(r => r.when === "HW" ? dev !== "SW" : r.when === "ACQ" ? aspiceGroupOn(scope, "ACQ") : true);
+}
+// 입력된 역할이 현재 과제 유형·범위와 어긋나면 사유를 돌려준다 (직접 입력한 고유 역할은 문제 삼지 않음)
+function teamRoleMismatch(role, form, tailoring) {
+  const r = String(role || "").trim();
+  if (!r) return "";
+  const cur = teamRolesFor(form, tailoring).map(x => x.value);
+  if (cur.includes(r) || TEAM_ROLE_COMMON.includes(r)) return "";
+  if (form?.track === "aspice") {
+    if (TEAM_ROLE_OPTIONS.includes(r)) return "일반 SI 과제 역할";
+    const a = ASPICE_TEAM_ROLES.find(x => x.value === r);
+    if (a?.when === "HW") return "개발 범위에 HW가 없음";
+    if (a?.when === "ACQ") return "적용 범위에 ACQ.4가 꺼져 있음";
+    return "";
+  }
+  return ASPICE_TEAM_ROLES.some(x => x.value === r) ? "ASPICE 자동차 과제 역할" : "";
+}
 
 function newMemberId() { return "m" + Math.random().toString(36).slice(2, 9); }
 // 이름 비교용 정규화 — 공백 차이("홍 길동" vs "홍길동")를 동일인으로 본다
@@ -1901,7 +1943,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         })}
       </div>
       <Card style={{ padding:20, minHeight:300, marginBottom:16 }}>
-        {step===0 && <StepInfo form={form} setForm={setForm} onChooseTrack={chooseTrack} osspChosen={!!selectedOSSP} />}
+        {step===0 && <StepInfo form={form} setForm={setForm} onChooseTrack={chooseTrack} osspChosen={!!selectedOSSP} tailoring={tailoring} />}
         {step===1 && <StepSDLC factors={sdlcFactors} setFactors={setSdlcFactors} selected={selectedSDLC} setSelected={setSelectedSDLC} recommendation={sdlcRecommendation} recommending={recommending} genError={genError} onRecommend={onRecommendSDLC} />}
         {step===2 && <StepOSSP selected={selectedOSSP} setSelected={setSelectedOSSP} customOSSP={customOSSP} sdlc={selectedSDLC} track={form.track} />}
         {step===3 && isAspiceTrack && cl !== "CL3" && <AspiceScopeStep form={form} onDevChange={dev => setForm(p => ({ ...p, aspiceDev: dev }))} tailoring={tailoring} setTailoring={setTailoring} ossp={selectedOSSP} setOssp={setSelectedOSSP} customOSSP={customOSSP} />}
@@ -2208,7 +2250,9 @@ function ProjectDocSettings({ form, setForm, f }) {
 }
 
 // 프로젝트 수행 팀원 등록 — WBS 작업자 콤보박스의 원천 명단
-function TeamMembersEditor({ form, setForm }) {
+function TeamMembersEditor({ form, setForm, tailoring }) {
+  const roleOpts = teamRolesFor(form, tailoring);
+  const isAspice = form?.track === "aspice";
   const members = form.members || [];
   const setMembers = updater => setForm(p => ({ ...p, members: typeof updater === "function" ? updater(p.members || []) : updater }));
   const upd = (id, k, v) => setMembers(ms => ms.map(m => m.id === id ? { ...m, [k]: v, ...(k === "name" ? { auto: false } : {}) } : m));
@@ -2265,8 +2309,12 @@ function TeamMembersEditor({ form, setForm }) {
                     color: T.amber, border: `1px solid ${T.amber}66`, borderRadius: 4, padding: "1px 4px" }}>자동</span>}
               </div>
               <div style={{ flex: 2, minWidth: 90 }}>
+                {(() => { const why = teamRoleMismatch(m.role, form, tailoring); return (<>
                 <input value={m.role || ""} onChange={e => upd(m.id, "role", e.target.value)} list="spq-team-roles"
-                  placeholder="예: 개발" style={cellInp} />
+                  placeholder={isAspice ? "예: SW 개발자" : "예: 개발"} title={why ? `현재 과제와 맞지 않는 역할입니다 — ${why}` : ""}
+                  style={why ? { ...cellInp, borderColor: T.amber + "88" } : cellInp} />
+                {why && <div style={{ fontSize: 9.5, color: T.amber, marginTop: 2 }}>⚠ {why}</div>}
+                </>); })()}
               </div>
               <div style={{ flex: 2, minWidth: 90 }}>
                 <input value={m.org || ""} onChange={e => upd(m.id, "org", e.target.value)}
@@ -2277,7 +2325,11 @@ function TeamMembersEditor({ form, setForm }) {
                   cursor: "pointer", fontSize: 14, fontFamily: "inherit", padding: 0 }}>×</button>
             </div>
           ))}
-          <datalist id="spq-team-roles">{TEAM_ROLE_OPTIONS.map(r => <option key={r} value={r} />)}</datalist>
+          <datalist id="spq-team-roles">{roleOpts.map(r => <option key={r.value} value={r.value}>{r.note || undefined}</option>)}</datalist>
+          {(() => { const n = members.filter(m => teamRoleMismatch(m.role, form, tailoring)).length; return n > 0 && (
+            <div style={{ fontSize: 10, color: T.amber }}>
+              ⚠ 현재 과제({isAspice ? "ASPICE 자동차" : "일반 SI"})와 맞지 않는 역할 {n}건 — 역할 칸을 눌러 목록에서 다시 골라 주세요. 값은 자동으로 바꾸지 않습니다.
+            </div>); })()}
           {autoCount > 0 && (
             <div style={{ fontSize: 10, color: T.amber }}>
               ⚠ 자동 등록 {autoCount}명 — 오타로 등록된 이름이 없는지 확인하세요.
@@ -2289,7 +2341,7 @@ function TeamMembersEditor({ form, setForm }) {
   );
 }
 
-function StepInfo({ form, setForm, onChooseTrack, osspChosen }) {
+function StepInfo({ form, setForm, onChooseTrack, osspChosen, tailoring }) {
   const f = k => v => setForm(p=>({...p,[k]:v}));
   // 로고 업로드: dataURL + 원본 크기(폭/높이) 저장 — docx 임베드 시 비율 유지에 사용
   const readLogo = k => e => {
@@ -2333,7 +2385,7 @@ function StepInfo({ form, setForm, onChooseTrack, osspChosen }) {
           {form.track === "aspice" && <div style={{ fontSize:10, color:T.muted, marginTop:5, lineHeight:1.6 }}>{projectTypesFor("aspice").find(t => t.value === fitProjectType("aspice", form.type))?.desc}</div>}
         </div>
         <Input label="PM *" value={form.pm} onChange={f("pm")} placeholder="예: 홍길동" />
-        <TeamMembersEditor form={form} setForm={setForm} />
+        <TeamMembersEditor form={form} setForm={setForm} tailoring={tailoring} />
         <Input label="시작일 *" type="date" value={form.startDate} onChange={f("startDate")} />
         <Input label="종료일 *" type="date" value={form.endDate} onChange={f("endDate")} />
         {/* 이번 프로젝트 문서 설정 — 비워둔 항목은 설정(설정 → 조직·문서 기본값)의 값이 사용된다.
