@@ -5287,11 +5287,11 @@ function makeReqDocx(meta, ctx, phase, kind, doc) {
   const inTree = kind !== "def" && docWbs.split(".").length >= 3 && leaves.some(l => under(l.wbsNo, docWbs) || under(docWbs, l.wbsNo));
   const moduleItems = inTree ? items.filter(it => !isCommon(it) && under(String(it.wbsNo), docWbs)) : [];
   const commonItems = inTree ? items.filter(isCommon) : [];
-  const docCode = kind === "spec" ? "RD1301" : kind === "def" ? "RD1202" : "RD1202·RD1301";
+  const docCode = doc?.aspice && doc?.code ? doc.code : kind === "spec" ? "RD1301" : kind === "def" ? "RD1202" : "RD1202·RD1301";
   const docNo = projectDocNo(meta, docCode);
   const today = new Date().toLocaleDateString("ko-KR");
   const ap = docApprovers(meta);   // 설정의 작성/검토/승인자
-  const title = kind === "def" ? "요구사항 정의서" : kind === "spec" ? "요구사항 명세서" : "요구사항 정의서·명세서";
+  const title = doc?.aspice && doc?.name ? doc.name : kind === "def" ? "요구사항 정의서" : kind === "spec" ? "요구사항 명세서" : "요구사항 정의서·명세서";
   const cnt = t => items.filter(i => i.type === t).length;
   const { front, pkgOpts } = docxStdParts({ title, docCode: docNo, phase: phase || "요구정의", meta });
   let body =
@@ -7614,14 +7614,26 @@ function buildAspiceDoc(kind, meta, ctx0, doc) {
 // ASPICE V-모델 산출물 패키지 ZIP — 범위 내 생성 가능한 문서 전부 + 일관성 점검 보고
 async function downloadAspicePackage(meta, ctx) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
-  const order = ["STK_LIST", "SYS_AD", "SW_RS", "SW_AD", "SW_DD", "HW_RS", "HW_AD", "V_SYS5", "V_SYS4", "V_SWE6", "V_SWE5", "V_SWE4", "V_HWE4", "V_HWE3", "R_SYS5", "R_SYS4", "R_SWE6", "R_SWE5", "R_SWE4", "R_HWE4", "R_HWE3", "RTM"];
+  const order = ["STK_LIST", "SYS_RS", "SYS_AD", "SW_RS", "SW_AD", "SW_DD", "HW_RS", "HW_AD", "V_SYS5", "V_SYS4", "V_SWE6", "V_SWE5", "V_SWE4", "V_HWE4", "V_HWE3", "R_SYS5", "R_SYS4", "R_SWE6", "R_SWE5", "R_SWE4", "R_HWE4", "R_HWE3", "RTM"];
   const files = [];
-  order.forEach((k, i) => {
-    if (!aspiceCanBuild(k, ctx)) return;
-    const D = AE.ASPICE_DOCS[k];
+  for (let i = 0; i < order.length; i++) {
+    const k = order[i], D = AE.ASPICE_DOCS[k];
+    const path = ext => `${String(i + 1).padStart(2, "0")}_${D.code}_${sanitize(D.title)}.${ext}`;
+    // SYS.2 시스템 요구사항 명세서: 확정 요구(items)를 산출물 단계와 같은 경로로 생성
+    // — OSSP 등록 템플릿(SY2102)에 채움 → 템플릿이 없거나 채움 실패 시 자체 생성(문서명·코드는 ASPICE 기준)
+    if (k === "SYS_RS") {
+      if (!ctx?.requirements?.items?.length) continue;
+      const doc = { name: D.title, code: D.code, aspice: true };
+      let of = null;
+      try { of = await resolveReqDocFromTemplate(doc, "spec", meta, ctx); } catch (_) { of = null; }
+      if (!of) of = { ext: "docx", bytes: makeReqDocx(meta, ctx, `${D.proc} 시스템 요구사항 분석`, "spec", doc) };
+      files.push({ path: path(of.ext), content: of.bytes });
+      continue;
+    }
+    if (!aspiceCanBuild(k, ctx)) continue;
     const of = buildAspiceDoc(k, meta, ctx, { name: D.title, code: D.code });
-    files.push({ path: `${String(i + 1).padStart(2, "0")}_${D.code}_${sanitize(D.title)}.${of.ext}`, content: of.bytes });
-  });
+    files.push({ path: path(of.ext), content: of.bytes });
+  }
   if (!files.length) throw new Error("생성할 수 있는 ASPICE 산출물이 없습니다. 시스템 요소·하위 요구·검증 수단을 먼저 작성하세요.");
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
   const url = URL.createObjectURL(blob);
@@ -8825,7 +8837,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     setModel(m => AE.removeLinks(m, keys, String(reviewNote[up] || "").trim() || "상위 요구 삭제에 따른 연결 제거"));
   }
   async function downloadPkg() {
-    try { const ctx = { requirements: { ...(requirements || {}), items, aspice: model } }; const n = await downloadAspicePackage(form || {}, ctx); setNote(`ASPICE 산출물 ${n}건 ZIP 다운로드를 시작했습니다.`); }
+    try { const ctx = { requirements: { ...(requirements || {}), items, aspice: model }, ossp, tailoring }; const n = await downloadAspicePackage(form || {}, ctx); setNote(`ASPICE 산출물 ${n}건 ZIP 다운로드를 시작했습니다.`); }
     catch (x) { setErr(x.message); }
   }
 
@@ -9390,7 +9402,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             })()}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="이해관계자 요구 목록·아키텍처·요구·상세설계·검증 명세·추적 매트릭스를 한 번에 내려받습니다 (저장 전 편집 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 산출물 ZIP</Btn>
+            <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="이해관계자 요구 목록·시스템 요구사항 명세서·아키텍처·하위 요구·상세설계·검증 명세·추적 매트릭스를 한 번에 내려받습니다 (저장 전 편집 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 산출물 ZIP</Btn>
             <Btn variant="outline" onClick={onClose} style={{ fontSize: 12, padding: "7px 14px" }}>취소</Btn>
             <Btn onClick={save} disabled={busy} style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
           </div>
@@ -9448,7 +9460,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                   : "먼저 '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2 요구사항을 확정하세요 (DBC만으로 시작할 수도 있습니다)"}
             </div>
           </div>
-          {am && am.reqs.SYS.length > 0 && <Btn variant="outline" onClick={async()=>{ try { await downloadAspicePackage(form || {}, { requirements, tailoring: pdpCtx?.tailoring }); } catch(e) { alert(e.message); } }} title="V-모델 산출물 전체(이해관계자 요구 목록·아키텍처·요구·상세설계·검증 명세·추적 매트릭스) ZIP" style={{ fontSize:11.5, padding:"6px 12px", marginRight:6 }}>📦 ZIP</Btn>}
+          {am && am.reqs.SYS.length > 0 && <Btn variant="outline" onClick={async()=>{ try { await downloadAspicePackage(form || {}, { requirements, tailoring: pdpCtx?.tailoring, ossp: pdpCtx?.ossp }); } catch(e) { alert(e.message); } }} title="V-모델 산출물 전체(이해관계자 요구 목록·시스템 요구사항 명세서·아키텍처·요구·상세설계·검증 명세·추적 매트릭스) ZIP" style={{ fontSize:11.5, padding:"6px 12px", marginRight:6 }}>📦 ZIP</Btn>}
             <Btn onClick={()=>{ setAeInitTab(null); setAeModal(true); }} style={{ fontSize:11.5, padding:"6px 14px" }}>{am ? "V-모델 편집" : "V-모델 시작"}</Btn>
         </div>); })()}
       {deliverablesData && (
