@@ -56,6 +56,24 @@ const ASPICE_DEVS = [
   { id: "HW",   label: "HW (구버전)",   desc: "HW만 개발 — 구버전 과제 호환용. SYS + SW + HW로 바꾸는 것을 권장합니다", legacy: true },
 ];
 const aspiceDevChoices = cur => ASPICE_DEVS.filter(d => !d.legacy || d.id === cur);
+// 프로젝트 유형 — 과제 유형(track)에 종속. 일반 SI는 사업 분류, ASPICE 자동차는 제품 개발 분류.
+// 값(value)은 저장·AI 프롬프트·PDP 문구에 그대로 쓰이며, "신규개발"은 두 과제 유형 공통 기본값.
+const PROJECT_TYPES = {
+  si: [
+    { value: "신규개발", label: "신규개발" },
+    { value: "고도화",   label: "고도화" },
+    { value: "유지보수", label: "유지보수" },
+    { value: "컨설팅",   label: "컨설팅" },
+  ],
+  aspice: [
+    { value: "신규개발",     label: "신규 개발",                   desc: "신규 제어기·신규 플랫폼 개발 — 표준 프로세스 범위 전체" },
+    { value: "파생개발",     label: "파생 개발 (Carry-over·변형)", desc: "기존 제품·플랫폼 기반의 차종 적용·사양 변형 — REU.2 재사용 관리를 자동으로 적용 범위에 포함" },
+    { value: "사양변경",     label: "사양 변경 (양산 설계 변경)",  desc: "양산 중인 제품의 고객 요청 변경(ECR·ECO) — 변경 영향 분석·추적성(SUP.10) 중심" },
+    { value: "양산유지보수", label: "양산 유지보수",               desc: "SOP 이후 결함 수정·소규모 개선 — 문제해결(SUP.9)·형상관리(SUP.8) 중심" },
+  ],
+};
+const projectTypesFor = track => PROJECT_TYPES[track === "aspice" ? "aspice" : "si"];
+const fitProjectType = (track, type) => projectTypesFor(track).some(t => t.value === type) ? type : "신규개발";
 const aspiceDevOf = form => ASPICE_DEVS.some(d => d.id === form?.aspiceDev) ? form.aspiceDev : "SW";
 const devFromScope = sc => (sc && sc.HWE) ? (sc.SWE === false ? "HW" : "HWSW") : "SW";
 const aspiceScopeDefault = (dev) => {
@@ -1768,7 +1786,8 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
   function chooseTrack(track, aspiceVersion, aspiceCL, aspiceDev) {
     setForm(p => ({ ...p, track, aspiceVersion: track === "aspice" ? (aspiceVersion || p.aspiceVersion || "both") : "",
       aspiceCL: track === "aspice" ? (aspiceCL || p.aspiceCL || "CL2") : "",
-      aspiceDev: track === "aspice" ? (aspiceDev || p.aspiceDev || "SW") : "" }));
+      aspiceDev: track === "aspice" ? (aspiceDev || p.aspiceDev || "SW") : "",
+      type: fitProjectType(track, p.type) }));   // 과제 유형이 바뀌면 그 유형에 없는 프로젝트 유형은 '신규개발'로 정리
     // ASPICE: 규제 수준을 '엄격'으로 두어 SDLC 추천이 V-Model로 가도록 (사용자가 바꾼 값은 유지)
     if (track === "aspice" && sdlcFactors?.regulation === "보통" && !selectedSDLC) setSdlcFactors(f => ({ ...f, regulation: "엄격" }));
   }
@@ -1805,6 +1824,21 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       return { ...t, aspiceScope: { ...sc, ...want } };
     });
   }, [isAspiceTrack, form.aspiceDev, !!tailoring?.aspiceScope]);
+  // 파생 개발 ↔ REU.2 재사용: 파생 개발로 바꾸면 REU.2를 켜고, 다른 유형으로 바꾸면 자동으로 켠 경우에만 끈다.
+  // (사용자가 적용 범위에서 직접 켜고 끈 값은 reuAuto=false로 남아 유형을 바꿔도 건드리지 않는다)
+  const prevTypeRef = useRef(form.type);
+  useEffect(() => {
+    const prev = prevTypeRef.current; prevTypeRef.current = form.type;
+    if (!isAspiceTrack || prev === form.type) return;
+    const toDerived = form.type === "파생개발", fromDerived = prev === "파생개발";
+    if (!toDerived && !fromDerived) return;
+    setTailoring(t => {
+      const sc = t.aspiceScope || aspiceScopeDefault(form.aspiceDev);
+      if (toDerived) return sc.REU ? t : { ...t, reuAuto: true, aspiceScope: { ...sc, REU: true } };   // 이미 켜져 있으면 그대로(자동 표시 안 함)
+      if (!t.reuAuto) return t;
+      return { ...t, reuAuto: false, aspiceScope: { ...sc, REU: false } };
+    });
+  }, [isAspiceTrack, form.type]);   // eslint-disable-line react-hooks/exhaustive-deps
   // 빈 위저드로 들어오면 작성 중 항목(여러 건) 안내 — 고르면 이어서 작성, '닫기'는 안내만 닫는다 (임시저장본은 지우지 않음)
   const [draftList, setDraftList] = useState(() => {
     const ds = loadDrafts ? loadDrafts() : [];
@@ -1960,7 +1994,7 @@ function AspiceProcessPanel({ form, onDevChange, tailoring, setTailoring, ossp, 
       onDevChange(next.SWE && next.HWE ? "HWSW" : next.HWE ? "HW" : "SW");
       return;
     }
-    setTailoring(t => ({ ...t, aspiceScope: { ...(t.aspiceScope || aspiceScopeDefault(form?.aspiceDev)), [gid]: !(t.aspiceScope || aspiceScopeDefault(form?.aspiceDev))[gid] } }));
+    setTailoring(t => ({ ...t, ...(gid === "REU" ? { reuAuto: false } : {}), aspiceScope: { ...(t.aspiceScope || aspiceScopeDefault(form?.aspiceDev)), [gid]: !(t.aspiceScope || aspiceScopeDefault(form?.aspiceDev))[gid] } }));
   };
   return (
     <div style={{ marginBottom:16 }}>
@@ -2294,7 +2328,10 @@ function StepInfo({ form, setForm, onChooseTrack, osspChosen }) {
             {DOC_SETTINGS.orgName ? <> — 현재 <b style={{ color:T.text }}>{DOC_SETTINGS.orgName}</b></> : null}.
           </div>
         </div>
-        <Select label="프로젝트 유형" value={form.type} onChange={f("type")} options={["신규개발","고도화","유지보수","컨설팅"].map(v=>({value:v,label:v}))} />
+        <div>
+          <Select label="프로젝트 유형" value={fitProjectType(form.track, form.type)} onChange={f("type")} options={projectTypesFor(form.track).map(t=>({value:t.value,label:t.label}))} />
+          {form.track === "aspice" && <div style={{ fontSize:10, color:T.muted, marginTop:5, lineHeight:1.6 }}>{projectTypesFor("aspice").find(t => t.value === fitProjectType("aspice", form.type))?.desc}</div>}
+        </div>
         <Input label="PM *" value={form.pm} onChange={f("pm")} placeholder="예: 홍길동" />
         <TeamMembersEditor form={form} setForm={setForm} />
         <Input label="시작일 *" type="date" value={form.startDate} onChange={f("startDate")} />
