@@ -8653,24 +8653,85 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       return `AI 수정안 초안 ${Object.keys(draft).length}개 필드 — 편집 칸에 채웠습니다. 내용을 확인·수정한 뒤 [적용]을 누르세요 (적용 전에는 아무것도 바뀌지 않습니다).`;
     });
   }
-  // ③ 판정 화면에서 검토 대상 산출물을 바로 고친다. SYS 요구의 제목·내용은 확정 요구(items)가 원본이므로 items도 함께 고친다.
+  // 검토 대상에 패치 적용(공용) — SYS 요구의 제목·내용은 확정 요구(items)가 원본이므로 items도 함께 고친다. 변경이 없으면 false
+  function applyPatch(key, id, patch, via = "review") {
+    const spec = AE.reviewEditSpec(model, key, id);
+    if (!spec) { setErr("수정할 대상을 찾지 못했습니다 — 이미 삭제되었을 수 있습니다."); return false; }
+    const p = {}; spec.fields.forEach(f => { if (f.k in patch && String(patch[f.k] ?? "") !== String(spec.values[f.k] ?? "")) p[f.k] = patch[f.k]; });
+    if (!Object.keys(p).length) return false;
+    const S = AE.reviewScope(key);
+    if (S?.kind === "req" && S.lv === "SYS" && ("title" in p || "text" in p)) {
+      // 확정 요구(items)도 같이 고친다 — 여러 건을 연속 적용해도 서로 덮어쓰지 않도록 함수형 갱신
+      setItems(list => list.map(it => it.id !== id ? it : { ...it, ...("title" in p ? { name: p.title } : {}), ...("text" in p ? { detail: p.text } : {}) }));
+      setItemsVer(v => v + 1);
+    }
+    setModel(m => AE.applyReviewEdit(m, key, id, p, { via }));
+    return true;
+  }
+  // ③ 판정 화면의 편집기 [적용]
   function applyReviewEditUI() {
     if (!rvEdit) return;
-    const { key, id, vals } = rvEdit;
-    const spec = AE.reviewEditSpec(model, key, id);
-    if (!spec) { setErr("수정할 대상을 찾지 못했습니다 — 이미 삭제되었을 수 있습니다."); setRvEdit(null); return; }
-    const patch = {}; spec.fields.forEach(f => { if ((vals[f.k] ?? "") !== (spec.values[f.k] ?? "")) patch[f.k] = vals[f.k]; });
-    if (!Object.keys(patch).length) { setRvEdit(x => x ? { ...x, msg: "바뀐 내용이 없어 적용할 것이 없습니다. 아래 '규칙 판정'에 남은 항목이 있으면 그 칸을 고친 뒤 적용하세요. 그대로 두려면 [취소]." } : x); return; }
-    const S = AE.reviewScope(key);
-    let newItems = null;
-    if (S?.kind === "req" && S.lv === "SYS" && ("title" in patch || "text" in patch)) {
-      newItems = items.map(it => it.id !== id ? it : { ...it, ...("title" in patch ? { name: patch.title } : {}), ...("text" in patch ? { detail: patch.text } : {}) });
-      setItems(newItems); setItemsVer(v => v + 1);
-    }
-    setModel(m => { const n = AE.applyReviewEdit(m, key, id, patch, { via: String(rvEdit.fkey || "").startsWith("qf|") || String(rvEdit.fkey || "").startsWith("rule") ? "rule" : "review" }); if (newItems) n.reqs.SYS = AE.syncSysReqs(newItems, n.reqs.SYS); return n; });
+    const { key, id, vals, fkey } = rvEdit;
+    const fk = String(fkey || "");
+    const via = fk.startsWith("fq|") ? (rvEdit.aiDraft ? "fix-queue(AI 초안·QA 편집 승인)" : "fix-queue(QA 편집 승인)") : rvEdit.aiDraft ? "review(AI 초안·QA 승인)" : fk.startsWith("qf|") || fk.startsWith("rule") ? "rule" : "review";
+    const ok = applyPatch(key, id, vals, via);
+    if (!ok) { setRvEdit(x => x ? { ...x, msg: "바뀐 내용이 없어 적용할 것이 없습니다. 아래 '규칙 판정'에 남은 항목이 있으면 그 칸을 고친 뒤 적용하세요. 그대로 두려면 [취소]." } : x); return; }
+    if (fk.startsWith("fq|")) { const card = (fixQ?.cards || []).find(c => c.id === id); if (card) approveJudge(card); finishQueueCard(id, "approved"); }
     setRvEdit(null);
     setNote(`${id} 수정을 반영했습니다 — 판정 목록에 '✎ 수정함'으로 표시되고, '변경분 검토'로 수정 결과를 다시 확인할 수 있습니다. 저장을 눌러 확정하세요.`);
-  }                       // 중지 요청 — 진행 중인 묶음이 끝나면 멈추고, 받은 의견은 반영           // 판정 목록: 검토 AI별 보기
+  }
+
+  // ── 수정안 승인 큐 ──
+  // fixQ: { key, at, cards: [{ id, title, kind: "rule"|"ai", fields, original, fieldsSpec, rationale, opIds, opinions, status: pending|approved|rejected, err }] }
+  const [fixQ, setFixQ] = useState(null);
+  function genFixQueue() {
+    const key = rvLevel;
+    return run(`수정안 생성 — ${AE.reviewScope(key)?.label || key}`, async () => {
+      const targets = AE.fixQueueTargets(model, key);
+      if (!targets.length) return "수정안을 만들 대상이 없습니다 — 미판정이거나 '맞음인데 아직 안 고친' 의견이 달린 항목이 없습니다.";
+      const cards = [], aiTargets = [];
+      targets.forEach(t => {
+        const sp = AE.reviewEditSpec(model, key, t.id);
+        const base = { id: t.id, title: sp.values.title || sp.values.name || t.id, original: { ...sp.values }, fieldsSpec: sp.fields, opIds: t.allFindings.map(f => f.key), opinions: t.allFindings, status: "pending" };
+        const rule = AE.ruleFixProposal(model, key, t.id, t.allFindings);
+        if (rule) cards.push({ ...base, kind: "rule", fields: rule.fields, rationale: rule.rationale });
+        else aiTargets.push({ base, prompt: { id: t.id, fields: sp.fields, values: sp.values, opinions: t.allFindings, refs: AE.reviewRefs(model, key, t.id) } });
+      });
+      let failed = 0;
+      for (let i = 0; i < aiTargets.length; i += AE.FIX_BATCH) {
+        const grp = aiTargets.slice(i, i + AE.FIX_BATCH);
+        setProg({ percent: 5 + (i / Math.max(1, aiTargets.length)) * 90, label: `AI 수정안 초안 작성 중… (${Math.min(i + grp.length, aiTargets.length)}/${aiTargets.length}) · 규칙 ${cards.length}건` });
+        let got = [];
+        try { const r = await callClaudeJson(AE.promptFixDraftBatch({ scopeKey: key, targets: grp.map(g => g.prompt) }), 6000); got = Array.isArray(r?.items) ? r.items : []; } catch (e) { got = []; }
+        grp.forEach(g => {
+          const x = got.find(y => y?.id === g.base.id);
+          const allowed = new Set(g.base.fieldsSpec.map(f => f.k));
+          const fields = x && x.fields && typeof x.fields === "object" ? Object.fromEntries(Object.entries(x.fields).filter(([k, v]) => allowed.has(k) && typeof v === "string" && v.trim() && v.trim() !== String(g.base.original[k] || "").trim()).map(([k, v]) => [k, v.trim()])) : {};
+          if (Object.keys(fields).length) cards.push({ ...g.base, kind: "ai", fields, rationale: String(x.rationale || "") });
+          else { failed++; cards.push({ ...g.base, kind: "ai", fields: {}, rationale: "", err: x ? "AI가 바꿀 내용을 제안하지 않음 — '편집 후 승인'으로 직접 수정" : "AI 응답 없음(호출 실패 또는 누락) — 다시 생성하거나 직접 수정" }); }
+        });
+      }
+      setFixQ({ key, at: new Date().toISOString(), cards });
+      const nAi = cards.filter(c => c.kind === "ai" && !c.err).length, nRule = cards.filter(c => c.kind === "rule").length;
+      return `수정안 ${nAi + nRule}건 준비 — 규칙 ${nRule} · AI ${nAi}${failed ? ` · 초안 실패 ${failed}건(직접 수정)` : ""}. 아래 승인 큐에서 카드마다 승인·편집·반려하세요. 승인 전에는 아무것도 바뀌지 않습니다.`;
+    });
+  }
+  function finishQueueCard(id, status) { setFixQ(q => q ? { ...q, cards: q.cards.map(c => c.id === id ? { ...c, status } : c) } : q); }
+  // 승인 = 이 항목의 미판정 의견을 '맞음'으로 판정(틀림·보류로 이미 판정한 것은 유지)
+  function approveJudge(card) {
+    setModel(m => AE.judgeReview(m, card.opIds.filter(k => { const f = m.aiReview.findings.find(x => x.key === k); return f && !f.judge; }), "valid", `수정안 승인(${card.kind === "rule" ? "규칙" : "AI"} 초안)`));
+  }
+  function approveCard(card) {
+    const ok = applyPatch(fixQ.key, card.id, card.fields, card.kind === "rule" ? "fix-queue(규칙 초안·QA 승인)" : "fix-queue(AI 초안·QA 승인)");
+    approveJudge(card);
+    finishQueueCard(card.id, ok ? "approved" : "approved(변경 없음)");
+  }
+  function approveAll() {
+    const pend = (fixQ?.cards || []).filter(c => c.status === "pending" && !c.err);
+    if (!pend.length) return;
+    if (!window.confirm(`승인 대기 ${pend.length}건을 모두 승인합니다.\n각 항목의 수정안이 적용되고 해당 의견은 '맞음'으로 판정되며, 이력에 남습니다.\n내용을 확인하지 않은 승인은 심사 때 설명하기 어렵습니다. 계속할까요?`)) return;
+    pend.forEach(c => approveCard(c));
+  }
   useEffect(() => { apiFetch("/api/review").then(c => { setRv(c); const ready = (c.available || []).filter(a => a.ready); setRvProv(ready.some(a => a.id === c.defaultProvider) ? c.defaultProvider : (ready[0]?.id || "")); }).catch(e => setRv({ error: e.message })); }, []);
   const rvSel = (rv?.available || []).find(a => a.id === rvProv) || null;
   // ── ② 검토 AI 의견 — 검토 범위(요구·아키텍처·상세설계·검증 명세) 1개를 검토 ──
@@ -9638,6 +9699,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                           <div key={i} style={{ borderTop: `1px solid ${T.border}`, padding: "6px 0" }}>
                             <div style={{ fontSize: 11 }}><span style={{ color: sevC[f.sev], fontWeight: 700, marginRight: 6 }}>{sevL[f.sev]}</span>{f.msg}</div>
                             {f.bp && AE.bpKnown(f.bp) && <div style={{ fontSize: 10, color: T.muted }}>근거: {AE.bpLabel(f.bp, model.version)}</div>}
+                            {f.bp === "CHANGE" && <div style={{ marginTop: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                              <button onClick={() => setTab("trace")} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>⑦ 변경 영향 검토로 이동</button>
+                              <span style={{ fontSize: 10, color: T.muted }}>요구를 고치면 자동으로 생기는 항목입니다. 하위(할당·파생 요구·시험)를 확인하고 판정하면 사라집니다. ✎로 요구를 다시 고쳐도 해소되지 않습니다.</span>
+                            </div>}
                             {ids.length > 0 && <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap" }}>{ids.map(id => idBtn(id, fk))}{f.count > ids.length && <span style={{ fontSize: 10, color: T.muted }}>… 외 {f.count - ids.length}건 (⑦ 추적성·충족도에서 전체 보기)</span>}</div>}
                             {ed && <div style={{ marginTop: 6 }}>{editorBox()}</div>}
                           </div>);
@@ -9717,6 +9782,50 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 {lastRun && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 4 }}>
                   마지막 검토 {String(lastRun.at).slice(0, 16).replace("T", " ")} · {lastRun.label || lastRun.provider} {lastRun.model} · 기준 {lastRun.criteria} · 검토 {lastRun.reviewed}건 · 판정 대기로 등록 {lastRun.kept}건 · 규칙으로 걸러냄 {lastRun.dropped}건{lastRun.failed ? ` · 실패 ${lastRun.failed}건` : ""}
                 </div>}
+              </AeSec>
+
+              <AeSec title={`②-b 수정안 승인 큐 — ${S.label}${fixQ && fixQ.key === rvLevel ? ` · 대기 ${fixQ.cards.filter(c => c.status === "pending").length} · 승인 ${fixQ.cards.filter(c => String(c.status).startsWith("approved")).length} · 반려 ${fixQ.cards.filter(c => c.status === "rejected").length}` : ""}`}
+                right={<div style={{ display: "flex", gap: 6 }}>
+                  {fixQ && fixQ.key === rvLevel && fixQ.cards.some(c => c.status === "pending" && !c.err) && <button disabled={busy} onClick={approveAll} style={{ ...small, color: T.green }}>남은 {fixQ.cards.filter(c => c.status === "pending" && !c.err).length}건 모두 승인</button>}
+                  <Btn disabled={busy || !AE.fixQueueTargets(model, rvLevel).length} onClick={genFixQueue} title="미판정 또는 '맞음인데 미수정' 의견이 달린 항목마다 수정안을 만듭니다 — 규칙으로 되는 것은 규칙이, 문장은 생성 AI(Claude)가. 승인 전에는 아무것도 바뀌지 않습니다" style={{ fontSize: 11, padding: "4px 12px" }}>✦ 수정안 생성 ({AE.fixQueueTargets(model, rvLevel).length}건)</Btn>
+                </div>}>
+                <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8, lineHeight: 1.6 }}>
+                  의견이 달린 항목마다 <b>수정 전 → 수정 후</b>를 보여줍니다. <b style={{ color: T.green }}>승인</b> = 수정 적용 + 그 의견을 '맞음'으로 판정 + 이력 기록 · <b>편집 후 승인</b> = 편집기에서 손본 뒤 적용 · <b>반려</b> = 아무것도 바꾸지 않고 의견은 ③에서 개별 판정(틀림·보류). 규칙 초안은 결정론적(상위 검증 기준 상속), AI 초안은 의견과 상위 원문을 근거로 하며 원문에 없는 수치는 'TBD(확인 필요)'로만 들어옵니다. 승인 후에는 '변경분 검토'로 수정 결과를 재검토하세요.
+                </div>
+                {(!fixQ || fixQ.key !== rvLevel) && <div style={{ fontSize: 11, color: T.muted }}>아직 생성한 수정안이 없습니다. [✦ 수정안 생성]을 누르세요.{fixQ && fixQ.key !== rvLevel ? ` (다른 산출물 '${AE.reviewScope(fixQ.key)?.label}'의 큐가 있습니다 — 그 산출물을 선택하면 보입니다)` : ""}</div>}
+                {fixQ && fixQ.key === rvLevel && fixQ.cards.map(c => {
+                  const pend = c.status === "pending";
+                  const col = pend ? T.border : String(c.status).startsWith("approved") ? T.green + "66" : T.muted + "66";
+                  return (
+                    <div key={c.id} style={{ border: `1px solid ${col}`, borderRadius: 9, padding: "8px 10px", marginBottom: 8, background: T.bg, opacity: pend ? 1 : 0.75 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 11.5 }}>
+                        <span style={{ fontFamily: "monospace", color: T.accent }}>{c.id}</span><b style={{ flex: 1 }}>{c.title}</b>
+                        <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, background: c.kind === "rule" ? T.green + "22" : T.accent + "22", color: c.kind === "rule" ? T.green : T.accent }}>{c.kind === "rule" ? "규칙 초안" : "AI 초안"}</span>
+                        <span style={{ fontSize: 10, color: T.muted }}>의견 {c.opinions.length}건: {[...new Set(c.opinions.map(o => critLabel[o.criterion] || o.criterion))].join(" · ")}</span>
+                        {!pend && <span style={{ fontSize: 10.5, color: String(c.status).startsWith("approved") ? T.green : T.muted }}>{String(c.status).startsWith("approved") ? "✓ 승인됨" : "반려됨"}</span>}
+                      </div>
+                      {c.err && <div style={{ fontSize: 10.5, color: T.amber, marginTop: 4 }}>⚠ {c.err}</div>}
+                      {Object.keys(c.fields).length > 0 && (
+                        <div style={{ marginTop: 6, display: "grid", gridTemplateColumns: "110px 1fr 1fr", gap: "4px 8px", fontSize: 10.5 }}>
+                          <span style={{ color: T.muted }}>필드</span><span style={{ color: T.muted }}>수정 전</span><span style={{ color: T.muted }}>수정 후</span>
+                          {Object.keys(c.fields).map(k => { const fd = c.fieldsSpec.find(f => f.k === k); return (
+                            <React.Fragment key={k}>
+                              <span style={{ color: T.muted }}>{fd?.label || k}</span>
+                              <span style={{ color: T.red, textDecoration: "line-through", lineHeight: 1.5 }}>{c.original[k] || "(비어 있음)"}</span>
+                              <span style={{ color: T.green, lineHeight: 1.5 }}>{c.fields[k]}</span>
+                            </React.Fragment>); })}
+                        </div>)}
+                      {c.rationale && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 4 }}>변경 이유: {c.rationale}</div>}
+                      <details style={{ fontSize: 10.5, marginTop: 4 }}><summary style={{ cursor: "pointer", color: T.muted }}>반영한 의견 보기</summary>{c.opinions.map(o => <div key={o.key} style={{ paddingLeft: 8, borderLeft: `2px solid ${T.border}`, marginTop: 3 }}><b>{critLabel[o.criterion] || o.criterion}</b> · {AE.REVIEW_SEV[o.severity]} — {o.issue}{o.suggestion ? <span style={{ color: T.green }}> / 제안: {o.suggestion}</span> : null}</div>)}</details>
+                      {pend && (
+                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6 }}>
+                          <button disabled={busy} onClick={() => finishQueueCard(c.id, "rejected")} style={{ ...small, color: T.muted }}>반려 (바꾸지 않음)</button>
+                          <button disabled={busy} onClick={() => { const sp = AE.reviewEditSpec(model, fixQ.key, c.id); if (!sp) return; setRvEdit({ fkey: `fq|${c.id}`, key: fixQ.key, id: c.id, vals: { ...sp.values, ...c.fields }, aiDraft: Object.keys(c.fields).length ? { fields: c.fields, original: Object.fromEntries(Object.keys(c.fields).map(k => [k, sp.values[k] ?? ""])), rationale: c.rationale, opinions: c.opinions.length } : null }); }} style={{ ...small, color: T.accent, background: rvEdit?.fkey === `fq|${c.id}` ? T.accent + "22" : "none" }}>✎ 편집 후 승인</button>
+                          {Object.keys(c.fields).length > 0 && <button disabled={busy} onClick={() => approveCard(c)} style={{ ...small, background: T.green, color: "#fff", borderColor: T.green }}>✓ 승인</button>}
+                        </div>)}
+                      {rvEdit?.fkey === `fq|${c.id}` && <div style={{ marginTop: 8 }}>{editorBox(c.opinions.filter(o => o.suggestion).map(o => `[${critLabel[o.criterion] || o.criterion}] ${o.suggestion}`).join(" / "))}</div>}
+                    </div>);
+                })}
               </AeSec>
 
               <div id="rv-judge" />
@@ -9906,7 +10015,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                           <div key={l.key} style={{ display: "grid", gridTemplateColumns: "92px 1fr 150px 128px", gap: 8, alignItems: "center", fontSize: 10.5 }}>
                             <span style={{ color: T.muted }}>{AE.LINK_KINDS[l.kind]}</span>
                             <span><b>{l.down}</b> {l.downTitle}{l.downChanged ? <span style={{ color: T.accent }}> · 하위 수정됨(확인 필요)</span> : ""}{l.state === "invalid" && l.rec?.note ? <span style={{ color: T.muted }}> · 의견: {l.rec.note}</span> : ""}</span>
-                            <span style={{ color: stColor[l.state] }}>{AE.LINK_STATES[l.state]}</span>
+                            <span style={{ color: stColor[l.state] }}>{AE.LINK_STATES[l.state]}{AE.impactNoEffectCandidates([l]).length ? <span style={{ color: T.green, fontSize: 9.5 }}> · 영향 없음 후보</span> : null}</span>
                             <div style={{ display: "flex", gap: 3 }}>
                               {l.state === "orphan"
                                 ? <button onClick={() => dropLinks(up, [l.key])} style={{ ...small, flex: 1, color: T.red }}>연결 제거</button>
@@ -9919,6 +10028,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       </div>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                         <input value={reviewNote[up] || ""} onChange={e => setReviewNote(o => ({ ...o, [up]: e.target.value }))} placeholder={cur ? "판정 의견 (예: 검증 기준 추가만으로 하위 영향 없음 / SQT-0062 합격 기준을 2 s ± 0.1 s로 수정 필요)" : "제거 사유 (예: 고객 협의로 요구 삭제)"} style={{ ...inp, flex: 1 }} />
+                        {(() => { const cand = AE.impactNoEffectCandidates(ls); return cand.length > 0 && cand.length < judgeable.length ? <button onClick={() => judge(up, cand, "valid")} title="검증 기준만 바뀐 상위의 요소 할당·하위 요구 연결 — 요구 문장은 그대로이므로 영향 없음 후보. 시험 연결은 합격 기준 확인이 필요해 후보에서 제외" style={{ ...small, color: T.green, whiteSpace: "nowrap" }}>영향 없음 후보 {cand.length}건 처리</button> : null; })()}
                         {judgeable.length > 1 && <button onClick={() => judge(up, judgeable, "valid")} title="이 상위 요구의 변경이 아래 하위 항목 전부에 영향 없음" style={{ ...small, color: T.green, whiteSpace: "nowrap" }}>모두 영향 없음</button>}
                         {!cur && ls.length > 1 && <button onClick={() => dropLinks(up, ls.map(l => l.key))} style={{ ...small, color: T.red, whiteSpace: "nowrap" }}>모두 제거</button>}
                       </div>
@@ -9975,6 +10085,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   : /합의되지 않은 이해관계자/.test(msg) ? "고객(OEM)과 요구 내용을 합의한 뒤 ② 요구 도출·명세의 이해관계자 요구 '합의' 칸을 '합의'로 바꾸세요. 합의 회의록 등 근거가 있을 때만 바꾸며, 착수 시점에는 '검토 중'으로 남아 있어도 됩니다(정보)."
                   : /골격\(TBD\)/.test(msg) ? "착수 단계에서는 정상입니다. 코드가 나오면 ④ SW 탭 유닛 섹션에 .h 헤더를 끌어다 놓거나, 유닛 설계(알고리즘·동적 동작)를 작성하세요."
                   : /Draft인 요구/.test(msg) ? "요구를 검토한 뒤 상태를 Reviewed(검토 완료)·Agreed(고객 합의)로 올립니다. 근거는 ⑧ QA 교차검토의 판정 기록입니다 — 아래 버튼은 교차검토가 끝난 요구만 Reviewed로 올립니다. Agreed는 고객 합의 후 각 요구의 상태 칸에서 직접 바꾸세요."
+                  : /변경 영향 검토 대기|하위 수정 필요'로 판정/.test(msg) ? "이 화면 위쪽 '변경 영향 검토' 목록에서 하위 연결마다 '영향 없음' 또는 '하위 수정 필요'로 판정하세요. 요구를 고치면 자동으로 생기는 항목이며, 판정이 끝나면 사라집니다."
                   : /할당되지 않은|파생되지 않은|도출되지 않은|시험이 없는|연결되지 않은/.test(msg) ? "위 '추적·검증 커버리지'의 '빠짐 N건 →'을 누르면 해당 탭에서 빠진 항목과 처리 방법(💡)이 나옵니다."
                   : "ID를 확인해 해당 탭에서 바로잡으세요.";
                 const ids = f.ids || [];

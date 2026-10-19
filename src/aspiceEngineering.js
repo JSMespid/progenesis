@@ -1236,9 +1236,9 @@ export function changeFindings(model) {
   const F = [];
   const uniq = a => [...new Set(a)];
   const sus = st.links.filter(l => l.state === "suspect");
-  if (sus.length) { const ups = uniq(sus.map(l => l.up)); F.push({ sev: "error", bp: "CHANGE", msg: `상위 요구 변경으로 검토가 필요한 추적 연결 ${sus.length}건 (변경된 요구 ${ups.length}건) — '변경 영향 검토'에서 유효/무효 판정`, ids: ups.slice(0, 30), count: ups.length }); }
+  if (sus.length) { const ups = uniq(sus.map(l => l.up)); F.push({ sev: "error", bp: "CHANGE", msg: `[변경 영향 검토 대기] 요구 ${ups.length}건(${ups.slice(0, 3).join(", ")}${ups.length > 3 ? " …" : ""})을 고친 뒤 하위 연결 ${sus.length}건이 아직 확인되지 않음 — 고장이 아니라 '고친 뒤 하위를 확인했는가'가 비어 있는 상태. ⑦ 변경 영향 검토에서 '영향 없음' 또는 '하위 수정 필요'로 판정하면 해소`, ids: ups.slice(0, 30), count: ups.length }); }
   const inv = st.links.filter(l => l.state === "invalid");
-  if (inv.length) { const ds = uniq(inv.map(l => l.down)); F.push({ sev: "error", bp: "CHANGE", msg: `무효 판정 후 조치되지 않은 추적 연결 ${inv.length}건 — 하위 항목을 수정한 뒤 유효로 전환`, ids: ds.slice(0, 30), count: ds.length }); }
+  if (inv.length) { const ds = uniq(inv.map(l => l.down)); F.push({ sev: "error", bp: "CHANGE", msg: `'하위 수정 필요'로 판정했지만 아직 완료 처리되지 않은 추적 연결 ${inv.length}건 — 하위 항목을 고친 뒤 ⑦에서 '✓ 수정 완료'`, ids: ds.slice(0, 30), count: ds.length }); }
   const orp = st.links.filter(l => l.state === "orphan");
   if (orp.length) { const ds = uniq(orp.map(l => l.down)); F.push({ sev: "error", bp: "CHANGE", msg: `삭제된 상위 요구를 참조하는 추적 연결 ${orp.length}건 (고아 연결) — 연결 제거 또는 상위 재지정 필요`, ids: ds.slice(0, 30), count: ds.length }); }
   return F;
@@ -1826,7 +1826,8 @@ export function applyReviewEdit(model, key, id, patch, meta = {}) {
   }
   if (S.kind === "req") {
     const i = (m.reqs[lv] || []).findIndex(x => x.id === id); if (i < 0) return m;
-    if (lv === "SYS") { delete p.title; delete p.text; if ("verifCriteria" in p) p.verifCriteriaEdited = true; }
+    // SYS 요구의 제목·내용도 모델에 바로 반영한다(확정 요구 items는 화면이 함께 고침 → 다음 동기화 때 같은 값). 검증 기준은 사용자 수정 표시
+    if (lv === "SYS" && "verifCriteria" in p) p.verifCriteriaEdited = true;
     m.reqs[lv][i] = { ...m.reqs[lv][i], ...p };
   } else if (S.kind === "arch") {
     if (id === `RATIONALE-${lv}`) m.rationale[lv] = p.rationale ?? m.rationale[lv];
@@ -1961,4 +1962,53 @@ ${JSON.stringify(opinions.map(o => ({ criterion: o.criterion, severity: o.severi
 
 [관련 항목]
 ${refs.length ? JSON.stringify(refs) : "(없음)"}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11-f) 수정안 승인 큐 — 규칙으로 되는 것은 규칙이, 문장은 생성 AI가 초안을 만들고 사람은 승인·반려만 한다
+//  · 규칙 수정안: 결정론적(상위 요구 검증 기준 상속 등). AI 수정안: 의견+관련 상위 원문 근거, 원문에 없는 수치는 TBD.
+//  · 승인 = 해당 의견 '맞음' 판정 + 수정 적용 + 이력("AI/규칙 초안, QA 승인"). 반려 = 아무것도 바꾸지 않음.
+// ═══════════════════════════════════════════════════════════════════════════
+export const FIX_BATCH = 4;
+// 승인 큐 대상 — 미판정 또는 '맞음인데 미수정' 의견이 달린 항목 (틀림·보류만 달린 항목은 제외)
+export function fixQueueTargets(model, key) {
+  const m = normalizeModel(model);
+  const v = reviewView(m);
+  const by = {};
+  v.list.filter(f => f.level === key && !f.removed && (!f.judge || (f.judge.state === "valid" && !f.edits.length))).forEach(f => { (by[f.reqId] = by[f.reqId] || []).push(f); });
+  return Object.entries(by).map(([id, fs]) => ({ id, findings: fs, allFindings: v.list.filter(f => f.level === key && f.reqId === id && !f.removed && f.judge?.state !== "invalid") }))
+    .filter(t => reviewEditSpec(m, key, t.id));
+}
+// 규칙 수정안 — 지금은 '검증 기준 비어 있음 + 상위 요구에 검증 기준 있음'일 때 상속 제안. 의견이 모두 VERIF 계열이면 규칙만으로 처리
+export function ruleFixProposal(model, key, id, findings) {
+  const S = reviewScope(key); if (!S || S.kind !== "req") return null;
+  const m = normalizeModel(model);
+  const r = (m.reqs[S.lv] || []).find(x => x.id === id); if (!r || nz(r.verifCriteria)) return null;
+  const parents = S.lv === "SYS" ? [] : (m.reqs.SYS || []).filter(p => (r.parents || []).includes(p.id) && nz(p.verifCriteria));
+  if (!parents.length) return null;
+  const onlyVerif = findings.every(f => f.criterion === "VERIF");
+  if (!onlyVerif) return null;
+  const vc = parents.map(p => `${p.verifCriteria} (상위 ${p.id} 기준 상속 — ${S.lv} 관점으로 조정 필요)`).join("; ");
+  return { kind: "rule", fields: { verifCriteria: vc }, rationale: `상위 요구 ${parents.map(p => p.id).join(", ")}의 검증 기준을 상속(규칙). 하위 관점의 수치·조건으로 다듬어 승인하세요.` };
+}
+// AI 수정안 프롬프트(묶음) — 여러 항목을 한 번에
+export function promptFixDraftBatch({ scopeKey, targets }) {
+  const S = reviewScope(scopeKey);
+  return `역할: ASPICE ${S?.proc || ""} 산출물 「${S?.label || scopeKey}」의 항목들을, 독립 검토 AI의 지적을 반영해 고쳐 쓰는 작성자.
+${AI_FIDELITY}
+규칙:
+1) 항목마다 [지적]을 모두 반영하되, [관련 항목](상위 요구·원문)에 없는 수치·조건을 새로 만들지 않는다. 근거가 없으면 'TBD(확인 필요)'로 쓴다.
+2) 지적이 없는 부분은 원문을 유지한다. 바꾸지 않을 필드는 결과에서 생략한다. 각 필드는 한 문단, 줄바꿈 없이.
+3) 단일성(SINGULAR) 지적은 한 항목 안에서 문장을 정리하되 항목을 쪼개지는 않는다(분할은 사람이 한다). 대신 rationale에 '분할 권장'을 적는다.
+4) id는 [항목]에 있는 것만 쓴다. 출력은 JSON만:
+{"items":[{"id":"","fields":{"<필드키>":"<수정안>"},"rationale":"무엇을 왜 바꿨는지 한두 문장"}]}
+
+[항목] (id · 필드 키와 현재 값 · 지적 · 관련 항목)
+${JSON.stringify(targets.map(t => ({ id: t.id, fields: Object.fromEntries(t.fields.map(f => [f.k, { label: f.label, value: t.values[f.k] || "" }])),
+    지적: t.opinions.map(o => ({ criterion: o.criterion, severity: o.severity, evidence: o.evidence || "", issue: o.issue, suggestion: o.suggestion || "" })),
+    관련항목: t.refs })))}`;
+}
+// ⑦ 변경 영향: '검증 기준만 바뀐' 상위의 요소 할당·파생 요구 연결은 영향 없음 후보 (시험 연결은 후보 아님 — 합격 기준 확인 필요)
+export function impactNoEffectCandidates(links) {
+  return links.filter(l => l.state === "suspect" && (l.kind === "alloc" || l.kind === "derive") && (l.fields || []).length > 0 && (l.fields || []).every(f => f === "검증 기준")).map(l => l.key);
 }
