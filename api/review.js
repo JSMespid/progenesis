@@ -8,6 +8,9 @@
 //  · 설정은 app_settings.review 에 저장 { provider(기본 검토 AI), models:{종류별 모델}, baseUrl, apiKeys:{gemini,openai,custom,anthropic} }.
 //    키·모델이 등록된 검토 AI는 모두 '사용 가능'이 되며, 검토 화면에서 실행할 때마다 고를 수 있다(예: Gemini와 ChatGPT 비교).
 //    키는 서버에만 보관하고 화면에는 마스킹만 내려보낸다. 설정이 없으면 환경변수로 폴백.
+//  · AI 모델 등록 일원화(설정 → AI 연동): Anthropic Claude는 생성 AI 설정(app_settings.ai)이 단일 기준이다.
+//    검토 AI로 Claude를 고르면 같은 키·같은 모델(ai.apiKey→ANTHROPIC_API_KEY, ai.model)을 쓴다 — 이중 등록·불일치 방지.
+//  · 기본 검토 AI는 항상 1개: 지정값이 사용 불가(키·모델 없음)면 사용 가능한 검토 AI 중 다른 제공사를 우선해 자동 대체한다.
 //      GEMINI_API_KEY / OPENAI_API_KEY / REVIEW_API_KEY(사내 서버) / ANTHROPIC_API_KEY, REVIEW_PROVIDER, REVIEW_MODEL
 //  · 검토 의견의 형식 검증·근거 인용 대조(환각 필터)는 클라이언트 규칙 엔진(aspiceEngineering.js)이 수행한다.
 //
@@ -49,12 +52,18 @@ async function resolve(cfgIn, override = {}) {
   const provider = override.provider || cfg.provider || process.env.REVIEW_PROVIDER || 'gemini';
   const P = PROVIDERS[provider] || PROVIDERS.gemini;
   const keys = cfg.apiKeys || {};
+  const baseUrl = String(override.baseUrl || (provider === 'custom' ? cfg.baseUrl : '') || P.baseUrl || '').replace(/\/+$/, '');
+  if (provider === 'anthropic') {
+    // Claude는 생성 AI 설정(app_settings.ai)이 단일 기준 — 키·모델을 그대로 쓴다
+    let ai = null;
+    try { ai = await getSetting('ai', null); } catch { ai = null; }
+    const apiKey = override.apiKey || ai?.apiKey || process.env.ANTHROPIC_API_KEY || '';
+    const keySource = override.apiKey ? 'input' : ai?.apiKey ? 'db' : process.env.ANTHROPIC_API_KEY ? 'env' : 'none';
+    const model = override.model || ai?.model || P.defModel;
+    return { provider, P, apiKey, keySource, baseUrl, model };
+  }
   let apiKey = override.apiKey || keys[provider] || (P.env ? process.env[P.env] : '') || '';
   let keySource = override.apiKey ? 'input' : keys[provider] ? 'db' : (P.env && process.env[P.env]) ? 'env' : 'none';
-  if (provider === 'anthropic' && !apiKey) {   // 생성 AI와 같은 키를 재사용
-    try { const ai = await getSetting('ai', null); if (ai?.apiKey) { apiKey = ai.apiKey; keySource = 'db(ai)'; } } catch { /* 무시 */ }
-  }
-  const baseUrl = String(override.baseUrl || (provider === 'custom' ? cfg.baseUrl : '') || P.baseUrl || '').replace(/\/+$/, '');
   const isDefault = provider === (cfg.provider || process.env.REVIEW_PROVIDER || 'gemini');
   const model = override.model || (cfg.models || {})[provider] || (isDefault ? (cfg.model || process.env.REVIEW_MODEL) : '') || P.defModel || '';
   return { provider, P, apiKey, keySource, baseUrl, model };
@@ -72,6 +81,15 @@ async function availableList(cfg) {
   return out;
 }
 
+// 기본 검토 AI — 항상 1개. 지정값이 사용 가능하면 그대로, 아니면 다른 제공사(독립 검토) → Claude 순으로 자동 대체.
+function configuredDefault(cfg) { return (cfg && cfg.provider) || process.env.REVIEW_PROVIDER || 'gemini'; }
+function effectiveDefault(cfg, list) {
+  const want = configuredDefault(cfg);
+  const ready = list.filter(a => a.ready);
+  if (ready.some(a => a.id === want)) return want;
+  return (ready.find(a => !a.sameAsGenerator) || ready[0] || {}).id || want;
+}
+
 // 모델 목록에서 대화형 모델만 추린다 (임베딩·음성·이미지 등 제외)
 function chatModels(provider, ids) {
   const bad = /(embed|embedding|audio|realtime|tts|transcribe|whisper|dall|image|imagen|moderation|search|aqa|veo|computer-use)/i;
@@ -81,9 +99,12 @@ function chatModels(provider, ids) {
   return xs.sort().reverse().slice(0, 60);
 }
 
-function publicView(r, available = []) {
+function publicView(r, available = [], cfg = {}) {
   return {
     available, defaultProvider: r.provider,
+    configuredDefault: configuredDefault(cfg),
+    defaultFallback: r.provider !== configuredDefault(cfg),   // 지정한 기본 검토 AI가 사용 불가해 자동 대체됨
+    defaultReady: !!available.find(a => a.id === r.provider && a.ready),
     provider: r.provider, label: r.P.label, kind: r.P.kind, model: r.model,
     baseUrl: r.provider === 'custom' ? r.baseUrl : '',
     hasKey: !!r.apiKey, keySource: r.keySource, keyMasked: maskKey(r.apiKey),
@@ -158,8 +179,9 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       if (!await requireRole(req, res, [])) return;
       const cfg = await loadCfg();
-      const r = await resolve(cfg);
-      return res.status(200).json(publicView(r, await availableList(cfg)));
+      const list = await availableList(cfg);
+      const r = await resolve(cfg, { provider: effectiveDefault(cfg, list) });
+      return res.status(200).json(publicView(r, list, cfg));
     }
 
     // ── 설정 저장 (admin) ──
@@ -175,16 +197,28 @@ export default async function handler(req, res) {
       if (cur.model && cur.provider && !next.models[cur.provider]) next.models[cur.provider] = cur.model;
       delete next.model;
       const p = provider || cur.provider || 'gemini';          // 이번에 편집하는 검토 AI
-      if (setDefault || !cur.provider) next.provider = p;      // 기본 검토 AI 지정
-      if (model !== undefined) next.models[p] = String(model || '').trim();
-      if (baseUrl !== undefined && p === 'custom') next.baseUrl = String(baseUrl || '').trim();
-      if (apiKey === null) delete next.apiKeys[p];
-      else if (apiKey && String(apiKey).trim()) next.apiKeys[p] = String(apiKey).trim();
+      if (p === 'none') return res.status(400).json({ error: '기본 검토 AI는 항상 1개 지정되어야 합니다.' });
+      // Claude의 키·모델은 생성 AI 설정(설정 → AI 연동 → Anthropic Claude)에서만 바꾼다 — 여기서는 기본 지정만 받는다
+      if (p !== 'anthropic') {
+        if (model !== undefined) next.models[p] = String(model || '').trim();
+        if (baseUrl !== undefined && p === 'custom') next.baseUrl = String(baseUrl || '').trim();
+        if (apiKey === null) delete next.apiKeys[p];
+        else if (apiKey && String(apiKey).trim()) next.apiKeys[p] = String(apiKey).trim();
+      }
+      const listNext = await availableList(next);
+      if (setDefault) {
+        if (!listNext.find(a => a.id === p && a.ready)) return res.status(400).json({ error: `${PROVIDERS[p].label}은(는) 아직 사용할 수 없습니다. API 키와 모델을 등록·저장한 뒤 기본으로 지정하세요.` });
+        next.provider = p;
+      } else if (!cur.provider) next.provider = p;
+      // 기본 검토 AI가 (키 삭제 등으로) 사용 불가가 되면 사용 가능한 검토 AI로 자동 재지정 — 기본은 항상 1개
+      const eff = effectiveDefault(next, listNext);
+      const reassigned = eff !== configuredDefault(next) && listNext.some(a => a.ready);
+      if (reassigned) next.provider = eff;
       next.updatedAt = new Date().toISOString();
       await putSetting('review', next);
       _cache = { at: 0, cfg: null };
-      await audit(sess.login_id, 'review.settings', p, `model=${next.models[p] || '(기본)'}${setDefault ? ' · 기본 지정' : ''}`);
-      return res.status(200).json(publicView(await resolve(next), await availableList(next)));
+      await audit(sess.login_id, 'review.settings', p, `model=${next.models[p] || '(기본)'}${setDefault ? ' · 기본 지정' : ''}${reassigned ? ` · 기본 자동 재지정→${eff}` : ''}`);
+      return res.status(200).json({ ...publicView(await resolve(next, { provider: eff }), listNext, next), reassigned: reassigned ? eff : null });
     }
 
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -220,7 +254,8 @@ export default async function handler(req, res) {
       const sess = await requireRole(req, res, REVIEW_ROLES);
       if (!sess) return;
       if (body.provider && !PROVIDERS[body.provider]) return res.status(400).json({ error: '알 수 없는 검토 AI입니다.' });
-      const r = await resolve(await loadCfg(), { provider: body.provider || undefined });
+      const cfgR = await loadCfg();
+      const r = await resolve(cfgR, { provider: body.provider || effectiveDefault(cfgR, await availableList(cfgR)) });
       if (r.P.kind === 'none') return res.status(409).json({ error: '검토 AI가 \'사용 안 함\'으로 설정되어 있습니다.', code: 'REVIEW_DISABLED' });
       if (!r.apiKey) return res.status(500).json({ error: `검토 AI(${r.P.label}) API 키가 없습니다. 설정 → AI 연동 → 검토 AI에서 등록하거나 환경변수 ${r.P.env || ''}를 설정하세요.`, code: 'NO_REVIEW_KEY' });
       if (!r.baseUrl || !r.model) return res.status(500).json({ error: `검토 AI(${r.P.label})의 서버 주소 또는 모델 ID가 설정되지 않았습니다. 설정 → AI 연동 → 검토 AI에서 등록하세요.` });
