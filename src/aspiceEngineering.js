@@ -1107,7 +1107,8 @@ export function changedFields(snap, r) {
   return SUSPECT_FIELDS.filter(([k]) => nz(snap[k]) !== nz(r?.[k])).map(([, l]) => l);
 }
 export const LINK_KINDS = { alloc: "요소 할당", derive: "하위 요구 파생", verify: "검증 수단" };
-export const LINK_STATES = { valid: "유효", suspect: "변경 검토 필요", invalid: "무효(조치 필요)", orphan: "상위 삭제(고아 연결)", new: "신규", removed: "연결 제거" };
+// 추적 연결 상태 — 화면 표기. (내부 값 valid/invalid는 저장 호환을 위해 유지. 'valid' = 상위 변경이 이 하위에 영향 없음·연결 유지, 'invalid' = 하위를 고쳐야 함)
+export const LINK_STATES = { valid: "영향 없음(연결 유지)", suspect: "변경 검토 필요", invalid: "하위 수정 필요", orphan: "상위 삭제(고아 연결)", new: "신규", removed: "연결 제거" };
 
 // 모델의 모든 추적 연결 (하위 쪽에서 수집 — 상위가 삭제돼도 연결은 남아 고아로 드러난다)
 export function listLinks(model) {

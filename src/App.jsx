@@ -9764,7 +9764,12 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               return (
               <AeSec title={lstat.open.length ? `변경 영향 검토 — 검토 필요 ${lstat.open.length}건 (상위 요구 ${Object.keys(groups).length}건)` : "변경 영향 검토 — 미해결 연결 없음"}
                 right={model.reviewLog.length ? <button onClick={() => setShowLog(v => !v)} style={small}>{showLog ? "판정 이력 닫기" : `판정 이력 ${model.reviewLog.length}건`}</button> : null}>
-                {lstat.open.length > 0 && <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>상위 요구의 제목·내용·검증 기준·유형이 바뀌면 그 요구에서 나가는 연결을 표시합니다. 하위 항목은 자동으로 고치지 않습니다 — 영향이 없으면 <b>유효</b>, 하위 수정이 필요하면 의견과 함께 <b>무효</b>로 판정하고, 수정을 마친 뒤 유효로 전환하세요. 판정 기록은 추적 매트릭스의 '변경 영향·판정 이력' 시트에 남습니다.</div>}
+                {lstat.open.length > 0 && <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>상위 요구의 제목·내용·검증 기준·유형이 바뀌면, 그 요구에서 내려간 하위 항목(요소 할당·하위 요구·시험)마다 <b>"상위가 바뀌었는데 이 하위는 그대로 둬도 되는가?"</b>를 묻는 목록입니다. 하위는 자동으로 고치지 않습니다.
+                  <div style={{ marginTop: 4, display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px" }}>
+                    <b style={{ color: T.green }}>영향 없음</b><span>하위를 고칠 필요가 없음 → 연결을 그대로 인정합니다. (예: 검증 기준만 추가됐고 하위 요구 내용과 어긋나지 않음)</span>
+                    <b style={{ color: T.red }}>하위 수정 필요</b><span>하위를 고쳐야 함 → 무엇을 고칠지 의견을 적고 누릅니다. 고친 뒤 <b>수정 완료</b>를 누르면 연결이 인정됩니다. (예: 시험의 합격 기준을 새 검증 기준에 맞춰 수정)</span>
+                  </div>
+                  <div style={{ marginTop: 4 }}>판정은 추적 매트릭스의 '변경 영향·판정 이력' 시트에 남습니다. ⑧ QA 교차검토의 유효·무효(AI 의견이 맞는지)와는 다른 판정입니다.</div></div>}
                 {Object.entries(groups).map(([up, ls]) => {
                   const cur = lstat.reqById[up];
                   const sus = ls.filter(l => l.state === "suspect");
@@ -9796,15 +9801,15 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                               {l.state === "orphan"
                                 ? <button onClick={() => dropLinks(up, [l.key])} style={{ ...small, flex: 1, color: T.red }}>연결 제거</button>
                                 : <>
-                                    <button onClick={() => judge(up, [l.key], "valid")} style={{ ...small, flex: 1, color: T.green }}>유효</button>
-                                    {l.state !== "invalid" && <button onClick={() => judge(up, [l.key], "invalid")} style={{ ...small, flex: 1, color: T.red }}>무효</button>}
+                                    <button onClick={() => judge(up, [l.key], "valid")} title={l.state === "invalid" ? "하위 수정을 마쳤으므로 연결을 인정합니다" : "상위 변경이 이 하위에 영향 없음 — 연결을 그대로 인정합니다"} style={{ ...small, flex: 1, color: T.green, whiteSpace: "nowrap" }}>{l.state === "invalid" ? "✓ 수정 완료" : "영향 없음"}</button>
+                                    {l.state !== "invalid" && <button onClick={() => judge(up, [l.key], "invalid")} title="이 하위를 고쳐야 합니다 — 아래 의견 칸에 무엇을 고칠지 적은 뒤 누르세요" style={{ ...small, flex: 1, color: T.red, whiteSpace: "nowrap" }}>하위 수정 필요</button>}
                                   </>}
                             </div>
                           </div>))}
                       </div>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                        <input value={reviewNote[up] || ""} onChange={e => setReviewNote(o => ({ ...o, [up]: e.target.value }))} placeholder={cur ? "판정 의견 (예: 할당 영향 없음 / TC 판정 기준을 5,000rpm으로 수정 필요)" : "제거 사유 (예: 고객 협의로 요구 삭제)"} style={{ ...inp, flex: 1 }} />
-                        {judgeable.length > 1 && <button onClick={() => judge(up, judgeable, "valid")} style={{ ...small, color: T.green, whiteSpace: "nowrap" }}>모두 유효</button>}
+                        <input value={reviewNote[up] || ""} onChange={e => setReviewNote(o => ({ ...o, [up]: e.target.value }))} placeholder={cur ? "판정 의견 (예: 검증 기준 추가만으로 하위 영향 없음 / SQT-0062 합격 기준을 2 s ± 0.1 s로 수정 필요)" : "제거 사유 (예: 고객 협의로 요구 삭제)"} style={{ ...inp, flex: 1 }} />
+                        {judgeable.length > 1 && <button onClick={() => judge(up, judgeable, "valid")} title="이 상위 요구의 변경이 아래 하위 항목 전부에 영향 없음" style={{ ...small, color: T.green, whiteSpace: "nowrap" }}>모두 영향 없음</button>}
                         {!cur && ls.length > 1 && <button onClick={() => dropLinks(up, ls.map(l => l.key))} style={{ ...small, color: T.red, whiteSpace: "nowrap" }}>모두 제거</button>}
                       </div>
                     </div>);
