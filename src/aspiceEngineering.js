@@ -1925,3 +1925,40 @@ export function markReviewed(model, list, by = "QA") {
   m.aiReview.edits = m.aiReview.edits.slice(-1000);
   return m;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11-e) 판정 보조 — 관련 상위 항목 표시 · 같은 지적의 검토 AI 간 일치 · 수정안 초안 프롬프트
+//  · 판정은 사람이 한다. 보조 기능은 '판단에 필요한 근거를 한 화면에 모으고, 수정 초안을 만들어 주는 것'까지다.
+// ═══════════════════════════════════════════════════════════════════════════
+// 검토 대상 항목의 관련(상위·참조) 항목 — 의견을 판정할 때 원문을 찾아다니지 않도록 카드 안에 보여준다
+export function reviewRefs(model, key, id) {
+  const m = normalizeModel(model);
+  const it = reviewItems(m, key).find(x => x.id === id);
+  return it ? reviewContext(m, it.refs || []) : [];
+}
+// 같은 대상·같은 기준을 서로 다른 검토 AI가 지적했으면 '일치' — 독립된 두 검토가 같은 문제를 봤다는 뜻이므로 판정 우선순위가 높다
+export function reviewAgreement(findings) {
+  const byKey = {};
+  findings.forEach(f => { const k = `${f.level}|${f.reqId}|${f.criterion}`; (byKey[k] = byKey[k] || new Set()).add(f.provider || f.reviewer || ""); });
+  return Object.fromEntries(Object.entries(byKey).map(([k, s]) => [k, s.size]));
+}
+// 수정안 초안 프롬프트 — 대상 항목의 현재 값 + 판정된(틀림 제외) 의견 + 관련 항목 → 필드별 수정안(JSON)
+export function promptFixDraft({ scopeKey, item, fields, opinions, refs }) {
+  const S = reviewScope(scopeKey);
+  return `역할: ASPICE ${S?.proc || ""} 산출물 「${S?.label || scopeKey}」의 항목 ${item.id}를, 독립 검토 AI의 지적을 반영해 고쳐 쓰는 작성자.
+${AI_FIDELITY}
+규칙:
+1) 아래 [지적]을 모두 반영하되, [관련 항목](상위 요구·원문)에 없는 수치·조건을 새로 만들지 않는다. 근거가 없으면 'TBD(확인 필요)'로 쓴다.
+2) 지적이 없는 부분은 원문을 유지한다(불필요한 문장 재배열 금지).
+3) 각 필드는 한 문단, 줄바꿈 없이. 바꾸지 않을 필드는 결과에서 생략한다.
+4) 출력은 JSON만: {"fields":{"<필드키>":"<수정안>"},"rationale":"무엇을 왜 바꿨는지 한두 문장"}
+
+[필드 키와 현재 값]
+${JSON.stringify(Object.fromEntries(fields.map(f => [f.k, { label: f.label, value: item.values[f.k] || "" }])))}
+
+[지적] (기준 · 심각도 · 근거 인용 · 내용 · 제안)
+${JSON.stringify(opinions.map(o => ({ criterion: o.criterion, severity: o.severity, evidence: o.evidence || "", issue: o.issue, suggestion: o.suggestion || "" })))}
+
+[관련 항목]
+${refs.length ? JSON.stringify(refs) : "(없음)"}`;
+}

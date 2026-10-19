@@ -8634,6 +8634,25 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [rvGuide, setRvGuide] = useState(false);
   const [rvRule, setRvRule] = useState(null);          // ① 규칙 검사 상세 펼침: error | warn | info | qf(요구 품질 플래그) | here(이 산출물 관련)       // 검토 기준 안내 펼침
   const [rvEdit, setRvEdit] = useState(null);          // ③에서 검토 대상 직접 수정 { fkey, key, id, vals }
+  // 편집 중인 대상에 대해 AI 수정안 초안 — 판정된(틀림 제외)·미판정 의견과 관련 상위 항목을 근거로 필드별 수정안을 만들어 편집 칸에 채운다. 적용은 사람이 한다.
+  function aiFixDraft() {
+    if (!rvEdit) return;
+    const { key, id } = rvEdit;
+    return run(`${id} AI 수정안 초안`, async () => {
+      const sp = AE.reviewEditSpec(model, key, id);
+      if (!sp) throw new Error("수정할 대상을 찾지 못했습니다.");
+      const ops = AE.reviewView(model).list.filter(f => f.level === key && f.reqId === id && !f.removed && f.judge?.state !== "invalid");
+      if (!ops.length) throw new Error("반영할 검토 의견이 없습니다(모두 '틀림'으로 판정되었거나 의견이 없음).");
+      const refs = AE.reviewRefs(model, key, id);
+      const r = await callClaudeJson(AE.promptFixDraft({ scopeKey: key, item: { id, values: sp.values }, fields: sp.fields, opinions: ops, refs }), 2000);
+      const fields = r && typeof r.fields === "object" ? r.fields : {};
+      const allowed = new Set(sp.fields.map(f => f.k));
+      const draft = Object.fromEntries(Object.entries(fields).filter(([k, v]) => allowed.has(k) && typeof v === "string" && v.trim() && v.trim() !== String(sp.values[k] || "").trim()).map(([k, v]) => [k, v.trim()]));
+      if (!Object.keys(draft).length) throw new Error("AI가 바꿀 내용을 제안하지 않았습니다. 직접 수정하세요.");
+      setRvEdit(x => x && x.id === id ? { ...x, vals: { ...x.vals, ...draft }, aiDraft: { fields: draft, original: Object.fromEntries(Object.keys(draft).map(k => [k, x.vals[k] ?? ""])), rationale: String(r.rationale || ""), opinions: ops.length } } : x);
+      return `AI 수정안 초안 ${Object.keys(draft).length}개 필드 — 편집 칸에 채웠습니다. 내용을 확인·수정한 뒤 [적용]을 누르세요 (적용 전에는 아무것도 바뀌지 않습니다).`;
+    });
+  }
   // ③ 판정 화면에서 검토 대상 산출물을 바로 고친다. SYS 요구의 제목·내용은 확정 요구(items)가 원본이므로 items도 함께 고친다.
   function applyReviewEditUI() {
     if (!rvEdit) return;
@@ -9193,15 +9212,18 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           const fl = AE.qualityFlags({ ...src, title: rvEdit.vals.title ?? src.title, text: rvEdit.vals.text ?? src.text, verifCriteria: rvEdit.vals.verifCriteria ?? src.verifCriteria });
           return <div style={{ fontSize: 10.5, marginBottom: 6, color: fl.length ? T.amber : T.green }}>규칙 판정(입력 즉시 반영): {fl.length ? fl.map(x => x.msg).join(" · ") : "✓ 품질 플래그 없음 — 적용하면 경고가 사라집니다"}</div>; })()}
         {rvEdit.msg && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 6 }}>⚠ {rvEdit.msg}</div>}
+        {rvEdit.aiDraft && <div style={{ fontSize: 10.5, color: T.accent, marginBottom: 6, padding: "6px 8px", background: T.accent + "12", borderRadius: 6 }}>✦ AI 수정안 초안이 채워져 있습니다(의견 {rvEdit.aiDraft.opinions}건 반영). <b>적용 전에 내용을 확인하세요</b> — 원문에 없는 수치는 'TBD(확인 필요)'로 들어옵니다.{rvEdit.aiDraft.rationale ? <div style={{ color: T.muted, marginTop: 2 }}>변경 이유: {rvEdit.aiDraft.rationale}</div> : null}</div>}
         {sp.fields.map(fd => (
           <div key={fd.k} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 5 }}>
-            <span style={{ width: 120, flexShrink: 0, fontSize: 10.5, color: T.muted, paddingTop: 5 }}>{fd.label}{fd.sysItem && <div style={{ fontSize: 9.5 }}>(확정 요구에 반영)</div>}</span>
+            <span style={{ width: 120, flexShrink: 0, fontSize: 10.5, color: T.muted, paddingTop: 5 }}>{fd.label}{fd.sysItem && <div style={{ fontSize: 9.5 }}>(확정 요구에 반영)</div>}
+              {rvEdit.aiDraft && fd.k in rvEdit.aiDraft.fields && <div style={{ fontSize: 9.5, color: T.accent }}>✦ AI 초안 <button onClick={() => setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: x.aiDraft.original[fd.k] } }))} title="이 필드만 원래 값으로" style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 9.5, padding: 0, textDecoration: "underline" }}>원래대로</button></div>}</span>
             {fd.rows > 1
               ? <textarea rows={fd.rows} value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...ta, minHeight: 0, flex: 1 }} />
               : <input value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...inp, flex: 1 }} />}
           </div>))}
         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center", marginTop: 4 }}>
           <span style={{ fontSize: 10, color: T.muted, marginRight: "auto" }}>적용하면 이 항목의 검토 의견은 '내용 변경됨'이 되고, 연결된 하위 항목에는 변경 영향 검토가 표시될 수 있습니다.{AE.reviewScope(rvEdit.key)?.kind === "test" ? " 수정한 시험은 수동 작성으로 바뀌어 규칙 재생성 때 덮어쓰지 않습니다." : ""}</span>
+          <button onClick={aiFixDraft} disabled={busy} title="판정된(틀림 제외)·미판정 의견과 관련 상위 항목을 근거로 필드별 수정안을 만들어 채웁니다. 적용은 직접 누릅니다" style={{ ...small, color: T.accent }}>✦ AI 수정안 초안</button>
           <button onClick={() => setTab(sp.tab)} style={small}>원래 탭에서 열기</button>
           <button onClick={() => setRvEdit(null)} style={small}>취소</button>
           <button onClick={applyReviewEditUI} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>적용</button>
@@ -9735,8 +9757,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     {rvGroup && (() => {
                       const groups = [];
                       sorted.forEach(f => { let g = groups.find(x => x.id === f.reqId); if (!g) { g = { id: f.reqId, title: f.reqTitle, fs: [] }; groups.push(g); } g.fs.push(f); });
-                      const srcOf = id => (lvItems.find(it => it.id === id) || {});
+                      const agr = AE.reviewAgreement(v.list.filter(f => f.level === rvLevel && !f.removed));
                       return groups.map(g => {
+                        const refs = AE.reviewRefs(model, rvLevel, g.id);
                         const open_ = g.fs.filter(f => !f.judge && !f.removed);
                         const sp = AE.reviewEditSpec(model, rvLevel, g.id);
                         const edited = g.fs.some(f => f.edits.length);
@@ -9749,6 +9772,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                                 {sp && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 3, lineHeight: 1.5 }}>
                                   {sp.fields.filter(fd => vals[fd.k]).slice(0, 4).map(fd => <div key={fd.k}><span style={{ color: T.muted }}>{fd.label}:</span> <span style={{ color: T.text }}>{String(vals[fd.k]).slice(0, 220)}{String(vals[fd.k]).length > 220 ? "…" : ""}</span></div>)}
                                 </div>}
+                                {refs.length > 0 && <details style={{ fontSize: 10.5, marginTop: 4 }}>
+                                  <summary style={{ cursor: "pointer", color: T.accent }}>관련 상위·참조 항목 {refs.length}건 보기 (일관성·완전성 지적은 이것과 비교해 판정)</summary>
+                                  {refs.slice(0, 6).map(r => <div key={r.id} style={{ marginTop: 3, paddingLeft: 8, borderLeft: `2px solid ${T.border}`, color: T.text }}><span style={{ fontFamily: "monospace", color: T.accent }}>{r.id}</span> <span style={{ color: T.muted }}>{r.구분}</span> {r.제목 ? <b>{r.제목} </b> : null}{r.내용 || r.책임 || r.설계 || r["신호·데이터"] || ""}{r.검증기준 ? <div style={{ color: T.muted }}>검증 기준: {r.검증기준}</div> : null}</div>)}
+                                </details>}
                               </div>
                               <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
                                 {open_.length > 0 && <div style={{ display: "flex", gap: 3 }}>
@@ -9763,7 +9790,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                             <div style={{ marginTop: 6, borderTop: `1px solid ${T.border}` }}>
                               {g.fs.map(f => (
                                 <div key={f.key} style={{ display: "grid", gridTemplateColumns: "86px 1fr 230px", gap: 8, padding: "5px 0", borderBottom: `1px solid ${T.border}22`, fontSize: 10.5, opacity: f.judge?.state === "invalid" ? 0.6 : 1 }}>
-                                  <div><div>{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}</div>
+                                  <div><div>{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}{(agr[`${f.level}|${f.reqId}|${f.criterion}`] || 0) >= 2 && <div title="서로 다른 검토 AI가 같은 기준으로 같은 대상을 지적했습니다 — 독립된 두 검토가 일치" style={{ color: T.green, fontSize: 9.5, fontWeight: 700 }}>◎ 검토 AI {agr[`${f.level}|${f.reqId}|${f.criterion}`]}곳 일치</div>}</div>
                                   <div style={{ lineHeight: 1.5 }}>
                                     {f.evidence && <div>근거: <span style={{ background: T.amber + "22", padding: "0 3px", borderRadius: 3 }}>"{f.evidence}"</span></div>}
                                     <div>{f.issue}</div>
