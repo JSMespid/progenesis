@@ -123,6 +123,60 @@ function Btn({ children, variant="primary", onClick, style={}, disabled=false })
   );
 }
 
+// ── 파일 끌어다 놓기(드래그앤드롭) 공용 영역 ──
+// accept: <input accept>와 같은 형식(".dbc,.txt" / "image/png,image/jpeg" / "image/*"). 비우면 모든 파일.
+// onFiles(File[]): 형식이 맞는 파일만 전달(multiple=false면 첫 1개). 형식이 맞지 않으면 영역 안에 안내만 표시.
+// bare=true: 테두리·안내문 없이 감싸기만 하고, 끌고 들어올 때만 오버레이 표시.
+const fileAccepts = (f, accept) => {
+  const toks = String(accept || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (!toks.length) return true;
+  const name = String(f?.name || "").toLowerCase(), type = String(f?.type || "").toLowerCase();
+  return toks.some(t => t.startsWith(".") ? name.endsWith(t)
+    : t.endsWith("/*") ? type.startsWith(t.slice(0, -1)) : type === t);
+};
+// 기존 <input type="file"> onChange 핸들러를 그대로 재사용하기 위한 가짜 이벤트
+const asFileEvent = files => ({ target: { files, value: "" } });
+const dragHasFiles = e => [...(e.dataTransfer?.types || [])].includes("Files");
+
+function FileDrop({ accept = "", multiple = false, onFiles, disabled = false, hint, dropLabel, bare = false, style = {}, children }) {
+  const [over, setOver] = useState(false);
+  const [msg, setMsg] = useState("");
+  const depth = useRef(0);
+  const msgTimer = useRef(null);
+  useEffect(() => () => clearTimeout(msgTimer.current), []);
+  const flashMsg = t => { setMsg(t); clearTimeout(msgTimer.current); msgTimer.current = setTimeout(() => setMsg(""), 4000); };
+  const exts = String(accept || "").split(",").map(s => s.trim()).filter(Boolean)
+    .map(t => t === "image/png" ? ".png" : t === "image/jpeg" ? ".jpg" : t).join(" · ");
+  return (
+    <div style={{ position: "relative", ...(bare ? {} : { border: `1px dashed ${over ? T.accent : T.border}`, borderRadius: 10, padding: "10px 12px", background: over ? T.accent + "0D" : "transparent", transition: "border-color .15s, background .15s" }), ...style }}
+      onDragEnter={e => { if (!dragHasFiles(e) || disabled) return; e.preventDefault(); depth.current++; setOver(true); }}
+      onDragOver={e => { if (!dragHasFiles(e) || disabled) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
+      onDragLeave={e => { if (!dragHasFiles(e) || disabled) return; depth.current = Math.max(0, depth.current - 1); if (!depth.current) setOver(false); }}
+      onDrop={e => {
+        if (!dragHasFiles(e) || disabled) return;
+        e.preventDefault(); e.stopPropagation(); depth.current = 0; setOver(false);
+        const all = [...(e.dataTransfer.files || [])];
+        const ok = all.filter(f => fileAccepts(f, accept));
+        if (!ok.length) { flashMsg(`지원하지 않는 형식입니다${exts ? ` (가능: ${exts})` : ""} — ${all.map(f => f.name).join(", ")}`); return; }
+        if (ok.length < all.length) flashMsg(`형식이 맞지 않는 ${all.length - ok.length}개 파일은 제외했습니다.`);
+        else if (!multiple && ok.length > 1) flashMsg(`파일 1개만 받습니다 — '${ok[0].name}'만 사용합니다.`);
+        else setMsg("");
+        onFiles?.(multiple ? ok : ok.slice(0, 1));
+      }}>
+      {children}
+      {!bare && hint !== false && (
+        <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>{hint || `또는 파일을 이 영역으로 끌어다 놓으세요${exts ? ` (${exts})` : ""}${multiple ? " · 여러 개 가능" : ""}`}</div>
+      )}
+      {msg && <div style={{ fontSize: 10.5, color: T.amber, marginTop: 6 }}>⚠ {msg}</div>}
+      {over && (
+        <div style={{ position: "absolute", inset: 0, zIndex: 3, borderRadius: 10, border: `2px dashed ${T.accent}`, background: T.bg + "E6", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: 8, color: T.accent, fontSize: 12.5, fontWeight: 600, pointerEvents: "none" }}>
+          📂 {dropLabel || "여기에 놓으세요"}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Input({ label, value, onChange, placeholder, type="text", style={} }) {
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
@@ -763,6 +817,18 @@ export default function SpiderQaAgent() {
   const authed = !!session;
   const role = session?.role || "viewer";
   const isAdmin = role === "admin";
+  // 드롭 영역 밖에 파일을 놓으면 브라우저가 그 파일을 열어 화면을 떠나버림(작성 중 내용 유실) → 막음.
+  // 드롭 영역(FileDrop·기존 영역)이 먼저 preventDefault 하므로 defaultPrevented면 건드리지 않는다.
+  useEffect(() => {
+    const guard = e => {
+      if (e.defaultPrevented || !dragHasFiles(e)) return;
+      e.preventDefault();
+      if (e.type === "dragover" && e.dataTransfer) e.dataTransfer.dropEffect = "none";
+    };
+    window.addEventListener("dragover", guard);
+    window.addEventListener("drop", guard);
+    return () => { window.removeEventListener("dragover", guard); window.removeEventListener("drop", guard); };
+  }, []);
 
   const logout = () => { try { localStorage.removeItem(AUTH_KEY); } catch {} setSession(null); setAppSettings(null); setPage("dashboard"); };
 
@@ -2163,8 +2229,9 @@ function StepInfo({ form, setForm, onChooseTrack, osspChosen }) {
           </div>
           <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
             {[["clientLogo","고객사(발주처) 로고"],["companyLogo","우리회사(수행사) 로고"]].map(([k,label])=>(
-              <div key={k} style={{ flex:1, minWidth:220, border:`1px dashed ${T.border}`, borderRadius:10, padding:12 }}>
-                <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>{label}</div>
+              <FileDrop key={k} bare accept="image/png,image/jpeg" onFiles={fs => readLogo(k)(asFileEvent(fs))} dropLabel={`여기에 놓으면 ${label}로 지정합니다 (PNG · JPG)`}
+                style={{ flex:1, minWidth:220, border:`1px dashed ${T.border}`, borderRadius:10, padding:12 }}>
+                <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>{label} <span style={{ fontSize:10 }}>· 끌어다 놓기 가능</span></div>
                 {form[k]?.dataUrl ? (
                   <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                     <img src={form[k].dataUrl} alt={label} style={{ height:34, maxWidth:170, objectFit:"contain", background:"#fff", borderRadius:6, padding:"2px 6px" }} />
@@ -2177,7 +2244,7 @@ function StepInfo({ form, setForm, onChooseTrack, osspChosen }) {
                     <input type="file" accept="image/png,image/jpeg" onChange={readLogo(k)} style={{ display:"none" }} />
                   </label>
                 )}
-              </div>
+              </FileDrop>
             ))}
           </div>
         </div>
@@ -8932,6 +8999,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </div>
             </AeSec>
             <AeSec title="통신 DB(DBC) 가져오기 — 메시지·시그널·주기를 인터페이스 요구·시스템 인터페이스로 결정적 변환 (AI 미사용)">
+              <FileDrop accept=".dbc,.txt" onFiles={fs => onDbc(asFileEvent(fs))} dropLabel="여기에 놓으면 DBC를 해석합니다 (.dbc · .txt)">
               <label style={{ ...small, display: "inline-block", padding: "6px 12px" }}>📎 .dbc 파일 선택<input type="file" accept=".dbc,.txt" onChange={onDbc} style={{ display: "none" }} /></label>
               {dbc && (
                 <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 11 }}>
@@ -8940,8 +9008,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   <span style={{ color: T.muted }}>송신 {dbc.parsed.messages.filter(x => x.tx === dbc.own).length} · 수신 {dbc.parsed.messages.filter(x => x.tx !== dbc.own && x.signals.some(s => s.rx.includes(dbc.own))).length}</span>
                   <Btn onClick={applyDbc} style={{ fontSize: 11, padding: "4px 12px" }}>인터페이스 요구 추가</Btn>
                 </div>)}
+              </FileDrop>
             </AeSec>
             <AeSec title="등록 템플릿 WP 특성 점검 — 고객사·조직 템플릿이 ASPICE 정보항목 특성을 담고 있는지 목차·항목 라벨로 결정적 점검">
+              <FileDrop accept=".docx" onFiles={fs => onTplFile(asFileEvent(fs))}
+                dropLabel={`여기에 놓으면 '${({ SYS_RS: "시스템 요구사항 명세서", SYS_AD: "시스템 아키텍처 설계서", SW_RS: "SW 요구사항 명세서", SW_AD: "SW 아키텍처 설계서", HW_RS: "HW 요구사항 명세서", HW_AD: "HW 아키텍처 설계서", VERIF: "검증 명세서(공통)" })[tplGroup] || tplGroup}' 기준으로 점검합니다 (.docx)`}>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <select value={tplGroup} onChange={e => setTplGroup(e.target.value)} style={{ ...inp, width: 220 }}>
                   {[["SYS_RS", "시스템 요구사항 명세서"], ["SYS_AD", "시스템 아키텍처 설계서"], ["SW_RS", "SW 요구사항 명세서"], ["SW_AD", "SW 아키텍처 설계서"], ["HW_RS", "HW 요구사항 명세서"], ["HW_AD", "HW 아키텍처 설계서"], ["VERIF", "검증 명세서(공통)"]].map(([k, l]) => <option key={k} value={k}>{l}</option>)}
@@ -8956,6 +9027,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     {list.map(c => <span key={c.id} title={c.source} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, border: `1px solid ${c.byTpl ? T.green + "66" : (c.origin === "ASPICE" ? T.red + "66" : T.border)}`, color: c.byTpl ? T.green : (c.origin === "ASPICE" ? T.red : T.muted) }}>{c.byTpl ? "✓" : "✕"} {c.label}{c.origin !== "ASPICE" ? ` (${c.origin})` : ""}</span>)}
                   </div>
                 </div>); })()}
+              </FileDrop>
             </AeSec>
           </>)}
 
@@ -8995,9 +9067,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             </AeSec>
             <AeSec title={`${lv} 인터페이스 ${model.interfaces[lv].length}건`}>{IfList({ lv: lv })}</AeSec>
             {lv === "SW" && (
+              <FileDrop bare accept=".h,.hpp,.txt" multiple onFiles={fs => onHeaders(asFileEvent(fs))} dropLabel="여기에 놓으면 C 헤더에서 유닛 인터페이스를 가져옵니다 (.h · .hpp · .txt · 여러 개 가능)">
               <AeSec title={`SW 유닛·상세설계 골격 ${model.units.SW.length}개 (${AE.procLabel("SWE.3", V)})`}
                 right={<div style={{ display: "flex", gap: 6 }}>
-                  <label style={{ ...small, display: "inline-block", padding: "4px 10px" }}>📎 .h 헤더 가져오기<input type="file" accept=".h,.hpp,.txt" multiple onChange={onHeaders} style={{ display: "none" }} /></label>
+                  <label title="헤더 파일을 이 섹션으로 끌어다 놓아도 됩니다" style={{ ...small, display: "inline-block", padding: "4px 10px" }}>📎 .h 헤더 가져오기 (끌어다 놓기 가능)<input type="file" accept=".h,.hpp,.txt" multiple onChange={onHeaders} style={{ display: "none" }} /></label>
                   <Btn onClick={genUnits} disabled={busy || !model.comps.SW.length} style={{ fontSize: 11, padding: "4px 12px" }}>⚙ 규칙 골격 생성</Btn>
                 </div>}>
                 <WhyBox title="상세설계는 왜 '골격'까지만 만들고, 헤더 파일로 채우나요?">
@@ -9032,6 +9105,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 </div>
                 <button onClick={() => set(n => { n.units.SW.push({ id: AE.nextId(AE.UNIT_PREFIX, n.units.SW), comp: n.comps.SW[0]?.id || "", name: "", desc: "", reqs: [], funcs: [], types: [], macros: [], origin: "manual", file: "", designDone: false }); })} style={{ ...small, marginTop: 6 }}>+ 유닛 추가</button>
               </AeSec>
+              </FileDrop>
             )}
             <AeSec title="설계 근거"><textarea value={model.rationale[lv]} onChange={e => set(n => { n.rationale[lv] = e.target.value; })} style={{ ...ta, minHeight: 50 }} /></AeSec>
           </>); })()}
@@ -11313,8 +11387,9 @@ function OrgTab({ flash, settings, onReload }) {
       >
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           {[["clientLogo", "고객사(발주처) 기본 로고"], ["companyLogo", "우리회사(수행사) 로고"]].map(([k, label]) => (
-            <div key={k} style={{ flex: 1, minWidth: 230, border: `1px dashed ${T.border}`, borderRadius: 10, padding: 14 }}>
-              <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>{label}</div>
+            <FileDrop key={k} bare accept="image/png,image/jpeg" onFiles={fs => readLogo(k)(asFileEvent(fs))} dropLabel={`여기에 놓으면 ${label}로 지정합니다 (PNG · JPG)`}
+              style={{ flex: 1, minWidth: 230, border: `1px dashed ${T.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>{label} <span style={{ fontSize: 10 }}>· 끌어다 놓기 가능</span></div>
               {org[k]?.dataUrl ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <img src={org[k].dataUrl} alt={label} style={{ height: 34, maxWidth: 170, objectFit: "contain", background: "#fff", borderRadius: 6, padding: "2px 6px" }} />
@@ -11327,7 +11402,7 @@ function OrgTab({ flash, settings, onReload }) {
                   <input type="file" accept="image/png,image/jpeg" onChange={readLogo(k)} style={{ display: "none" }} />
                 </label>
               )}
-            </div>
+            </FileDrop>
           ))}
         </div>
       </SettingsSection>
