@@ -366,6 +366,7 @@ const DESIGN_HINTS = ["mcu", "spi", "i2c", "uart", "rtos", "autosar", "알고리
 const UNIT_RE = "(ms|µs|us|s|초|분|v|mv|kv|a|ma|ua|µa|w|kw|℃|°c|도|%|km\\/h|kph|rpm|hz|khz|mhz|bps|kbps|mbps|byte|bytes|kb|mb|mm|cm|m|kg|g|n|nm|bar|kpa|lux|db|회|건|개)";
 export const NUM_RE = new RegExp(`(-?\\d+(?:\\.\\d+)?)\\s*${UNIT_RE}(?![a-z])`, "gi");
 
+export const STD_REF_RE = /\b(CISPR|ISO(?:\/IEC|\/SAE)?|IEC|SAE\s?J|UN(?:ECE)?\s?R|ECE\s?R|LV\s?\d|AEC-?Q|MIL-STD|GB\/T|JASO|IEEE|ASPICE|ASIL\s?[A-D]|VDA)\s*-?\s*\d*/i;
 export function qualityFlags(req) {
   const text = `${req.title || ""} ${req.text || ""}`;
   const low = text.toLowerCase();
@@ -373,7 +374,9 @@ export function qualityFlags(req) {
   const weak = WEAK_WORDS.filter(w => low.includes(w.toLowerCase()));
   if (weak.length) flags.push({ code: "ambiguous", msg: `모호어: ${weak.slice(0, 3).join(", ")}` });
   if (!String(req.verifCriteria || "").trim()) flags.push({ code: "noCriteria", msg: "검증 기준 없음" });
-  if ((req.type === "비기능" || req.type === "성능") && !new RegExp(NUM_RE.source, "i").test(text)) flags.push({ code: "noQuant", msg: "정량 기준 없음" });
+  // 정량 기준: 제목·내용뿐 아니라 검증 기준의 수치+단위도 인정하고, 규격 참조(CISPR 25 · ISO 26262 · UN R10 · LV124 · AEC-Q100 등)는 그 규격이 기준값을 정하므로 정량으로 본다
+  const quantText = `${text} ${req.verifCriteria || ""}`;
+  if ((req.type === "비기능" || req.type === "성능") && !new RegExp(NUM_RE.source, "i").test(quantText) && !STD_REF_RE.test(quantText)) flags.push({ code: "noQuant", msg: "정량 기준 없음 — 제목·내용·검증 기준에 수치+단위 또는 적용 규격(예: CISPR 25 Class 3)을 명시" });
   const conj = (text.match(/(?:하고|하며|및|그리고|또한)\s/g) || []).length;
   if (conj >= 3) flags.push({ code: "compound", msg: "복합 요구 의심(분할 검토)" });
   const dz = DESIGN_HINTS.filter(w => low.includes(w));

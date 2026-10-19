@@ -8639,7 +8639,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     const spec = AE.reviewEditSpec(model, key, id);
     if (!spec) { setErr("수정할 대상을 찾지 못했습니다 — 이미 삭제되었을 수 있습니다."); setRvEdit(null); return; }
     const patch = {}; spec.fields.forEach(f => { if ((vals[f.k] ?? "") !== (spec.values[f.k] ?? "")) patch[f.k] = vals[f.k]; });
-    if (!Object.keys(patch).length) { setRvEdit(null); return; }
+    if (!Object.keys(patch).length) { setRvEdit(x => x ? { ...x, msg: "바뀐 내용이 없어 적용할 것이 없습니다. 아래 '규칙 판정'에 남은 항목이 있으면 그 칸을 고친 뒤 적용하세요. 그대로 두려면 [취소]." } : x); return; }
     const S = AE.reviewScope(key);
     let newItems = null;
     if (S?.kind === "req" && S.lv === "SYS" && ("title" in patch || "text" in patch)) {
@@ -9186,6 +9186,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     return (
       <div style={{ border: `1px solid ${T.accent}66`, borderRadius: 8, padding: 10, background: T.accent + "0A" }}>
         <div style={{ fontSize: 11, marginBottom: 6 }}><b>{rvEdit.id}</b> 수정 {suggestion && <span style={{ color: T.green }}>— 제안: {suggestion}</span>}</div>
+        {(() => { const S = AE.reviewScope(rvEdit.key); if (S?.kind !== "req") return null;
+          const src = (AE.reviewItems(model, rvEdit.key).find(it => it.id === rvEdit.id) || {}).src || {};
+          const fl = AE.qualityFlags({ ...src, title: rvEdit.vals.title ?? src.title, text: rvEdit.vals.text ?? src.text, verifCriteria: rvEdit.vals.verifCriteria ?? src.verifCriteria });
+          return <div style={{ fontSize: 10.5, marginBottom: 6, color: fl.length ? T.amber : T.green }}>규칙 판정(입력 즉시 반영): {fl.length ? fl.map(x => x.msg).join(" · ") : "✓ 품질 플래그 없음 — 적용하면 경고가 사라집니다"}</div>; })()}
+        {rvEdit.msg && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 6 }}>⚠ {rvEdit.msg}</div>}
         {sp.fields.map(fd => (
           <div key={fd.k} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 5 }}>
             <span style={{ width: 120, flexShrink: 0, fontSize: 10.5, color: T.muted, paddingTop: 5 }}>{fd.label}{fd.sysItem && <div style={{ fontSize: 9.5 }}>(확정 요구에 반영)</div>}</span>
