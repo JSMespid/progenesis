@@ -8423,6 +8423,17 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
 // ASPICE V-모델 엔지니어링 모달 — SYS.2 확정 요구 → SYS.3 → SWE.1/2 · HWE.1/2 → 검증 수단 → 추적·충족도
 // 저장 위치: requirements.aspice (tailoring JSON 내부 — DB 스키마 변경 없음)
 // ═══════════════════════════════════════════════════════════════════════════
+// V-모델 창의 기본 탭 = "다음에 할 단계" (작업 순서 ①→⑥, 모두 갖춰지면 ⑦ 점검)
+// saved: 저장본(requirements.aspice)이 있는지 — 있으면 ① 설정은 이미 거친 것으로 보고 ②부터 판정
+function aeNextTab(m, saved) {
+  if (!m) return "setup";
+  if (!m.reqs.SYS.length) return saved || m.reqs.STK.length ? "req" : "setup";
+  if (!m.comps.SYS.length) return "SYS";
+  if (m.scope.SW && (!m.reqs.SW.length || !m.comps.SW.length)) return "SW";
+  if (m.scope.HW && (!m.reqs.HW.length || !m.comps.HW.length)) return "HW";
+  if (!m.tests.length) return "verif";
+  return "trace";
+}
 const AE_TABS = [["setup", "① 입력자료·설정"], ["req", "② 요구 도출·명세"], ["SYS", "③ 시스템 (SYS.2·3)"], ["SW", "④ SW (SWE.1·2)"], ["HW", "⑤ HW (HWE.1·2)"], ["verif", "⑥ 검증 수단"], ["trace", "⑦ 추적성·충족도"], ["review", "⑧ QA 교차검토"]];
 const AE_SEV = { error: { c: "#FF5B5B", l: "오류" }, warn: { c: "#F5A623", l: "경고" }, info: { c: "#6B7280", l: "정보" } };
 
@@ -8462,10 +8473,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     m.reqs.SYS = AE.syncSysReqs(requirements?.items || [], m.reqs.SYS);
     return m;
   });
-  // 첫 화면: 지정 탭 → 확정 요구가 없으면 ② 요구 도출·명세 → 저장본이 있으면 추적성 → 설정 (탭 순서와 무관하게 작업 시작점 기준)
-  // 기본 탭: 처음 여는 V-모델은 작업 순서상 ① 입력자료·설정부터. 이미 진행 중인 V-모델은 ⑦ 추적성·충족도(현황)로.
+  // 기본 탭: 다음에 할 단계(aeNextTab) — 처음 여는 V-모델은 ①, 진행 중이면 비어 있는 첫 단계, 모두 갖춰지면 ⑦ 점검.
   // initTab은 특정 진입점(예: 요구사항 산출물 행의 '요구 도출·명세' 버튼 → ②)에서만 지정한다.
-  const [tab, setTab] = useState(initTab || (requirements?.aspice && (requirements?.items || []).length ? "trace" : "setup"));
+  const [tab, setTab] = useState(() => initTab || aeNextTab(model, !!requirements?.aspice));
   const [itemsVer, setItemsVer] = useState(0);   // V-모델 쪽에서 요구 목록이 바뀌면(DBC 등) ① 탭 패널을 새 목록으로 다시 연다
   const srcRef = useRef(requirements?.source || null);   // ② 탭의 원문·파일 (확정 전이라도 저장에 포함)
   const [srcSig, setSrcSig] = useState(() => ((requirements?.source?.files) || []).map(f => f.name).join("|"));   // 파일명 변경 감지용
