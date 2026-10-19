@@ -27,7 +27,12 @@ const PROVIDERS = {
   none:      { label: '사용 안 함 (규칙 검사·사람 판정만)', kind: 'none', baseUrl: '', env: '', defModel: '' },
 };
 const REVIEW_ROLES = ['admin', 'pm', 'qa'];
-const TIMEOUT_MS = 9000;   // Vercel 함수 제한(약 10초) 안에서 깔끔한 오류를 돌려주기 위함
+// 검토 AI 응답 대기 한도. 추론형 모델(gpt-6-astra 등)은 요구 몇 건에도 10초를 넘기므로 9초로는 부족했다.
+// Vercel 함수 실행 한도(Fluid compute 기본 300초) 안에서 넉넉히 기다리되, 함수 한도(maxDuration 60초)보다 짧게 끊어
+// 플랫폼 강제 종료(비JSON 504) 대신 깔끔한 오류 메시지를 돌려준다. 필요하면 환경변수 REVIEW_TIMEOUT_MS로 조정.
+const TIMEOUT_MS = Math.min(Math.max(Number(process.env.REVIEW_TIMEOUT_MS) || 55000, 5000), 290000);
+// 이 함수의 최대 실행 시간(초) — 검토 AI 응답 대기를 위해 기본보다 길게 지정 (TIMEOUT_MS보다 커야 함)
+export const config = { maxDuration: 60 };
 
 let _cache = { at: 0, cfg: null };
 async function loadCfg(force = false) {
@@ -91,7 +96,7 @@ async function fetchT(url, opts) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), TIMEOUT_MS);
   try { return await fetch(url, { ...opts, signal: ac.signal }); }
-  catch (e) { if (e.name === 'AbortError') { const x = new Error('검토 AI 응답 시간 초과 — 한 번에 보내는 요구 수를 줄이거나 더 빠른 모델을 선택하세요.'); x.status = 504; throw x; } throw e; }
+  catch (e) { if (e.name === 'AbortError') { const x = new Error(`검토 AI 응답 시간 초과(${Math.round(TIMEOUT_MS / 1000)}초) — 추론형 모델은 응답이 느립니다. 더 빠른 모델(예: gemini-2.5-flash)을 쓰거나 REVIEW_TIMEOUT_MS를 늘리세요.`); x.status = 504; x.code = 'REVIEW_TIMEOUT'; throw x; } throw e; }
   finally { clearTimeout(t); }
 }
 
