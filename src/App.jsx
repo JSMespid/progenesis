@@ -9178,6 +9178,32 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       <span style={{ textAlign: "right", color: v == null ? T.muted : T.text }}>{v == null ? "-" : `${v}%`}</span>
     </div>
   );
+  // ── 검토 대상 수정 편집기 — ⑧ 교차검토(③ 의견·① 규칙 결과)와 ⑦ 일관성 점검에서 함께 사용 ──
+  // 검토 대상 수정 편집기 (③ 의견 행과 ① 규칙 검사 결과에서 함께 사용) — rvEdit.key(검토 범위)·id 기준
+  const editorBoxC = (suggestion) => {
+    const sp = rvEdit && AE.reviewEditSpec(model, rvEdit.key, rvEdit.id);
+    if (!sp) return null;
+    return (
+      <div style={{ border: `1px solid ${T.accent}66`, borderRadius: 8, padding: 10, background: T.accent + "0A" }}>
+        <div style={{ fontSize: 11, marginBottom: 6 }}><b>{rvEdit.id}</b> 수정 {suggestion && <span style={{ color: T.green }}>— 제안: {suggestion}</span>}</div>
+        {sp.fields.map(fd => (
+          <div key={fd.k} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 5 }}>
+            <span style={{ width: 120, flexShrink: 0, fontSize: 10.5, color: T.muted, paddingTop: 5 }}>{fd.label}{fd.sysItem && <div style={{ fontSize: 9.5 }}>(확정 요구에 반영)</div>}</span>
+            {fd.rows > 1
+              ? <textarea rows={fd.rows} value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...ta, minHeight: 0, flex: 1 }} />
+              : <input value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...inp, flex: 1 }} />}
+          </div>))}
+        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center", marginTop: 4 }}>
+          <span style={{ fontSize: 10, color: T.muted, marginRight: "auto" }}>적용하면 이 항목의 검토 의견은 '내용 변경됨'이 되고, 연결된 하위 항목에는 변경 영향 검토가 표시될 수 있습니다.{AE.reviewScope(rvEdit.key)?.kind === "test" ? " 수정한 시험은 수동 작성으로 바뀌어 규칙 재생성 때 덮어쓰지 않습니다." : ""}</span>
+          <button onClick={() => setTab(sp.tab)} style={small}>원래 탭에서 열기</button>
+          <button onClick={() => setRvEdit(null)} style={small}>취소</button>
+          <button onClick={applyReviewEditUI} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>적용</button>
+        </div>
+      </div>);
+  };
+  // 규칙 지적의 ID → 그 ID를 가진 검토 범위(수정 가능 여부) — 이해관계자 요구 등 범위 밖 ID는 null
+  const scopeOfIdC = id => (AE.reviewScopesFor(model).find(x => AE.reviewEditSpec(model, x.key, id)) || {}).key || null;
+  const openEditC = (fkey, key, id) => { if (rvEdit?.fkey === fkey) { setRvEdit(null); return; } const sp = AE.reviewEditSpec(model, key, id); if (!sp) { setErr("수정할 대상을 찾지 못했습니다."); return; } setRvEdit({ fkey, key, id, vals: { ...sp.values } }); };
   const errCount = findings.filter(f => f.sev === "error").length;
   const rvOpen = AE.reviewView(model).count().open;
   const runHere = !!(runAt && runAt.el && runAt.el.isConnected && runAt.tab === tab);
@@ -9485,31 +9511,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             };
             const chip = (label, val, color, key) => <button onClick={key ? () => setRvRule(r => r === key ? null : key) : undefined} title={key ? "눌러서 검사 결과 보기" : undefined}
               style={{ padding: "4px 10px", borderRadius: 8, background: rvRule === key && key ? color + "33" : color + "18", border: `1px solid ${rvRule === key && key ? color : color + "44"}`, color, fontSize: 11, cursor: key ? "pointer" : "default", fontFamily: "inherit" }}>{label} <b>{val}</b>{key ? (rvRule === key ? " ▴" : " ▾") : ""}</button>;
-            // 검토 대상 수정 편집기 (③ 의견 행과 ① 규칙 검사 결과에서 함께 사용) — rvEdit.key(검토 범위)·id 기준
-            const editorBox = (suggestion) => {
-              const sp = rvEdit && AE.reviewEditSpec(model, rvEdit.key, rvEdit.id);
-              if (!sp) return null;
-              return (
-                <div style={{ border: `1px solid ${T.accent}66`, borderRadius: 8, padding: 10, background: T.accent + "0A" }}>
-                  <div style={{ fontSize: 11, marginBottom: 6 }}><b>{rvEdit.id}</b> 수정 {suggestion && <span style={{ color: T.green }}>— 제안: {suggestion}</span>}</div>
-                  {sp.fields.map(fd => (
-                    <div key={fd.k} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 5 }}>
-                      <span style={{ width: 120, flexShrink: 0, fontSize: 10.5, color: T.muted, paddingTop: 5 }}>{fd.label}{fd.sysItem && <div style={{ fontSize: 9.5 }}>(확정 요구에 반영)</div>}</span>
-                      {fd.rows > 1
-                        ? <textarea rows={fd.rows} value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...ta, minHeight: 0, flex: 1 }} />
-                        : <input value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...inp, flex: 1 }} />}
-                    </div>))}
-                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center", marginTop: 4 }}>
-                    <span style={{ fontSize: 10, color: T.muted, marginRight: "auto" }}>적용하면 이 항목의 검토 의견은 '내용 변경됨'이 되고, 연결된 하위 항목에는 변경 영향 검토가 표시될 수 있습니다.{AE.reviewScope(rvEdit.key)?.kind === "test" ? " 수정한 시험은 수동 작성으로 바뀌어 규칙 재생성 때 덮어쓰지 않습니다." : ""}</span>
-                    <button onClick={() => setTab(sp.tab)} style={small}>원래 탭에서 열기</button>
-                    <button onClick={() => setRvEdit(null)} style={small}>취소</button>
-                    <button onClick={applyReviewEditUI} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>적용</button>
-                  </div>
-                </div>);
-            };
-            // 규칙 지적의 ID → 그 ID를 가진 검토 범위(수정 가능 여부) — 이해관계자 요구 등 범위 밖 ID는 null
-            const scopeOfId = id => (scopes.find(x => AE.reviewEditSpec(model, x.key, id)) || {}).key || null;
-            const openEdit = (fkey, key, id) => { if (rvEdit?.fkey === fkey) { setRvEdit(null); return; } const sp = AE.reviewEditSpec(model, key, id); if (!sp) { setErr("수정할 대상을 찾지 못했습니다."); return; } setRvEdit({ fkey, key, id, vals: { ...sp.values } }); };
+            const editorBox = editorBoxC, scopeOfId = scopeOfIdC, openEdit = openEditC;
             const totItems = cov.reduce((a, c) => a + c.total, 0), totAny = cov.reduce((a, c) => a + c.reviewedAny, 0);
             const totOpen = cov.reduce((a, c) => a + c.open, 0), totValid = cov.reduce((a, c) => a + c.valid, 0);
             const cell = { padding: "5px 6px", borderTop: `1px solid ${T.border}` };
@@ -9844,11 +9846,45 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               })()}
             </AeSec>
             <AeSec title={`일관성·양방향 추적성 점검 — 오류 ${errCount} · 경고 ${findings.filter(f => f.sev === "warn").length} · 정보 ${findings.filter(f => f.sev === "info").length}`}>
-              {findings.map((f, i) => (
-                <div key={i} style={{ display: "grid", gridTemplateColumns: "40px 1fr", gap: 8, padding: "5px 0", borderTop: i ? `1px solid ${T.border}` : "none", fontSize: 11 }}>
-                  <span style={{ color: AE_SEV[f.sev].c, fontWeight: 700, fontSize: 10 }}>{AE_SEV[f.sev].l}</span>
-                  <div>{f.msg}<div style={{ fontSize: 9.5, color: T.muted }}>{AE.bpLabel(f.bp, V)}{f.ids?.length ? ` · ${f.ids.slice(0, 12).join(", ")}${f.count > 12 ? " …" : ""}` : ""}</div></div>
-                </div>))}
+              <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 6 }}>각 줄을 누르면 처리 방법이 펼쳐집니다. ✎가 붙은 ID는 이 자리에서 바로 고칠 수 있습니다. 오류는 반드시, 경고는 가능한 한 해소하고, 정보는 착수 시점에 남아 있어도 되는 항목입니다.</div>
+              {findings.map((f, i) => {
+                const fk = `cons${i}`, opened = !!open[fk];
+                const msg = String(f.msg || "");
+                const ready = /Draft인 요구/.test(msg) ? AE.reviewReadyReqs(model) : [];
+                const how = /검증 기준이 없는|모호어·정량 기준/.test(msg) ? "ID 옆 ✎를 눌러 검증 기준(합격·불합격을 가를 수치·조건)을 적으세요. 시스템 요구는 ② 요구 도출·명세의 [상세]에서 고쳐도 됩니다."
+                  : /합의되지 않은 이해관계자/.test(msg) ? "고객(OEM)과 요구 내용을 합의한 뒤 ② 요구 도출·명세의 이해관계자 요구 '합의' 칸을 '합의'로 바꾸세요. 합의 회의록 등 근거가 있을 때만 바꾸며, 착수 시점에는 '검토 중'으로 남아 있어도 됩니다(정보)."
+                  : /골격\(TBD\)/.test(msg) ? "착수 단계에서는 정상입니다. 코드가 나오면 ④ SW 탭 유닛 섹션에 .h 헤더를 끌어다 놓거나, 유닛 설계(알고리즘·동적 동작)를 작성하세요."
+                  : /Draft인 요구/.test(msg) ? "요구를 검토한 뒤 상태를 Reviewed(검토 완료)·Agreed(고객 합의)로 올립니다. 근거는 ⑧ QA 교차검토의 판정 기록입니다 — 아래 버튼은 교차검토가 끝난 요구만 Reviewed로 올립니다. Agreed는 고객 합의 후 각 요구의 상태 칸에서 직접 바꾸세요."
+                  : /할당되지 않은|파생되지 않은|도출되지 않은|시험이 없는|연결되지 않은/.test(msg) ? "위 '추적·검증 커버리지'의 '빠짐 N건 →'을 누르면 해당 탭에서 빠진 항목과 처리 방법(💡)이 나옵니다."
+                  : "ID를 확인해 해당 탭에서 바로잡으세요.";
+                const ids = f.ids || [];
+                return (
+                  <div key={i} style={{ padding: "5px 0", borderTop: i ? `1px solid ${T.border}` : "none", fontSize: 11 }}>
+                    <div onClick={() => setOpen(o => ({ ...o, [fk]: !o[fk] }))} style={{ display: "grid", gridTemplateColumns: "40px 1fr 16px", gap: 8, cursor: "pointer" }}>
+                      <span style={{ color: AE_SEV[f.sev].c, fontWeight: 700, fontSize: 10 }}>{AE_SEV[f.sev].l}</span>
+                      <div>{f.msg}<div style={{ fontSize: 9.5, color: T.muted }}>{AE.bpLabel(f.bp, V)}{!opened && ids.length ? ` · ${ids.slice(0, 12).join(", ")}${f.count > 12 ? " …" : ""}` : ""}</div></div>
+                      <span style={{ color: T.muted, fontSize: 10 }}>{opened ? "▴" : "▾"}</span>
+                    </div>
+                    {opened && (
+                      <div style={{ margin: "6px 0 4px 48px", padding: "8px 10px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8 }}>
+                        <div style={{ fontSize: 11, marginBottom: ids.length ? 6 : 0 }}>💡 {how}</div>
+                        {ids.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>{ids.map(id => { const k = scopeOfIdC(id), ek = `${fk}|${id}`; return (
+                          <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                            <span style={{ fontFamily: "monospace", fontSize: 10.5 }}>{id}</span>
+                            {k && <button onClick={() => openEditC(ek, k, id)} title={`${id} 바로 수정`} style={{ ...small, padding: "0 5px", fontSize: 10, background: rvEdit?.fkey === ek ? T.accent : "none", color: rvEdit?.fkey === ek ? "#fff" : T.accent }}>✎</button>}
+                          </span>); })}{f.count > ids.length && <span style={{ fontSize: 10, color: T.muted }}>… 외 {f.count - ids.length}건</span>}</div>}
+                        {rvEdit?.fkey?.startsWith(fk + "|") && <div style={{ marginTop: 8 }}>{editorBoxC()}</div>}
+                        {/합의되지 않은 이해관계자/.test(msg) && <button onClick={() => setTab("req")} style={{ ...small, marginTop: 6 }}>② 요구 도출·명세로 이동</button>}
+                        {/골격\(TBD\)/.test(msg) && <button onClick={() => setTab("SW")} style={{ ...small, marginTop: 6 }}>④ SW 유닛으로 이동</button>}
+                        {/Draft인 요구/.test(msg) && (
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+                            <Btn disabled={busy || !ready.length} onClick={() => { if (!window.confirm(`교차검토가 끝난 요구 ${ready.length}건(현재 내용으로 검토됨 · 미판정 의견 없음 · 유효 의견은 수정 완료)의 상태를 Draft → Reviewed로 바꿉니다.\n변경은 수정 이력에 'QA 교차검토 근거'로 기록됩니다.\n\n계속할까요?`)) return; setModel(m => AE.markReviewed(m, ready)); setNote(`요구 ${ready.length}건을 Reviewed로 바꿨습니다 — 근거: QA 교차검토 판정 기록. 저장을 눌러 확정하세요.`); }} style={{ fontSize: 11, padding: "4px 10px" }}>교차검토 끝난 요구 {ready.length}건 → Reviewed</Btn>
+                            <button onClick={() => setTab("review")} style={small}>⑧ QA 교차검토로 이동</button>
+                            {!ready.length && <span style={{ fontSize: 10.5, color: T.muted }}>아직 교차검토·판정이 끝난 Draft 요구가 없습니다. ⑧에서 검토하고 의견을 모두 판정하면 여기서 올릴 수 있습니다.</span>}
+                          </div>)}
+                      </div>)}
+                  </div>);
+              })}
               {!findings.length && <div style={{ fontSize: 11, color: T.green }}>✓ 발견된 문제 없음</div>}
             </AeSec>
             <AeSec title="ASPICE WP 특성 충족도 — 모델 내용 · 입력자료 · 템플릿 점검 · 수동 판정 (각 문서 부록에 점검표로 수록)">

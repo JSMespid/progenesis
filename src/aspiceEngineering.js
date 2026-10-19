@@ -1495,7 +1495,7 @@ export function reviewView(model) {
   const itemOf = (lv, id) => { if (!byScope[lv]) byScope[lv] = Object.fromEntries(reviewItems(m, lv).map(it => [it.id, it])); return byScope[lv][id]; };
   const list = m.aiReview.findings.map(f => {
     const it = itemOf(f.level, f.reqId);
-    const edits = (m.aiReview.edits || []).filter(e => e.scope === f.level && e.id === f.reqId && (!f.runAt || e.at > f.runAt));
+    const edits = (m.aiReview.edits || []).filter(e => e.via !== "qa-review" && e.scope === f.level && e.id === f.reqId && (!f.runAt || e.at > f.runAt));
     return { ...f, reqTitle: it?.title || f.targetTitle || "", removed: !it, stale: !!it && f.reqHash !== it.hash, edits };
   });
   const count = (lv) => {
@@ -1881,4 +1881,32 @@ export function missingTestTargets(model, levels) {
   const lv = (levels || Object.keys(TEST_LEVELS)).filter(L => m.scope[TEST_LEVELS[L].level]);
   const gen = generateRuleTests({ ...m, tests: [] }, lv);
   return [...new Set(gen.filter(t => !m.tests.some(x => x.level === t.level && (x.targets || []).includes((t.targets || [])[0]))).map(t => `${t.level}|${(t.targets || [])[0]}`))].length;
+}
+
+// 교차검토로 확인이 끝난 Draft 요구 — 현재 내용으로 검토됐고, 미판정 의견·'유효인데 미수정' 의견이 없는 요구
+//  (상태를 Reviewed로 올릴 근거가 교차검토·판정 기록으로 남아 있는 요구만 고른다)
+export function reviewReadyReqs(model) {
+  const m = normalizeModel(model);
+  const v = reviewView(m);
+  const out = [];
+  ["SYS", "SW", "HW"].filter(lv => lv === "SYS" || m.scope[lv]).forEach(lv => {
+    const done = reviewedIds(m, lv);
+    (m.reqs[lv] || []).filter(r => (r.status || "Draft") === "Draft" && done.has(r.id)).forEach(r => {
+      const fs = v.list.filter(f => f.level === lv && f.reqId === r.id && !f.removed);
+      if (fs.some(f => !f.judge || (f.judge.state === "valid" && !f.edits.length))) return;
+      out.push({ lv, id: r.id });
+    });
+  });
+  return out;
+}
+export function markReviewed(model, list, by = "QA") {
+  const m = normalizeModel(JSON.parse(JSON.stringify(model)));
+  const at = new Date().toISOString();
+  list.forEach(({ lv, id }) => {
+    const i = (m.reqs[lv] || []).findIndex(r => r.id === id); if (i < 0) return;
+    m.reqs[lv][i] = { ...m.reqs[lv][i], status: "Reviewed" };
+    m.aiReview.edits = [...m.aiReview.edits, { at, scope: lv, id, changes: [{ k: "status", label: "상태", before: "Draft", after: "Reviewed" }], by, via: "qa-review" }];
+  });
+  m.aiReview.edits = m.aiReview.edits.slice(-1000);
+  return m;
 }
