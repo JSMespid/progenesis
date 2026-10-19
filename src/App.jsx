@@ -8451,7 +8451,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     return m;
   });
   // 첫 화면: 지정 탭 → 확정 요구가 없으면 ② 요구 도출·명세 → 저장본이 있으면 추적성 → 설정 (탭 순서와 무관하게 작업 시작점 기준)
-  const [tab, setTab] = useState(initTab || (!(requirements?.items || []).length ? "req" : requirements?.aspice ? "trace" : "setup"));
+  // 기본 탭: 처음 여는 V-모델은 작업 순서상 ① 입력자료·설정부터. 이미 진행 중인 V-모델은 ⑦ 추적성·충족도(현황)로.
+  // initTab은 특정 진입점(예: 요구사항 산출물 행의 '요구 도출·명세' 버튼 → ②)에서만 지정한다.
+  const [tab, setTab] = useState(initTab || (requirements?.aspice && (requirements?.items || []).length ? "trace" : "setup"));
   const [itemsVer, setItemsVer] = useState(0);   // V-모델 쪽에서 요구 목록이 바뀌면(DBC 등) ① 탭 패널을 새 목록으로 다시 연다
   const srcRef = useRef(requirements?.source || null);   // ② 탭의 원문·파일 (확정 전이라도 저장에 포함)
   const [srcSig, setSrcSig] = useState(() => ((requirements?.source?.files) || []).map(f => f.name).join("|"));   // 파일명 변경 감지용
