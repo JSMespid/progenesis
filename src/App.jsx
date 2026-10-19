@@ -8840,7 +8840,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   }
   function needReviewer() {
     if (!rv || rv.error) throw new Error(rv?.error || "검토 AI 설정을 불러오지 못했습니다.");
-    if (!rvSel || !rvSel.ready) throw new Error("사용 가능한 검토 AI가 없습니다. 설정 → AI 연동 → 검토 AI에서 Gemini 또는 ChatGPT의 API 키와 모델을 등록하세요.");
+    if (!rvSel || !rvSel.ready) throw new Error("사용 가능한 검토 AI가 없습니다. 설정 → AI 연동 → AI 모델 등록에서 Gemini 또는 ChatGPT의 API 키와 모델을 등록하세요.");
   }
   // 선택한 산출물 1개 검토
   function aiReview(mode) {
@@ -9828,7 +9828,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 {rv && !rv.error && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11 }}>
                     <span>검토 AI:</span>
-                    {readyList.length === 0 && <span style={{ color: T.red, fontSize: 10.5 }}>사용 가능한 검토 AI 없음 — 설정 → AI 연동 → 검토 AI에서 Gemini 또는 ChatGPT의 API 키·모델을 등록하세요</span>}
+                    {readyList.length === 0 && <span style={{ color: T.red, fontSize: 10.5 }}>사용 가능한 검토 AI 없음 — 설정 → AI 연동 → AI 모델 등록에서 Gemini 또는 ChatGPT의 API 키·모델을 등록하세요</span>}
                     {readyList.map(a => <button key={a.id} disabled={busy} onClick={() => setRvProv(a.id)} title={a.model} style={{ ...small, background: rvProv === a.id ? T.accent : "none", color: rvProv === a.id ? "#fff" : T.accent }}>{a.label.replace(/ \(.*\)$/, "")} · {a.model}</button>)}
                     {rvSel && !rvSel.sameAsGenerator && <span style={{ color: T.green, fontSize: 10.5 }}>✓ 생성 AI(Claude)와 다른 모델 — 독립 검토</span>}
                     {rvSel?.sameAsGenerator && <span style={{ color: T.amber, fontSize: 10.5 }}>⚠ 생성 AI와 같은 계열 — 독립성 낮음 (다른 검토 AI 권장)</span>}
@@ -11643,7 +11643,7 @@ function OSSPPage({ nav, customOSSP=[], builtinOSSP=[], onAdd, onDelete }) {
 // ──────────────────────────────────────────────────────────────────────
 // 탭 구성
 //   1. 사용자 관리      : 계정 등록(ID/PW)·역할 부여·활성화·비밀번호 초기화·삭제
-//   2. AI 연동          : Claude API 키 등록/삭제/검증, 기본 모델·최대 토큰
+//   2. AI 연동          : AI 모델 등록(Claude·Gemini·ChatGPT·사내 LLM) + 역할 지정(생성 AI·기본 검토 AI 각 1개)
 //   3. 조직·문서 기본값 : 조직명, 기본 로고, 문서번호 접두어, 작성/검토/승인자, 배포구분
 //   4. QA 기본 정책     : 기본 규모·설계방식·프로세스 적용등급·SDLC 요인·공휴일
 //   5. 내 계정          : 세션 정보, 비밀번호 변경
@@ -12032,30 +12032,58 @@ function UsersTab({ flash, session }) {
 }
 
 // ── 2. AI 연동 ────────────────────────────────────────────────────────
+// AI 모델 등록 일원화 (A단계)
+//  · 위: 사용할 AI 모델을 제공사별로 한 번만 등록 (Claude·Gemini·ChatGPT·사내 LLM) — 키·모델 ID·연결 검증
+//  · 아래: 역할 지정 — 생성 AI 1개, 기본 검토 AI 1개 (항상 하나씩 선택됨)
+//  · 생성 AI는 현재 Claude 계열만 가능 (생성 경로의 JSON 복구·청크 구조가 Claude 기준). 다른 제공사는 B단계에서 생성 검증 후 연다.
+//  · Claude의 키·모델은 app_settings.ai가 단일 기준 — 검토 AI로 Claude를 고르면 같은 키·모델을 쓴다 (/api/review가 그대로 참조).
 function AiTab({ flash, settings, onReload }) {
   const ai = settings?.ai || {};
+  const [rv, setRv] = useState(null);              // /api/review 설정(마스킹) — 검토 AI 목록·기본값
+  const [edit, setEdit] = useState("anthropic");   // 편집 중인 등록 모델(제공사)
+  const [model, setModel] = useState("");
+  const [maxTokens, setMaxTokens] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
   const [key, setKey] = useState("");
-  const [model, setModel] = useState(ai.model || AI_DEFAULTS.model);
-  const [maxTokens, setMaxTokens] = useState(String(ai.maxTokens || AI_DEFAULTS.maxTokens));
   const [busy, setBusy] = useState(false);
   const [verify, setVerify] = useState(null);
 
-  useEffect(() => {
-    if (!settings) return;
-    setModel(settings.ai?.model || AI_DEFAULTS.model);
-    setMaxTokens(String(settings.ai?.maxTokens || AI_DEFAULTS.maxTokens));
-  }, [settings]);
+  const loadRv = () => apiFetch("/api/review").then(c => { setRv(c); return c; }).catch(e => { setRv({ error: e.message }); return null; });
+  useEffect(() => { loadRv(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 등록 모델 목록 — Claude를 맨 위에. 검토 설정 조회가 실패해도 Claude 행은 생성 설정으로 보여준다.
+  const claudeRow = { id: "anthropic", label: "Anthropic Claude", model: ai.model || AI_DEFAULTS.model, hasKey: !!ai.hasKey,
+    keySource: ai.keySource || "none", keyMasked: ai.keyMasked || "", ready: !!(ai.hasKey && (ai.model || AI_DEFAULTS.model)), sameAsGenerator: true };
+  const others = ((rv && !rv.error && rv.available) || []).filter(a => a.id !== "anthropic" && a.id !== "none");
+  const rows = [claudeRow, ...others];
+  const cur = rows.find(r => r.id === edit) || claudeRow;
+
+  function pick(id) {
+    const r = rows.find(x => x.id === id) || claudeRow;
+    setEdit(r.id); setKey(""); setVerify(null);
+    setModel(r.model || "");
+    setMaxTokens(String(ai.maxTokens || AI_DEFAULTS.maxTokens));
+    setBaseUrl(r.id === "custom" ? (rv?.baseUrl || "") : "");
+  }
+  useEffect(() => { pick(edit); }, [settings, rv]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   async function save({ clearKey = false } = {}) {
     setBusy(true); setVerify(null);
     try {
-      await apiFetch("/api/settings", { method: "PUT", body: JSON.stringify({
-        key: "ai",
-        value: { apiKey: clearKey ? null : (key.trim() || undefined), model: model.trim(), maxTokens: Number(maxTokens) },
-      }) });
-      setKey("");
-      await onReload();
-      flash("ok", clearKey ? "저장된 API 키를 삭제했습니다. 이후 환경변수(ANTHROPIC_API_KEY)를 사용합니다." : "AI 연동 설정을 저장했습니다.");
+      if (edit === "anthropic") {
+        await apiFetch("/api/settings", { method: "PUT", body: JSON.stringify({ key: "ai",
+          value: { apiKey: clearKey ? null : (key.trim() || undefined), model: model.trim(), maxTokens: Number(maxTokens) } }) });
+        setKey("");
+        await onReload();
+        await loadRv();
+        flash("ok", clearKey ? "저장된 Claude 키를 삭제했습니다. 이후 환경변수(ANTHROPIC_API_KEY)를 사용합니다." : "Anthropic Claude 설정을 저장했습니다 (생성 AI·검토 AI 공용).");
+      } else {
+        const r = await apiFetch("/api/review", { method: "PUT", body: JSON.stringify({ provider: edit, model: model.trim(), baseUrl: baseUrl.trim(), apiKey: clearKey ? null : (key.trim() || undefined) }) });
+        setKey("");
+        await loadRv();
+        const re = r?.reassigned ? ` 기본 검토 AI가 사용 불가가 되어 ${(r.available || []).find(a => a.id === r.reassigned)?.label || r.reassigned}(으)로 자동 지정했습니다.` : "";
+        flash("ok", (clearKey ? "저장된 키를 삭제했습니다." : "AI 모델 설정을 저장했습니다.") + re);
+      }
     } catch (e) { flash("error", e.message); }
     setBusy(false);
   }
@@ -12063,170 +12091,130 @@ function AiTab({ flash, settings, onReload }) {
   async function doVerify() {
     setBusy(true); setVerify(null);
     try {
-      const r = await apiFetch("/api/settings", { method: "POST", body: JSON.stringify({
-        action: "verify_key", apiKey: key.trim() || undefined, model: model.trim() }) });
-      setVerify(r);
+      if (edit === "anthropic") setVerify(await apiFetch("/api/settings", { method: "POST", body: JSON.stringify({ action: "verify_key", apiKey: key.trim() || undefined, model: model.trim() }) }));
+      else setVerify(await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "verify", provider: edit, model: model.trim(), baseUrl: baseUrl.trim(), apiKey: key.trim() || undefined }) }));
     } catch (e) { setVerify({ ok: false, message: e.message }); }
     setBusy(false);
   }
 
-  const srcLabel = { db: "설정 화면에 저장된 키", env: "Vercel 환경변수 (ANTHROPIC_API_KEY)", none: "미설정" }[ai.keySource || "none"];
-  const srcColor = ai.keySource === "db" ? T.green : ai.keySource === "env" ? T.amber : T.red;
-
-  return (
-    <div>
-      <SettingsSection
-        title="Claude API 키"
-        desc="AI 요구사항 작성·PBS 추천 등 모든 AI 기능이 이 키를 사용합니다. 키는 서버(Supabase)에만 저장되며 화면에는 마스킹된 형태로만 표시됩니다. 브라우저로는 전문이 전달되지 않습니다."
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", background: T.bg, borderRadius: 10, marginBottom: 16, flexWrap: "wrap" }}>
-          <Badge color={srcColor}>{ai.hasKey ? "연결됨" : "미설정"}</Badge>
-          <div style={{ fontSize: 12 }}>
-            <span style={{ fontFamily: "monospace", color: ai.hasKey ? T.text : T.muted }}>{ai.keyMasked || "키 없음"}</span>
-            <span style={{ color: T.muted, marginLeft: 10, fontSize: 11 }}>출처: {srcLabel}</span>
-          </div>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <Input label="새 API 키" type="password" value={key} onChange={setKey} placeholder="sk-ant-... (비워두면 기존 키 유지)" />
-          <div style={{ fontSize: 10.5, color: T.muted, lineHeight: 1.6, marginTop: -4 }}>
-            키는 console.anthropic.com → API Keys 에서 발급합니다. 저장 후에는 다시 조회할 수 없으므로 별도로 안전하게 보관하세요.
-          </div>
-        </div>
-
-        {verify && (
-          <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10,
-            background: (verify.ok ? T.green : T.red) + "18", border: `1px solid ${(verify.ok ? T.green : T.red)}55`,
-            color: verify.ok ? T.green : T.red, fontSize: 12, lineHeight: 1.6 }}>
-            {verify.ok ? "✓ " : "✕ "}{verify.message}
-          </div>
-        )}
-
-        <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-          <Btn onClick={() => save()} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "처리 중…" : "저장"}</Btn>
-          <Btn variant="outline" onClick={doVerify} disabled={busy} style={{ fontSize: 12, padding: "7px 16px" }}>연결 검증</Btn>
-          {ai.keySource === "db" && (
-            <Btn variant="ghost" onClick={() => { if (confirm("저장된 API 키를 삭제합니다. 이후에는 환경변수 ANTHROPIC_API_KEY가 사용됩니다. 계속할까요?")) save({ clearKey: true }); }}
-              disabled={busy} style={{ fontSize: 12, padding: "7px 16px", color: T.red, borderColor: T.red + "55" }}>저장된 키 삭제</Btn>
-          )}
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title="기본 모델 및 생성 한도"
-        desc="AI 호출 시 모델을 별도로 지정하지 않은 기능에 적용되는 기본값입니다. 최대 토큰이 너무 크면 Vercel 함수 제한 시간(약 10초)을 초과할 수 있으므로 청크 호출 구조에 맞춰 조정하세요."
-      >
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
-          <Input label="모델 ID" value={model} onChange={setModel} placeholder="claude-haiku-4-5-20251001" />
-          <Input label="최대 토큰 (max_tokens)" value={maxTokens} onChange={setMaxTokens} placeholder="8000" />
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-          {AI_MODEL_PRESETS.map(p => (
-            <button key={p.id} onClick={() => setModel(p.id)} title={p.note}
-              style={{ background: model === p.id ? T.accentGlow : "transparent", border: `1px solid ${model === p.id ? T.accentDim : T.border}`,
-                borderRadius: 9, padding: "7px 12px", color: model === p.id ? T.accent : T.muted, cursor: "pointer", fontSize: 11, fontFamily: "inherit", textAlign: "left" }}>
-              <div style={{ fontWeight: 600 }}>{p.label}</div>
-              <div style={{ fontSize: 9.5, opacity: 0.8, marginTop: 2 }}>{p.note}</div>
-            </button>
-          ))}
-        </div>
-        <div style={{ fontSize: 10.5, color: T.muted, marginTop: 10, lineHeight: 1.6 }}>
-          모델 ID는 시간이 지나면 폐기(retire)될 수 있습니다. 변경 후 반드시 위의 <b>연결 검증</b>으로 실제 호출이 되는지 확인하세요.
-        </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-          <Btn onClick={() => save()} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "저장 중…" : "저장"}</Btn>
-        </div>
-      </SettingsSection>
-      <ReviewAiSettings flash={flash} />
-    </div>
-  );
-}
-
-// ── 검토 AI(교차검토) 설정 — /api/review ──
-// 검토 AI마다 API 키·모델을 따로 등록한다. 등록된 검토 AI는 모두 검토 화면에서 고를 수 있고, 그중 하나가 기본값.
-function ReviewAiSettings({ flash }) {
-  const [cfg, setCfg] = useState(null);
-  const [provider, setProvider] = useState("gemini");   // 편집 중인 검토 AI
-  const [model, setModel] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [key, setKey] = useState("");
-  const [asDefault, setAsDefault] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [verify, setVerify] = useState(null);
-  const pick = (c, id) => { const a = (c?.available || []).find(x => x.id === id); setProvider(id); setModel(a?.model || ""); setBaseUrl(id === "custom" ? (c?.baseUrl || "") : ""); setKey(""); setVerify(null); setAsDefault(c?.defaultProvider === id); };
-  const load = (keep) => apiFetch("/api/review").then(c => { setCfg(c); pick(c, keep || c.defaultProvider || "gemini"); }).catch(e => setCfg({ error: e.message }));
-  useEffect(() => { load(); }, []);
-  const providers = (cfg?.providers || []).filter(p => p.id !== "none");
-  const cur = (cfg?.available || []).find(a => a.id === provider);
-  const srcLabel = { db: "설정 화면", "db(ai)": "Claude 키 재사용", env: "Vercel 환경변수", none: "미등록" };
-
-  async function save({ clearKey = false } = {}) {
-    setBusy(true); setVerify(null);
+  async function setReviewDefault(id) {
+    setBusy(true);
     try {
-      await apiFetch("/api/review", { method: "PUT", body: JSON.stringify({ provider, model: model.trim(), baseUrl: baseUrl.trim(), apiKey: clearKey ? null : (key.trim() || undefined), setDefault: asDefault }) });
-      await load(provider);
-      flash("ok", clearKey ? "저장된 키를 삭제했습니다." : "검토 AI 설정을 저장했습니다.");
+      await apiFetch("/api/review", { method: "PUT", body: JSON.stringify({ provider: id, setDefault: true }) });
+      await loadRv();
+      flash("ok", "기본 검토 AI를 지정했습니다.");
     } catch (e) { flash("error", e.message); }
     setBusy(false);
   }
-  async function doVerify() {
-    setBusy(true); setVerify(null);
-    try { setVerify(await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "verify", provider, model: model.trim(), baseUrl: baseUrl.trim(), apiKey: key.trim() || undefined }) })); }
-    catch (e) { setVerify({ ok: false, message: e.message }); }
-    setBusy(false);
-  }
+
+  const srcLabel = { db: "설정 화면", env: "Vercel 환경변수", none: "미등록", input: "입력값" };
   const sel = { width: "100%", padding: "9px 12px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, color: T.text, fontSize: 13, fontFamily: "inherit" };
   const help = {
+    anthropic: "console.anthropic.com → API Keys에서 발급합니다. 생성 AI와 검토 AI(Claude 선택 시)가 같은 키·모델을 씁니다. 키를 비워두면 환경변수 ANTHROPIC_API_KEY를 사용합니다. 최대 토큰이 너무 크면 Vercel 함수 제한 시간을 넘을 수 있으니 청크 호출 구조에 맞춰 조정하세요.",
     gemini: "Google AI Studio → API 키에서 발급합니다. 결제가 연결된 프로젝트(유료 등급)의 키를 사용해야 입력 데이터가 모델 학습에 쓰이지 않습니다. 환경변수 GEMINI_API_KEY도 사용할 수 있습니다.",
-    openai: "OpenAI API 키는 platform.openai.com → API keys에서 발급합니다. ChatGPT 구독(Plus·Team 등)과는 별개이며, API 결제(크레딧)가 등록되어 있어야 합니다. 환경변수 OPENAI_API_KEY도 사용할 수 있습니다. 응답 시간 제한(약 10초)이 있으므로 빠른 모델(mini 계열 등)을 권장합니다.",
+    openai: "platform.openai.com → API keys에서 발급합니다. ChatGPT 구독(Plus·Team 등)과는 별개이며 API 결제(크레딧)가 등록되어 있어야 합니다. 환경변수 OPENAI_API_KEY도 사용할 수 있습니다.",
     custom: "사내 LLM 서버는 이 서비스(클라우드)에서 접근 가능한 OpenAI 호환 주소여야 합니다. 방화벽 안의 서버는 구축형 도입 시 연결됩니다.",
-    anthropic: "생성 AI(Claude)와 같은 계열이라 독립 검토 효과가 낮습니다. 키를 비워두면 Claude API 키를 재사용합니다.",
-  }[provider];
+  }[edit];
+
+  // 역할 지정 — 생성 AI(현재 Claude 고정)·기본 검토 AI(항상 1개)
+  const genReady = claudeRow.ready;
+  const readyReviewers = rows.filter(r => r.ready);
+  const revDefault = rv && !rv.error ? rv.defaultProvider : null;
+  const revRow = rows.find(r => r.id === revDefault);
+  const revReady = !!(revRow && revRow.ready);
 
   return (
-    <SettingsSection title="검토 AI (V-모델 3단 교차검토)"
-      desc="ASPICE V-모델 산출물을 생성 AI(Claude)와 다른 모델이 검토해 의견을 냅니다. 검토 AI마다 API 키와 모델을 따로 등록하며, 등록된 검토 AI는 검토 화면에서 실행할 때마다 고를 수 있습니다(예: Gemini와 ChatGPT로 각각 검토). 키는 서버에만 저장되고 화면에는 마스킹만 표시됩니다.">
-      {cfg?.error && <div style={{ color: T.red, fontSize: 12, marginBottom: 10 }}>설정 조회 실패: {cfg.error}</div>}
-      {cfg && !cfg.error && (
+    <div>
+      <SettingsSection title="AI 모델 등록"
+        desc="사용할 AI 모델을 제공사별로 한 번만 등록합니다. 등록한 모델 중에서 아래 '역할 지정'으로 생성 AI와 검토 AI를 고릅니다. 키는 서버(Supabase)에만 저장되며 화면에는 마스킹된 형태로만 표시됩니다.">
+        {rv?.error && <div style={{ color: T.amber, fontSize: 12, marginBottom: 10 }}>검토 AI 설정 조회 실패: {rv.error} — Claude 설정만 표시합니다.</div>}
         <div style={{ background: T.bg, borderRadius: 10, padding: "8px 12px", marginBottom: 16 }}>
-          {(cfg.available || []).map(a => (
-            <div key={a.id} onClick={() => pick(cfg, a.id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 4px", fontSize: 12, cursor: "pointer", borderBottom: `1px solid ${T.border}`, background: provider === a.id ? T.accent + "12" : "transparent" }}>
+          {rows.map(a => (
+            <div key={a.id} onClick={() => pick(a.id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 4px", fontSize: 12, cursor: "pointer", borderBottom: `1px solid ${T.border}`, background: edit === a.id ? T.accent + "12" : "transparent", flexWrap: "wrap" }}>
               <Badge color={a.ready ? T.green : a.hasKey ? T.amber : T.muted}>{a.ready ? "사용 가능" : a.hasKey ? "모델 필요" : "미등록"}</Badge>
-              <span style={{ minWidth: 190 }}><b>{a.label}</b>{cfg.defaultProvider === a.id && <span style={{ color: T.accent, fontSize: 11 }}> · 기본</span>}</span>
-              <span style={{ color: T.muted, flex: 1 }}>{a.model || "-"}</span>
+              <span style={{ minWidth: 190 }}><b>{a.label}</b></span>
+              <span style={{ color: T.muted, flex: 1, minWidth: 140 }}>{a.model || "-"}</span>
+              <span style={{ display: "flex", gap: 4 }}>
+                {a.id === "anthropic" && <Badge color={T.accent}>생성</Badge>}
+                {revDefault === a.id && <Badge color={T.amber}>검토 기본</Badge>}
+              </span>
               <span style={{ fontFamily: "monospace", color: T.muted, fontSize: 11 }}>{a.keyMasked || ""} {a.hasKey ? `(${srcLabel[a.keySource] || a.keySource})` : ""}</span>
             </div>))}
-          <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>행을 누르면 아래에서 해당 검토 AI를 편집합니다.</div>
-        </div>)}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
-        <div>
-          <div style={{ fontSize: 11, color: T.muted, marginBottom: 6 }}>편집할 검토 AI</div>
-          <select value={provider} onChange={e => pick(cfg, e.target.value)} style={sel}>
-            {providers.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-          </select>
+          <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>행을 누르면 아래에서 해당 모델을 편집합니다.</div>
         </div>
-        <Input label="모델 ID" value={model} onChange={setModel} placeholder={provider === "gemini" ? "예: gemini-2.5-flash" : provider === "openai" ? "연결 검증 후 목록에서 선택" : "모델 ID"} />
-        {provider === "custom" && <Input label="서버 주소 (OpenAI 호환 Base URL)" value={baseUrl} onChange={setBaseUrl} placeholder="https://llm.example.co.kr/v1" />}
-        <Input label={cur?.hasKey ? "새 API 키 (비워두면 기존 키 유지)" : "API 키"} type="password" value={key} onChange={setKey} placeholder={provider === "openai" ? "sk-..." : provider === "gemini" ? "AIza..." : ""} />
-      </div>
-      {help && <div style={{ fontSize: 10.5, color: provider === "custom" || provider === "anthropic" ? T.amber : T.muted, marginTop: 8, lineHeight: 1.6 }}>{help}</div>}
-      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: 10, cursor: "pointer" }}>
-        <input type="checkbox" checked={asDefault} onChange={e => setAsDefault(e.target.checked)} /> 기본 검토 AI로 지정 (검토 화면에서 처음 선택되는 검토 AI)
-      </label>
-      {verify && (
-        <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: (verify.ok ? T.green : T.red) + "18", border: `1px solid ${(verify.ok ? T.green : T.red)}55`, color: verify.ok ? T.green : T.red, fontSize: 12, lineHeight: 1.6 }}>
-          {verify.ok ? "✓ " : "✕ "}{verify.message}
-          {(verify.models || []).length > 0 && <div style={{ marginTop: 8, color: T.muted, fontSize: 11 }}>사용 가능한 모델 (눌러서 선택 후 저장):
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>{verify.models.map(m => <button key={m} onClick={() => setModel(m)} style={{ background: m === model ? T.accent : "none", color: m === model ? "#fff" : T.accent, border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>{m}</button>)}</div>
-          </div>}
-        </div>)}
-      <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-        <Btn onClick={() => save()} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "처리 중…" : "저장"}</Btn>
-        <Btn variant="outline" onClick={doVerify} disabled={busy} style={{ fontSize: 12, padding: "7px 16px" }}>연결 검증·모델 목록</Btn>
-        {cur?.keySource === "db" && (
-          <Btn variant="ghost" onClick={() => { if (confirm(`${cur.label}의 저장된 키를 삭제합니다. 계속할까요?`)) save({ clearKey: true }); }} disabled={busy} style={{ fontSize: 12, padding: "7px 16px", color: T.red, borderColor: T.red + "55" }}>저장된 키 삭제</Btn>)}
-      </div>
-    </SettingsSection>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: T.muted, marginBottom: 6 }}>편집할 모델(제공사)</div>
+            <select value={edit} onChange={e => pick(e.target.value)} style={sel}>
+              {rows.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </select>
+          </div>
+          <Input label="모델 ID" value={model} onChange={setModel} placeholder={edit === "anthropic" ? "claude-haiku-4-5-20251001" : edit === "gemini" ? "예: gemini-2.5-flash" : edit === "openai" ? "연결 검증 후 목록에서 선택" : "모델 ID"} />
+          {edit === "anthropic" && <Input label="최대 토큰 (max_tokens · 생성)" value={maxTokens} onChange={setMaxTokens} placeholder="8000" />}
+          {edit === "custom" && <Input label="서버 주소 (OpenAI 호환 Base URL)" value={baseUrl} onChange={setBaseUrl} placeholder="https://llm.example.co.kr/v1" />}
+          <Input label={cur.hasKey ? "새 API 키 (비워두면 기존 키 유지)" : "API 키"} type="password" value={key} onChange={setKey} placeholder={edit === "anthropic" ? "sk-ant-..." : edit === "openai" ? "sk-..." : edit === "gemini" ? "AIza..." : ""} />
+        </div>
+        {edit === "anthropic" && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+            {AI_MODEL_PRESETS.map(p => (
+              <button key={p.id} onClick={() => setModel(p.id)} title={p.note}
+                style={{ background: model === p.id ? T.accentGlow : "transparent", border: `1px solid ${model === p.id ? T.accentDim : T.border}`,
+                  borderRadius: 9, padding: "7px 12px", color: model === p.id ? T.accent : T.muted, cursor: "pointer", fontSize: 11, fontFamily: "inherit", textAlign: "left" }}>
+                <div style={{ fontWeight: 600 }}>{p.label}</div>
+                <div style={{ fontSize: 9.5, opacity: 0.8, marginTop: 2 }}>{p.note}</div>
+              </button>
+            ))}
+          </div>
+        )}
+        {help && <div style={{ fontSize: 10.5, color: edit === "custom" ? T.amber : T.muted, marginTop: 8, lineHeight: 1.6 }}>{help} 모델 ID는 시간이 지나면 폐기(retire)될 수 있으므로 변경 후 반드시 <b>연결 검증</b>으로 확인하세요.</div>}
+        {verify && (
+          <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: (verify.ok ? T.green : T.red) + "18", border: `1px solid ${(verify.ok ? T.green : T.red)}55`, color: verify.ok ? T.green : T.red, fontSize: 12, lineHeight: 1.6 }}>
+            {verify.ok ? "✓ " : "✕ "}{verify.message}
+            {(verify.models || []).length > 0 && <div style={{ marginTop: 8, color: T.muted, fontSize: 11 }}>사용 가능한 모델 (눌러서 선택 후 저장):
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>{verify.models.map(m => <button key={m} onClick={() => setModel(m)} style={{ background: m === model ? T.accent : "none", color: m === model ? "#fff" : T.accent, border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>{m}</button>)}</div>
+            </div>}
+          </div>)}
+        <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+          <Btn onClick={() => save()} disabled={busy} style={{ fontSize: 12, padding: "7px 18px" }}>{busy ? "처리 중…" : "저장"}</Btn>
+          <Btn variant="outline" onClick={doVerify} disabled={busy} style={{ fontSize: 12, padding: "7px 16px" }}>{edit === "anthropic" ? "연결 검증" : "연결 검증·모델 목록"}</Btn>
+          {cur.keySource === "db" && (
+            <Btn variant="ghost" onClick={() => { if (confirm(edit === "anthropic" ? "저장된 Claude 키를 삭제합니다. 이후에는 환경변수 ANTHROPIC_API_KEY가 사용됩니다. 계속할까요?" : `${cur.label}의 저장된 키를 삭제합니다. 기본 검토 AI였다면 사용 가능한 다른 검토 AI로 자동 지정됩니다. 계속할까요?`)) save({ clearKey: true }); }}
+              disabled={busy} style={{ fontSize: 12, padding: "7px 16px", color: T.red, borderColor: T.red + "55" }}>저장된 키 삭제</Btn>)}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="역할 지정"
+        desc="등록한 모델 중에서 생성 AI와 검토 AI를 하나씩 지정합니다. 둘 다 항상 하나씩 선택되어 있으며, 검토 화면에서는 실행할 때마다 다른 검토 AI를 고를 수도 있습니다.">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 11, color: T.muted, marginBottom: 6 }}>생성 AI — 요구사항·PBS·V-모델 산출물 초안 생성</div>
+            <select value="anthropic" onChange={() => {}} style={sel}>
+              {rows.map(r => <option key={r.id} value={r.id} disabled={r.id !== "anthropic"}>{r.label}{r.id === "anthropic" ? ` · ${claudeRow.model}` : " — 생성 지원 예정"}</option>)}
+            </select>
+            <div style={{ fontSize: 10.5, color: genReady ? T.muted : T.red, marginTop: 6, lineHeight: 1.6 }}>
+              {genReady
+                ? <>현재 Claude 계열만 생성 AI로 쓸 수 있습니다. 생성 단계의 청크 분할·JSON 복구가 Claude 기준으로 맞춰져 있기 때문이며, 다른 제공사는 생성 검증을 거쳐 순차적으로 엽니다. 모델 변경은 위 <b>Anthropic Claude</b> 행에서 합니다 (최대 {ai.maxTokens || AI_DEFAULTS.maxTokens} 토큰).</>
+                : "Claude API 키가 없어 생성 기능을 쓸 수 없습니다. 위 Anthropic Claude 행에서 키를 등록하거나 환경변수 ANTHROPIC_API_KEY를 설정하세요."}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: T.muted, marginBottom: 6 }}>검토 AI (기본) — V-모델 3단 교차검토의 AI 의견</div>
+            {readyReviewers.length > 0 ? (
+              <select value={revReady ? revDefault : ""} onChange={e => e.target.value && setReviewDefault(e.target.value)} disabled={busy || !rv || rv.error} style={sel}>
+                {!revReady && <option value="">— 선택하세요 —</option>}
+                {readyReviewers.map(r => <option key={r.id} value={r.id}>{r.label} · {r.model}{r.sameAsGenerator ? " (생성 AI와 같은 모델)" : ""}</option>)}
+              </select>
+            ) : <div style={{ ...sel, color: T.red, fontSize: 12 }}>사용 가능한 모델 없음 — 위에서 키·모델을 등록하세요</div>}
+            <div style={{ fontSize: 10.5, marginTop: 6, lineHeight: 1.6 }}>
+              {rv?.defaultFallback && revReady && <div style={{ color: T.amber }}>지정했던 기본 검토 AI({rows.find(r => r.id === rv.configuredDefault)?.label || rv.configuredDefault})를 쓸 수 없어 {revRow.label}이(가) 자동으로 기본이 되었습니다.</div>}
+              {revReady && revRow.sameAsGenerator && <div style={{ color: T.amber }}>⚠ 생성 AI와 같은 Claude 모델({claudeRow.model})입니다. 교차검토의 독립성이 없으므로 Gemini·ChatGPT 등 다른 제공사를 권장합니다.</div>}
+              {revReady && !revRow.sameAsGenerator && <div style={{ color: T.green }}>✓ 생성 AI(Claude)와 다른 제공사 — 독립 검토</div>}
+            </div>
+          </div>
+        </div>
+      </SettingsSection>
+    </div>
   );
 }
 
