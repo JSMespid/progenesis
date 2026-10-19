@@ -47,12 +47,15 @@ const ASPICE_SCOPE_GROUPS = [
   { id: "HWE",  label: "HWE.1~4 하드웨어 엔지니어링", re: /^HWE\./, on: false },
   { id: "SPL",  label: "SPL.2 제품 릴리즈", re: /^SPL\./, on: true },
 ];
-// 개발 범위(form.aspiceDev): "SW" = SW만 / "HWSW" = HW·SW 함께 / "HW" = HW만 — SWE·HWE 범위의 단일 기준
+// 개발 범위(form.aspiceDev): "SW" = SYS+SW / "HWSW" = SYS+SW+HW — SWE·HWE 범위의 단일 기준. 시스템(SYS.1~5)은 항상 포함.
+// "HW"(HW만)는 ASPICE 심사에서 사실상 없는 형태라 선택지에서 뺐다. 구버전 저장 과제 호환용으로만 남기며(legacy), 그 과제를 열었을 때만 보인다.
+// (내부 id "SW"·"HWSW"는 저장 데이터·적용 범위 역산과의 호환을 위해 그대로 둔다)
 const ASPICE_DEVS = [
-  { id: "SW",   label: "SW",      desc: "SW만 개발 (HW는 별도 조직·협력사)" },
-  { id: "HWSW", label: "HW + SW", desc: "HW와 SW를 함께 개발 (전장부품·제어기 일체)" },
-  { id: "HW",   label: "HW",      desc: "HW만 개발" },
+  { id: "SW",   label: "SYS + SW",      desc: "시스템(SYS.1~5)·SW(SWE.1~6) 개발 — HW는 별도 조직·협력사" },
+  { id: "HWSW", label: "SYS + SW + HW", desc: "시스템(SYS.1~5)·SW(SWE.1~6)·HW(HWE.1~4) 일체 개발 (전장부품·제어기)" },
+  { id: "HW",   label: "HW (구버전)",   desc: "HW만 개발 — 구버전 과제 호환용. SYS + SW + HW로 바꾸는 것을 권장합니다", legacy: true },
 ];
+const aspiceDevChoices = cur => ASPICE_DEVS.filter(d => !d.legacy || d.id === cur);
 const aspiceDevOf = form => ASPICE_DEVS.some(d => d.id === form?.aspiceDev) ? form.aspiceDev : "SW";
 const devFromScope = sc => (sc && sc.HWE) ? (sc.SWE === false ? "HW" : "HWSW") : "SW";
 const aspiceScopeDefault = (dev) => {
@@ -1888,9 +1891,9 @@ function TrackPicker({ onChoose }) {
                   ))}
                 </div>
                 <div style={{ fontSize:10.5, color:T.muted, marginTop:5 }}>{ASPICE_CLS.find(c => c.id === cl)?.desc}</div>
-                <div style={{ fontSize:10.5, color:T.muted, margin:"10px 0 5px" }}>개발 범위 — HW를 포함하면 HWE.1~4 산출물이 WBS·산출물 목록과 V-모델에 함께 들어갑니다</div>
+                <div style={{ fontSize:10.5, color:T.muted, margin:"10px 0 5px" }}>개발 범위 — 시스템(SYS.1~5)은 항상 포함됩니다. HW를 포함하면 HWE.1~4 산출물이 WBS·산출물 목록과 V-모델에 함께 들어갑니다</div>
                 <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-                  {ASPICE_DEVS.map(d => (
+                  {aspiceDevChoices(dev).map(d => (
                     <button key={d.id} onClick={() => setDev(d.id)} title={d.desc}
                       style={{ fontSize:11, padding:"4px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${dev === d.id ? T.accent : T.border}`, background: dev === d.id ? T.accent : "transparent", color: dev === d.id ? "#fff" : T.muted }}>{d.label}</button>
                   ))}
@@ -1919,7 +1922,9 @@ function AspiceProcessPanel({ form, onDevChange, tailoring, setTailoring, ossp, 
     if ((gid === "SWE" || gid === "HWE") && onDevChange) {
       const cur = { SWE: aspiceGroupOn(scope, "SWE"), HWE: aspiceGroupOn(scope, "HWE") };
       const next = { ...cur, [gid]: !cur[gid] };
-      if (!next.SWE && !next.HWE) { setDevMsg("SW와 HW를 모두 뺄 수는 없습니다. 개발 범위는 SW · HW+SW · HW 중 하나입니다."); return; }
+      if (!next.SWE && !next.HWE) { setDevMsg("SW와 HW를 모두 뺄 수는 없습니다. 개발 범위는 SYS + SW 또는 SYS + SW + HW 중 하나입니다."); return; }
+      // SW 엔지니어링은 해제 불가 — HW만 개발하는 범위는 더 이상 선택지로 두지 않는다 (구버전 HW 과제는 SWE를 켜는 방향만 허용)
+      if (gid === "SWE" && cur.SWE) { setDevMsg("SW 엔지니어링(SWE.1~6)은 뺄 수 없습니다. 개발 범위는 SYS + SW 또는 SYS + SW + HW 중 하나입니다."); return; }
       setDevMsg("");
       onDevChange(next.SWE && next.HWE ? "HWSW" : next.HWE ? "HW" : "SW");
       return;
@@ -2044,7 +2049,7 @@ function TrackField({ form, onChooseTrack, osspChosen }) {
         )}
         {form.track === "aspice" && (
           <select value={aspiceDevOf(form)} onChange={e => { onChooseTrack("aspice", form.aspiceVersion, aspiceClOf(form), e.target.value); setWarn(true); }} title="개발 범위 — SWE·HWE 적용 범위" style={{ fontSize:11.5, padding:"5px 8px", background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, fontFamily:"inherit" }}>
-            {ASPICE_DEVS.map(d => <option key={d.id} value={d.id}>개발 범위: {d.label} — {d.desc}</option>)}
+            {aspiceDevChoices(aspiceDevOf(form)).map(d => <option key={d.id} value={d.id}>개발 범위: {d.label} — {d.desc}</option>)}
           </select>
         )}
         {form.track === "aspice" && (
@@ -8556,7 +8561,7 @@ const AE_TABS = [["setup", "① 준비", "버전·범위·입력자료"], ["req"
 // 단계별 안내 — 왜 하는지 · 할 일 · 끝났다고 보는 기준 (기능은 그대로, 화면 위에 안내만 얹는다)
 const AE_GUIDE = {
   setup: { why: "V-모델 전체에 적용되는 기준을 정합니다. 여기서 정한 ASPICE 버전·개발 범위(SW/HW)에 따라 이후 탭과 생성되는 문서가 달라집니다.",
-    todo: ["ASPICE 버전(3.1 / 4.0 / 겸용)과 개발 범위(SW·HW)를 고릅니다.", "확보한 입력자료(고객 사양서·DBC·회의록 등)를 체크합니다. 없는 자료는 TBD로 남겨도 됩니다.", "통신 DB(DBC)가 있으면 끌어다 놓아 인터페이스 요구를 자동으로 만듭니다."],
+    todo: ["ASPICE 버전(3.1 / 4.0 / 겸용)과 개발 범위(SYS + SW / SYS + SW + HW)를 고릅니다.", "확보한 입력자료(고객 사양서·DBC·회의록 등)를 체크합니다. 없는 자료는 TBD로 남겨도 됩니다.", "통신 DB(DBC)가 있으면 끌어다 놓아 인터페이스 요구를 자동으로 만듭니다."],
     done: "버전·범위를 정하고 저장하면 끝. 입력자료는 나중에 추가해도 됩니다." },
   req: { why: "고객(OEM)이 말한 문장(이해관계자 요구)을 그대로 남기고, 그것을 우리 시스템이 검증할 수 있는 문장(시스템 요구)으로 다시 씁니다. 둘을 연결해 두어야 '고객 요구를 빠짐없이 분석했다'는 근거가 됩니다.",
     todo: ["고객 사양서·RFQ 등을 붙여넣거나 파일을 올리고 [AI 도출·명세]를 누릅니다.", "이해관계자 요구마다 시스템 요구가 연결됐는지(SYS 칸) 확인하고, 0건이면 [＋ 도출]·[연결…]·'해당 없음'으로 처리합니다.", "시스템 요구의 [상세]에서 검증 기준(합격·불합격을 가를 수치)을 확인한 뒤 [요구사항 확정]을 누릅니다."],
@@ -9461,8 +9466,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </div>
               <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>{AE.ASPICE_VERSIONS.find(v => v.id === V)?.desc}</div>
               <div style={{ display: "flex", gap: 16, fontSize: 11.5, flexWrap: "wrap" }}>
-                <label><input type="checkbox" checked disabled /> 시스템 (SYS.2~SYS.5)</label>
-                <label title={scopeLocked ? "SW·HW 범위는 새 프로젝트의 개발 범위·적용 범위에서 바꿉니다 (WBS·산출물 목록과 일치 유지)" : ""}><input type="checkbox" checked={model.scope.SW} disabled={scopeLocked} onChange={e => set(n => { n.scope.SW = e.target.checked; })} /> SW (SWE.1·2·5·6)</label>
+                <label title="시스템 범위는 항상 포함 — SYS.1 이해관계자 요구(STK) 층부터 SYS.2~5까지"><input type="checkbox" checked disabled /> 시스템 (SYS.1~SYS.5)</label>
+                <label title={scopeLocked ? "SW·HW 범위는 새 프로젝트의 개발 범위·적용 범위에서 바꿉니다 (WBS·산출물 목록과 일치 유지)" : ""}><input type="checkbox" checked={model.scope.SW} disabled={scopeLocked || model.scope.SW} onChange={e => set(n => { n.scope.SW = e.target.checked; })} /> SW (SWE.1~6)</label>
                 <label title={scopeLocked ? "SW·HW 범위는 새 프로젝트의 개발 범위·적용 범위에서 바꿉니다 (WBS·산출물 목록과 일치 유지)" : V === "3.1" ? "3.1 PRM에는 HWE가 없어 4.0 HWE를 PAM 확장으로 준용합니다" : ""}><input type="checkbox" checked={model.scope.HW} disabled={scopeLocked} onChange={e => set(n => { n.scope.HW = e.target.checked; })} /> HW (HWE.1~4){V === "3.1" ? " · PAM 확장" : ""}</label>
                 <label style={{ marginLeft: "auto" }} title="해제 시 /api/chat 호출 없이 규칙 기반 초안만 생성 (폐쇄망·재현성)"><input type="checkbox" checked={model.useAI} onChange={e => set(n => { n.useAI = e.target.checked; })} /> AI 사용 (해제 = 규칙 기반만)</label>
               </div>
