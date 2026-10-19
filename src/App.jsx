@@ -8547,23 +8547,35 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       if (!targets.length) return "다시 검토할 요구가 없습니다 — 마지막 검토 이후 바뀐 요구가 없습니다.";
       const parents = lv === "SYS" ? model.reqs.STK : AE.parentsForLevel(model, lv);
       const kept = [], done = []; let dropped = 0, failed = 0, meta = {}, lastErr = null;
-      for (let i = 0; i < targets.length; i += AE.REVIEW_BATCH) {
-        const batch = targets.slice(i, i + AE.REVIEW_BATCH);
-        setProg({ percent: 5 + (i / targets.length) * 90, label: `${rvSel.label} 검토 중… (${Math.min(i + batch.length, targets.length)}/${targets.length})` });
+      let fatal = null, timeouts = 0;
+      const isTimeout = e => e?.status === 504 || e?.data?.code === "REVIEW_TIMEOUT" || /FUNCTION_INVOCATION_TIMEOUT|시간 초과/.test(String(e?.message || "") + String(e?.data?.raw || ""));
+      // 묶음 1회 호출 — 시간 초과면 1건씩 나눠 다시 보낸다(추론형 모델은 건수에 비례해 느려짐)
+      async function callBatch(batch) {
         try {
           const r = await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "review", provider: rvSel.id, system: AE.reviewSystemPrompt(), prompt: AE.promptReview({ level: lv, reqs: batch, parents, version: V }) }) });
           meta = { provider: r.provider, label: r.label, model: r.model, sameAsGenerator: r.sameAsGenerator };
           const v = AE.validateReview(AE.parseReviewJson(r.text), batch);
           kept.push(...v.kept); dropped += v.dropped.length; done.push(...batch.map(b => b.id));
         } catch (e) {
-          if ([401, 403, 409, 428, 500].includes(e.status)) throw e;   // 설정·권한 문제는 즉시 중단
+          if ([401, 403, 409, 428, 500].includes(e.status)) { fatal = e; return; }   // 설정·권한 문제는 즉시 중단
+          if (isTimeout(e)) {
+            timeouts++;
+            if (batch.length > 1) { for (const one of batch) { if (fatal) return; await callBatch([one]); } return; }
+          }
           failed += batch.length; lastErr = e;
         }
       }
+      for (let i = 0; i < targets.length && !fatal; i += AE.REVIEW_BATCH) {
+        const batch = targets.slice(i, i + AE.REVIEW_BATCH);
+        setProg({ percent: 5 + (i / targets.length) * 90, label: `${rvSel.label} 검토 중… (${Math.min(i + batch.length, targets.length)}/${targets.length})${timeouts ? " · 응답이 느려 1건씩 나눠 보내는 중" : ""}` });
+        await callBatch(batch);
+      }
+      // 중간에 설정·권한 오류로 멈춰도, 그 전까지 받은 의견은 버리지 않고 반영한다
+      if (fatal && !done.length) throw fatal;
       if (!done.length) throw lastErr || new Error("모든 검토 호출이 실패했습니다.");
       setModel(m => AE.applyReviewRun(m, { level: lv, reviewedIds: done, kept, meta: { ...meta, dropped, failed } }));
       setRvFilter("open");
-      return `검토 ${done.length}건 · 판정 대기 의견 ${kept.length}건 · 규칙으로 걸러낸 의견 ${dropped}건${failed ? ` · 실패 ${failed}건(다시 실행하면 미검토분만 보냅니다)` : ""}`;
+      return `검토 ${done.length}건 · 판정 대기 의견 ${kept.length}건 · 규칙으로 걸러낸 의견 ${dropped}건${failed ? ` · 실패 ${failed}건('변경분 검토'를 누르면 실패분만 다시 보냅니다)` : ""}${fatal ? ` · 중단: ${fatal.message}` : ""}${timeouts ? ` · 시간 초과로 나눠 보낸 묶음 ${timeouts}회` : ""}`;
     });
   }
 
