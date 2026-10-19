@@ -8625,6 +8625,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [rvFilter, setRvFilter] = useState("open");
   const [rvProv, setRvProv] = useState("");          // 이번 검토에 쓸 검토 AI (Gemini·ChatGPT 등) — 기본은 설정의 기본 검토 AI
   const [rvBy, setRvBy] = useState("all");
+  const [rvGroup, setRvGroup] = useState(true);       // ③ 판정 목록: 대상(요구·항목)별로 묶어 보기 — 한 대상의 의견을 한 번에 판정·수정
+  const [rvSort, setRvSort] = useState("sev");       // 정렬: sev(중대 먼저) | id
   const [rvPick, setRvPick] = useState([]);          // 선택 검토할 산출물(검토 범위 key)
   const [rvRunning, setRvRunning] = useState(false);  // 검토 AI 호출 진행 중 (중지 버튼 표시)
   const rvStop = useRef(false);
@@ -9703,7 +9705,88 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 </div>
                 {!cnt.total && <div style={{ fontSize: 11, color: T.muted }}>아직 검토 AI 의견이 없습니다. ②에서 검토를 실행하세요.</div>}
                 {cnt.total > 0 && !list.length && <div style={{ fontSize: 11, color: T.muted }}>해당하는 항목이 없습니다.</div>}
-                {list.length > 0 && (
+                {list.length > 0 && (() => {
+                  const sevRank = { major: 0, minor: 1, info: 2 };
+                  const sorted = [...list].sort((a, b) => rvSort === "sev" ? (sevRank[a.severity] - sevRank[b.severity]) || a.reqId.localeCompare(b.reqId) : a.reqId.localeCompare(b.reqId) || (sevRank[a.severity] - sevRank[b.severity]));
+                  const openList = sorted.filter(f => !f.judge && !f.removed);
+                  const bulk = (fs, st) => {
+                    if (!fs.length) return;
+                    let note = "";
+                    if (st === "invalid" || st === "opinion") { note = window.prompt(`${fs.length}건에 같은 사유를 적용합니다 — ${st === "invalid" ? "지적이 틀렸다고 보는 이유" : "보류 사유"}를 적어 주세요`, ""); if (note === null) return; }
+                    else if (!window.confirm(`표시된 미판정 의견 ${fs.length}건을 모두 '맞음 → 고침'으로 판정합니다. 이후 대상별로 ✎ 대상 수정에서 고치면 됩니다.\n\n계속할까요?`)) return;
+                    setModel(m => AE.judgeReview(m, fs.map(f => f.key), st, note));
+                  };
+                  return (<>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 8, fontSize: 10.5 }}>
+                      <span style={{ color: T.muted }}>보기:</span>
+                      <button onClick={() => setRvGroup(true)} style={{ ...small, background: rvGroup ? T.accent : "none", color: rvGroup ? "#fff" : T.accent }}>대상별 묶음</button>
+                      <button onClick={() => setRvGroup(false)} style={{ ...small, background: !rvGroup ? T.accent : "none", color: !rvGroup ? "#fff" : T.accent }}>의견별 표</button>
+                      <span style={{ color: T.muted, marginLeft: 6 }}>정렬:</span>
+                      <button onClick={() => setRvSort("sev")} style={{ ...small, background: rvSort === "sev" ? T.accent : "none", color: rvSort === "sev" ? "#fff" : T.accent }}>중대 먼저</button>
+                      <button onClick={() => setRvSort("id")} style={{ ...small, background: rvSort === "id" ? T.accent : "none", color: rvSort === "id" ? "#fff" : T.accent }}>ID 순</button>
+                      {openList.length > 1 && <>
+                        <span style={{ flex: 1 }} />
+                        <span style={{ color: T.muted }}>표시된 미판정 {openList.length}건 일괄:</span>
+                        <button disabled={busy} onClick={() => bulk(openList, "valid")} style={{ ...small, color: T.green }}>✓ 모두 맞음</button>
+                        <button disabled={busy} onClick={() => bulk(openList, "opinion")} style={{ ...small, color: T.accent }}>△ 모두 보류</button>
+                        <button disabled={busy} onClick={() => bulk(openList, "invalid")} style={{ ...small, color: T.muted }}>✕ 모두 틀림</button>
+                      </>}
+                    </div>
+                    {rvGroup && (() => {
+                      const groups = [];
+                      sorted.forEach(f => { let g = groups.find(x => x.id === f.reqId); if (!g) { g = { id: f.reqId, title: f.reqTitle, fs: [] }; groups.push(g); } g.fs.push(f); });
+                      const srcOf = id => (lvItems.find(it => it.id === id) || {});
+                      return groups.map(g => {
+                        const open_ = g.fs.filter(f => !f.judge && !f.removed);
+                        const sp = AE.reviewEditSpec(model, rvLevel, g.id);
+                        const edited = g.fs.some(f => f.edits.length);
+                        const vals = sp?.values || {};
+                        return (
+                          <div key={g.id} style={{ border: `1px solid ${open_.length ? T.border : T.green + "55"}`, borderRadius: 9, padding: "8px 10px", marginBottom: 8, background: T.bg }}>
+                            <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+                              <div style={{ flex: 1, minWidth: 260 }}>
+                                <div style={{ fontSize: 11.5 }}><span style={{ fontFamily: "monospace", color: T.accent, marginRight: 6 }}>{g.id}</span><b>{g.title}</b> <span style={{ color: T.muted, fontSize: 10 }}>· 의견 {g.fs.length}건 · 미판정 {open_.length}{edited ? " · ✎ 수정함" : ""}</span></div>
+                                {sp && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 3, lineHeight: 1.5 }}>
+                                  {sp.fields.filter(fd => vals[fd.k]).slice(0, 4).map(fd => <div key={fd.k}><span style={{ color: T.muted }}>{fd.label}:</span> <span style={{ color: T.text }}>{String(vals[fd.k]).slice(0, 220)}{String(vals[fd.k]).length > 220 ? "…" : ""}</span></div>)}
+                                </div>}
+                              </div>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+                                {open_.length > 0 && <div style={{ display: "flex", gap: 3 }}>
+                                  <span style={{ fontSize: 10, color: T.muted, alignSelf: "center" }}>이 대상 의견 전부:</span>
+                                  <button disabled={busy} onClick={() => bulk(open_, "valid")} style={{ ...small, padding: "2px 7px", color: T.green }}>✓ 맞음</button>
+                                  <button disabled={busy} onClick={() => bulk(open_, "invalid")} style={{ ...small, padding: "2px 7px", color: T.muted }}>✕ 틀림</button>
+                                  <button disabled={busy} onClick={() => bulk(open_, "opinion")} style={{ ...small, padding: "2px 7px", color: T.accent }}>△ 보류</button>
+                                </div>}
+                                {sp && <button disabled={busy} onClick={() => openEdit(`grp|${g.id}`, rvLevel, g.id)} style={{ ...small, padding: "3px 9px", background: rvEdit?.fkey === `grp|${g.id}` ? T.accent : "none", color: rvEdit?.fkey === `grp|${g.id}` ? "#fff" : T.accent }}>✎ 대상 수정 (의견 전부 반영)</button>}
+                              </div>
+                            </div>
+                            <div style={{ marginTop: 6, borderTop: `1px solid ${T.border}` }}>
+                              {g.fs.map(f => (
+                                <div key={f.key} style={{ display: "grid", gridTemplateColumns: "86px 1fr 230px", gap: 8, padding: "5px 0", borderBottom: `1px solid ${T.border}22`, fontSize: 10.5, opacity: f.judge?.state === "invalid" ? 0.6 : 1 }}>
+                                  <div><div>{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}</div>
+                                  <div style={{ lineHeight: 1.5 }}>
+                                    {f.evidence && <div>근거: <span style={{ background: T.amber + "22", padding: "0 3px", borderRadius: 3 }}>"{f.evidence}"</span></div>}
+                                    <div>{f.issue}</div>
+                                    {f.suggestion && <div style={{ color: T.green }}>제안: {f.suggestion}</div>}
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: 10, marginBottom: 2, color: f.judge ? jColor[f.judge.state] : T.amber }}>{f.judge ? `판정: ${AE.REVIEW_JUDGE[f.judge.state]}` : "○ 미판정"}</div>
+                                    <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                                      {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...small, padding: "2px 6px", background: on ? jColor[st] : "none", color: on ? "#fff" : T.muted, borderColor: on ? jColor[st] : T.border }}>{AE.REVIEW_JUDGE_SHORT[st]}</button>; })}
+                                      {f.judge && <button onClick={() => setModel(m => AE.judgeReview(m, [f.key], null))} style={{ ...small, padding: "2px 6px", color: T.muted }} title="판정 취소">↺</button>}
+                                    </div>
+                                    {f.judge?.note && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 2 }}>— {f.judge.note}</div>}
+                                  </div>
+                                </div>))}
+                            </div>
+                            {rvEdit?.fkey === `grp|${g.id}` && <div style={{ marginTop: 8 }}>{editorBox(g.fs.filter(f => f.suggestion && f.judge?.state !== "invalid").map(f => `[${critLabel[f.criterion] || f.criterion}] ${f.suggestion}`).join(" / "))}</div>}
+                          </div>);
+                      });
+                    })()}
+                    {!rvGroup && null}
+                  </>);
+                })()}
+                {list.length > 0 && !rvGroup && (
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                       <thead><tr style={{ color: T.muted, textAlign: "left" }}>
