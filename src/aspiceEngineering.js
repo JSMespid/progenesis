@@ -1702,3 +1702,115 @@ export function reviewCoverage(model, provider = "") {
       open: fs.filter(f => !f.judge).length, valid: fs.filter(f => f.judge?.state === "valid").length, stale: fs.filter(f => f.stale || f.removed).length, findings: fs.length };
   });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11-c) 검토 기준 안내(쉬운 설명·나쁜 예→좋은 예) · 검토 대상 직접 수정
+// ═══════════════════════════════════════════════════════════════════════════
+export const REVIEW_KIND_ABOUT = {
+  req: { what: "요구사항 문장이 제대로 쓰였는지 보는 점검표", std: "ISO/IEC/IEEE 29148은 요구사항 공학 국제표준입니다. '좋은 요구'가 갖춰야 할 특성(모호하지 않음·검증 가능·하나의 요구·빠짐없음·서로 모순 없음·구현 방법이 아닌 목적·실현 가능)을 정해 두었고, 이 점검표는 그 특성을 그대로 옮긴 것입니다." },
+  arch: { what: "구조(요소·인터페이스·동작 모드·설계 근거)가 분명한지 보는 점검표", std: "ISO/IEC/IEEE 42010은 아키텍처를 어떻게 기술할지 정한 국제표준이고, ASPICE SYS.3·SWE.2·HWE.2의 BP는 '요소 정의·요구 할당·인터페이스·동적 측면·설계 근거'를 요구합니다. 이 점검표는 두 가지를 합친 것입니다." },
+  unit: { what: "SW 유닛의 설계가 할당 요구·인터페이스와 맞는지 보는 점검표", std: "ASPICE SWE.3 BP는 유닛마다 상세설계·인터페이스·동적 동작을 정의하고 요구와 추적하도록 요구합니다. 아직 TBD(코드 확정 후 작성)인 부분은 계획된 미작성이므로 지적하지 않습니다." },
+  test: { what: "시험 항목을 다른 사람이 그대로 수행해 같은 판정을 낼 수 있는지 보는 점검표", std: "ISO/IEC/IEEE 29119-3은 시험 문서 국제표준으로, 시험 케이스가 갖춰야 할 요소(시험 대상·사전조건·입력과 절차·기대 결과)를 정해 두었습니다. 이 점검표는 그 요소에 '대상 요구를 실제로 확인하는가'를 더한 것입니다." },
+};
+const EASY = {
+  req: {
+    AMBIG:    ["읽는 사람마다 다르게 이해할 수 있는 말이 있나요?", "충분히 빠르게 응답해야 한다", "요청 수신 후 100 ms 이내에 응답해야 한다"],
+    VERIF:    ["합격·불합격을 가를 숫자나 조건이 있나요?", "셀 전압을 정확하게 측정한다", "셀 전압을 ±5 mV 이내 오차로 측정한다 (셀 온도 15~45 ℃)"],
+    SINGULAR: ["한 문장에 요구가 하나만 들어 있나요?", "셀 전압을 측정하고 CAN으로 전송해야 한다", "① 셀 전압을 측정한다 ② 측정값을 100 ms 주기로 CAN 전송한다 (두 요구로 분리)"],
+    COMPLETE: ["언제·어떤 조건에서·예외일 때 어떻게 하는지 빠지지 않았나요?", "밸런싱을 수행한다", "충전 중 셀 간 전압 편차가 30 mV 이상이면 밸런싱을 시작하고 10 mV 이하이면 종료한다"],
+    CONSIST:  ["상위 요구나 다른 요구와 숫자·용어가 어긋나지 않나요?", "상위 요구는 ±5 mV인데 이 요구는 ±10 mV를 허용", "상위 요구와 같은 ±5 mV로 맞추거나, 구간별 기준을 상위 요구에서 먼저 정의"],
+    DESIGN:   ["'무엇'을 써야 할 요구에 '어떻게(구현 방법)'를 쓰지 않았나요?", "칼만 필터로 SOC를 계산한다", "SOC를 ±3 % 이내로 추정한다 (계산 방법은 설계 단계에서 결정)"],
+    FEASIBLE: ["현재 기술·자원으로 정말 달성할 수 있나요?", "96셀 전압을 1 µs 주기로 측정한다", "AFE 사양 범위 안의 주기(예: 100 ms)로 측정한다 — 근거 사양 확인"],
+  },
+  arch: {
+    RESP:      ["요소마다 맡은 일이 분명하고, 두 요소가 같은 일을 하지 않나요?", "책임: 제어", "책임: 96셀 전압 수집과 밸런싱 필요 여부 판정"],
+    ALLOC:     ["요구가 그 일을 실제로 맡는 요소에 배정됐나요?", "CAN 송신 요구가 전원부에 할당됨", "CAN 송신 요구를 CAN 통신부에 할당"],
+    IFDEF:     ["인터페이스에 누가 → 누구에게, 무엇을, 얼마나 자주 보내는지 적혀 있나요?", "MCU → CAN 통신부: 데이터", "MCU → CAN 통신부: BMS_Status(0x3A0) 셀 전압·온도, 100 ms 주기"],
+    DYN:       ["동작 모드·상태 전이·타이밍이 빠지거나 서로 모순되지 않나요?", "sleep 모드: 진입 조건만 있고 이탈 조건 없음", "sleep 이탈: 웨이크업 신호 또는 CAN 활동 감지 시 normal로 전이"],
+    CONSIST:   ["요소·인터페이스·모드 사이에 이름이나 숫자가 다르지 않나요?", "normal 모드는 100 ms 수집인데 인터페이스 주기는 200 ms", "수집 주기와 인터페이스 주기를 같은 값으로 맞추거나 차이 이유를 기록"],
+    RATIONALE: ["왜 이렇게 나눴는지(대안·선택 이유)가 적혀 있나요?", "3계층 구조로 설계하였다", "3계층 구조 채택 — 측정 주기 100 ms와 저전력 100 µA 요구를 동시에 만족하기 위해 측정부를 분리(대안: 단일 MCU, 전력 요구 불충족)"],
+    AMBIG:     ["해석이 둘 이상 가능한 표현이 있나요?", "필요 시 통신한다", "충전 모드 진입 시 VCU와 통신을 시작한다"],
+  },
+  unit: {
+    RESP:    ["유닛 하나가 맡는 일이 분명한가요?", "유닛명: Util — 여러 처리", "유닛명: CellVoltMon — 셀 전압 수집·범위 판정"],
+    IFACE:   ["함수의 매개변수·반환값 의미, 범위, 단위가 분명한가요?", "int16 GetVolt(uint8 ch)", "int16 GetVolt(uint8 ch) — ch: 0~95, 반환: mV, 오류 시 −1"],
+    TRACE:   ["할당된 요구를 처리할 내용이 유닛에 실제로 있나요?", "밸런싱 요구가 할당됐는데 함수는 온도 읽기뿐", "밸런싱 판정 함수를 추가하거나 요구를 맞는 유닛으로 재할당"],
+    DESIGN:  ["작성된 설계가 구현·시험할 만큼 구체적인가요? (TBD는 제외)", "평균을 낸다", "최근 8개 샘플의 이동 평균, 샘플 누락 시 직전값 유지"],
+    CONSIST: ["유닛·컴포넌트·요구·함수 사이에 이름이나 숫자가 다르지 않나요?", "요구는 mV인데 함수 설명은 V", "단위를 mV로 통일"],
+    AMBIG:   ["해석이 둘 이상 가능한 표현이 있나요?", "적절히 처리한다", "범위 초과 시 DTC 기록 후 직전값 유지"],
+  },
+  test: {
+    TARGET:  ["이 시험이 대상 요구(인터페이스·유닛)를 실제로 확인하나요?", "요구: 200 ms 이내 잠금 해제 / 시험: 해제 여부만 확인", "해제 명령부터 해제 완료까지 시간을 측정해 200 ms 이내인지 확인"],
+    PRECOND: ["시작 전 상태·장비·입력이 적혀 있나요?", "정상 상태에서", "SOC 50 %, 셀 온도 25 ℃, CAN 로거 연결, 진단 툴 접속"],
+    STEPS:   ["다른 사람이 그대로 따라 해도 같은 결과가 나오나요?", "적절히 전압을 변경한다", "셀 3 전압을 3.0 V에서 2.5 V까지 0.1 V씩 낮추며 각 단계 1 s 유지"],
+    EXPECT:  ["기대 결과로 합격·불합격을 판정할 수 있나요?", "정상 동작할 것", "500 ms 이내 DTC B1A01 기록, 밸런싱 정지 플래그 1"],
+    COVER:   ["경계값·예외·고장 상황이 빠지지 않았나요?", "15 km/h 요구에 20 km/h 시험 1건뿐", "14 / 15 / 16 km/h 경계값과 차속 신호 끊김 상황 추가"],
+    CONSIST: ["요구와 시험의 숫자·조건이 같은가요?", "요구 ±5 mV / 시험 합격 기준 ±10 mV", "합격 기준을 요구와 같은 ±5 mV로"],
+    TECH:    ["검증 방법이 대상에 맞나요?", "타이밍 요구를 코드 리뷰로 검증", "타이밍 요구는 계측(로거·오실로스코프)으로 측정"],
+  },
+};
+Object.entries(EASY).forEach(([k, m]) => (REVIEW_KINDS[k]?.criteria || []).forEach(c => { const e = m[c.code]; if (e) Object.assign(c, { easy: e[0], bad: e[1], good: e[2] }); }));
+export const REVIEW_SEV_ABOUT = { major: "이대로면 구현하거나 검증할 수 없는 수준", minor: "고치는 것이 좋음", info: "개선 아이디어" };
+export const REVIEW_JUDGE_ABOUT = {
+  valid: "AI 지적이 맞음 → 산출물을 수정합니다. 수정하면 '수정함 — 재검토로 확인' 상태가 됩니다.",
+  invalid: "AI 지적이 틀렸거나 맞지 않음 → 산출물은 그대로 둡니다. 사유를 남겨야 심사 증적이 됩니다.",
+  opinion: "지금 판단하기 어렵거나 참고만 함 → 보류 사유를 남깁니다.",
+};
+
+// 검토 대상 항목 직접 수정 — 화면에서 고칠 수 있는 필드 정의와 현재 값, 적용
+//  · SYS 요구의 제목·내용은 확정 요구(requirements.items)가 원본이므로 화면에서 items를 함께 고친다(sysItem: 표시)
+export function reviewEditSpec(model, key, id) {
+  const S = reviewScope(key); if (!S) return null;
+  const m = normalizeModel(model);
+  const lv = S.lv;
+  const F = (k, label, rows = 2, extra = {}) => ({ k, label, rows, ...extra });
+  if (S.kind === "req") {
+    const r = (m.reqs[lv] || []).find(x => x.id === id); if (!r) return null;
+    return { tab: lv === "SYS" ? "SYS" : lv, values: { title: r.title || "", text: r.text || "", verifCriteria: r.verifCriteria || "" },
+      fields: [F("title", "제목", 1, lv === "SYS" ? { sysItem: "name" } : {}), F("text", "내용", 3, lv === "SYS" ? { sysItem: "detail" } : {}), F("verifCriteria", "검증 기준", 2)] };
+  }
+  if (S.kind === "arch") {
+    if (id === `RATIONALE-${lv}`) return { tab: lv, values: { rationale: m.rationale[lv] || "" }, fields: [F("rationale", "아키텍처 분석·설계 근거", 4)] };
+    if (id.startsWith("MODE:")) { const md = m.modes.find(x => `MODE:${nz(x.name)}` === id); if (!md) return null;
+      return { tab: "SYS", values: { desc: md.desc || "", transition: md.transition || "" }, fields: [F("desc", "모드 설명", 2), F("transition", "진입·이탈 조건", 2)] }; }
+    const c = (m.comps[lv] || []).find(x => x.id === id);
+    if (c) return { tab: lv, values: { name: c.name || "", desc: c.desc || "", behavior: c.behavior || "" }, fields: [F("name", "이름", 1), F("desc", "책임", 2), F("behavior", "거동(동적 측면)", 2)] };
+    const i = (m.interfaces[lv] || []).find(x => x.id === id);
+    if (i) return { tab: lv, values: { kind: i.kind || "", signals: i.signals || "", periodMs: String(i.periodMs ?? ""), desc: i.desc || "" }, fields: [F("kind", "종류", 1), F("signals", "신호·데이터", 2), F("periodMs", "주기(ms)", 1), F("desc", "설명", 2)] };
+    return null;
+  }
+  if (S.kind === "unit") {
+    const u = (m.units.SW || []).find(x => x.id === id); if (!u) return null;
+    return { tab: "SW", values: { name: u.name || "", desc: u.desc || "" }, fields: [F("name", "유닛명", 1), F("desc", "상세설계(알고리즘·자료구조·동적 동작)", 4)] };
+  }
+  const t = (m.tests || []).find(x => x.id === id && x.level === S.test); if (!t) return null;
+  return { tab: "verif", values: { title: t.title || "", precondition: t.precondition || "", steps: t.steps || "", expected: t.expected || "", passCriteria: t.passCriteria || "" },
+    fields: [F("title", "시험명", 1), F("precondition", "사전조건", 2), F("steps", "절차", 3), F("expected", "기대 결과", 2), F("passCriteria", "합격 기준", 2)] };
+}
+// 수정 적용 (SYS 요구 제목·내용 제외 — 화면이 확정 요구 items로 처리). 수정한 시험은 수동 작성으로 표시해 규칙 재생성 때 덮어쓰지 않는다.
+export function applyReviewEdit(model, key, id, patch) {
+  const S = reviewScope(key); if (!S) return model;
+  const m = normalizeModel(JSON.parse(JSON.stringify(model)));
+  const lv = S.lv, p = { ...patch };
+  if (S.kind === "req") {
+    const i = (m.reqs[lv] || []).findIndex(x => x.id === id); if (i < 0) return m;
+    if (lv === "SYS") { delete p.title; delete p.text; if ("verifCriteria" in p) p.verifCriteriaEdited = true; }
+    m.reqs[lv][i] = { ...m.reqs[lv][i], ...p };
+  } else if (S.kind === "arch") {
+    if (id === `RATIONALE-${lv}`) m.rationale[lv] = p.rationale ?? m.rationale[lv];
+    else if (id.startsWith("MODE:")) m.modes = m.modes.map(x => `MODE:${nz(x.name)}` === id ? { ...x, ...p } : x);
+    else if ((m.comps[lv] || []).some(x => x.id === id)) m.comps[lv] = m.comps[lv].map(x => x.id === id ? { ...x, ...p } : x);
+    else m.interfaces[lv] = (m.interfaces[lv] || []).map(x => x.id === id ? { ...x, ...p } : x);
+  } else if (S.kind === "unit") {
+    m.units.SW = m.units.SW.map(u => u.id === id ? { ...u, ...p, ...("desc" in p ? { designDone: !/TBD/.test(p.desc) } : {}) } : u);
+  } else {
+    m.tests = m.tests.map(t => t.id === id && t.level === S.test ? { ...t, ...p, origin: "manual" } : t);
+  }
+  return m;
+}
+// 현재 내용 그대로(해시 일치) 어느 검토 AI로든 검토된 항목 ID
+export function reviewedIds(model, key) {
+  const m = normalizeModel(model);
+  const snaps = Object.entries(m.aiReview.hashes || {}).filter(([k]) => k === key || k.endsWith(`:${key}`)).map(([, x]) => x || {});
+  return new Set(reviewItems(m, key).filter(it => snaps.some(sn => sn[it.id] === it.hash)).map(it => it.id));
+}
