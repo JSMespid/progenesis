@@ -9484,11 +9484,13 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                             {f.suggestion && <div style={{ color: T.green, fontSize: 10.5 }}>제안: {f.suggestion}</div>}
                           </td>
                           <td style={{ padding: "6px" }}>
+                            <div style={{ fontSize: 10, marginBottom: 3, color: f.judge ? jColor[f.judge.state] : T.amber }}>{f.judge ? `판정: ${AE.REVIEW_JUDGE[f.judge.state]}` : "○ 미판정 — 아래에서 선택"}</div>
                             <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-                              {["valid", "invalid", "opinion"].map(st => <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...small, padding: "2px 7px", background: f.judge?.state === st ? jColor[st] : "none", color: f.judge?.state === st ? "#fff" : jColor[st], borderColor: jColor[st] + "88" }}>{AE.REVIEW_JUDGE[st].split(" ")[0]}</button>)}
+                              {/* 선택 전에는 세 버튼 모두 같은 회색 — 색이 있으면 이미 선택된 것으로 오인됨. 선택된 판정만 색을 채운다 */}
+                              {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...small, padding: "2px 7px", background: on ? jColor[st] : "none", color: on ? "#fff" : T.muted, borderColor: on ? jColor[st] : T.border, fontWeight: on ? 700 : 400 }}>{on ? "✓ " : ""}{AE.REVIEW_JUDGE[st].split(" ")[0]}</button>; })}
                               {f.judge && <button onClick={() => setModel(m => AE.judgeReview(m, [f.key], null))} style={{ ...small, padding: "2px 7px", color: T.muted }} title="판정 취소">↺</button>}
                             </div>
-                            {f.judge && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 3 }}>{AE.REVIEW_JUDGE[f.judge.state]} · {String(f.judge.at).slice(0, 16).replace("T", " ")}{f.judge.note ? ` — ${f.judge.note}` : ""}</div>}
+                            {f.judge && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 3 }}>{String(f.judge.at).slice(0, 16).replace("T", " ")}{f.judge.note ? ` — ${f.judge.note}` : ""}</div>}
                             {!f.removed && <button disabled={busy} onClick={() => { if (rvEdit?.fkey === f.key) { setRvEdit(null); return; } const sp = AE.reviewEditSpec(model, rvLevel, f.reqId); if (!sp) { setErr("수정할 대상을 찾지 못했습니다."); return; } setRvEdit({ fkey: f.key, key: rvLevel, id: f.reqId, vals: { ...sp.values } }); }}
                               style={{ ...small, padding: "2px 8px", marginTop: 5, background: rvEdit?.fkey === f.key ? T.accent : "none", color: rvEdit?.fkey === f.key ? "#fff" : (f.judge?.state === "valid" && !f.stale ? T.green : T.accent), borderColor: f.judge?.state === "valid" && !f.stale ? T.green + "88" : undefined }}>✎ 대상 수정{f.judge?.state === "valid" && !f.stale ? " (수정 필요)" : ""}</button>}
                           </td>
