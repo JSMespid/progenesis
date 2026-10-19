@@ -7621,27 +7621,37 @@ function buildAspiceDoc(kind, meta, ctx0, doc) {
   return { ext: "xlsx", bytes: makeAspiceVerifXlsx(kind, meta, ctx, doc) };
 }
 // ASPICE V-모델 산출물 패키지 ZIP — 범위 내 생성 가능한 문서 전부 + 일관성 점검 보고
+const ASPICE_PKG_ORDER = ["STK_LIST", "SYS_RS", "SYS_AD", "SW_RS", "SW_AD", "SW_DD", "HW_RS", "HW_AD", "V_SYS5", "V_SYS4", "V_SWE6", "V_SWE5", "V_SWE4", "V_HWE4", "V_HWE3", "R_SYS5", "R_SYS4", "R_SWE6", "R_SWE5", "R_SWE4", "R_HWE4", "R_HWE3", "RTM"];
+// V-모델 문서 1건 생성 (생성할 내용이 없으면 null)
+// SYS.2 시스템 요구사항 명세서: 확정 요구(items)를 산출물 단계와 같은 경로로 생성
+// — OSSP 등록 템플릿(SY2102)에 채움 → 템플릿이 없거나 채움 실패 시 자체 생성(문서명·코드는 ASPICE 기준)
+async function buildVmodelDoc(k, meta, ctx) {
+  const D = AE.ASPICE_DOCS[k];
+  if (k === "SYS_RS") {
+    if (!ctx?.requirements?.items?.length) return null;
+    const doc = { name: D.title, code: D.code, aspice: true };
+    let of = null;
+    try { of = await resolveReqDocFromTemplate(doc, "spec", meta, ctx); } catch (_) { of = null; }
+    return of || { ext: "docx", bytes: makeReqDocx(meta, ctx, `${D.proc} 시스템 요구사항 분석`, "spec", doc) };
+  }
+  if (!aspiceCanBuild(k, ctx)) return null;
+  return buildAspiceDoc(k, meta, ctx, { name: D.title, code: D.code });
+}
+// V-모델에서 만들 수 있지만 WBS 산출물 목록에는 없는 문서 — 전체 ZIP에 함께 담아 누락을 막는다
+function aspiceExtraKinds(deliverables, ctx) {
+  if (!ctx?.requirements?.aspice) return [];
+  const have = new Set((deliverables?.categories || []).flatMap(c => (c.documents || []).map(d => AE.aspiceDocKind(d.name)).filter(Boolean)));
+  return ASPICE_PKG_ORDER.filter(k => !have.has(k) && (k === "SYS_RS" ? !!ctx.requirements.items?.length : aspiceCanBuild(k, ctx)));
+}
 async function downloadAspicePackage(meta, ctx) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
-  const order = ["STK_LIST", "SYS_RS", "SYS_AD", "SW_RS", "SW_AD", "SW_DD", "HW_RS", "HW_AD", "V_SYS5", "V_SYS4", "V_SWE6", "V_SWE5", "V_SWE4", "V_HWE4", "V_HWE3", "R_SYS5", "R_SYS4", "R_SWE6", "R_SWE5", "R_SWE4", "R_HWE4", "R_HWE3", "RTM"];
+  const order = ASPICE_PKG_ORDER;
   const files = [];
   for (let i = 0; i < order.length; i++) {
     const k = order[i], D = AE.ASPICE_DOCS[k];
-    const path = ext => `${String(i + 1).padStart(2, "0")}_${D.code}_${sanitize(D.title)}.${ext}`;
-    // SYS.2 시스템 요구사항 명세서: 확정 요구(items)를 산출물 단계와 같은 경로로 생성
-    // — OSSP 등록 템플릿(SY2102)에 채움 → 템플릿이 없거나 채움 실패 시 자체 생성(문서명·코드는 ASPICE 기준)
-    if (k === "SYS_RS") {
-      if (!ctx?.requirements?.items?.length) continue;
-      const doc = { name: D.title, code: D.code, aspice: true };
-      let of = null;
-      try { of = await resolveReqDocFromTemplate(doc, "spec", meta, ctx); } catch (_) { of = null; }
-      if (!of) of = { ext: "docx", bytes: makeReqDocx(meta, ctx, `${D.proc} 시스템 요구사항 분석`, "spec", doc) };
-      files.push({ path: path(of.ext), content: of.bytes });
-      continue;
-    }
-    if (!aspiceCanBuild(k, ctx)) continue;
-    const of = buildAspiceDoc(k, meta, ctx, { name: D.title, code: D.code });
-    files.push({ path: path(of.ext), content: of.bytes });
+    const of = await buildVmodelDoc(k, meta, ctx);
+    if (!of) continue;
+    files.push({ path: `${String(i + 1).padStart(2, "0")}_${D.code}_${sanitize(D.title)}.${of.ext}`, content: of.bytes });
   }
   if (!files.length) throw new Error("생성할 수 있는 ASPICE 산출물이 없습니다. 시스템 요소·하위 요구·검증 수단을 먼저 작성하세요.");
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
@@ -7845,6 +7855,20 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
       files.push({ path: `${folder}/[${pi.label}] ${wbsPart ? wbsPart + "_" : ""}${codePart ? codePart + "_" : ""}${sanitize(doc.name)}.${of.ext}`, content: of.bytes });
       manifest.push([folder, doc.wbsNo || "-", doc.code || "-", docNoOf(doc), doc.name, of.ext.toUpperCase(), pi.label, doc.purpose || ""]);
       total += 1; if (pi.label === "필수(M)") mand += 1;
+    }
+  }
+  // ASPICE: WBS 산출물 목록에 없는 V-모델 문서도 함께 담는다 (V-모델 편집 결과 누락 방지)
+  const extra = aspiceExtraKinds(deliverables, ctx);
+  if (extra.length) {
+    const folder = "99_V-모델 추가 산출물(WBS 미지정)";
+    for (const k of extra) {
+      const D = AE.ASPICE_DOCS[k];
+      report(92, `V-모델 산출물 ${D.title} 생성 중…`);
+      let of = null; try { of = await buildVmodelDoc(k, meta, ctx); } catch (_) { of = null; }
+      if (!of) continue;
+      files.push({ path: `${folder}/${D.code}_${sanitize(D.title)}.${of.ext}`, content: of.bytes });
+      manifest.push([folder, "-", D.code, docCodeWithPrefix(D.code, meta) || "-", D.title, of.ext.toUpperCase(), "V-모델", `WBS 산출물 목록에 없음 — ASPICE V-모델(${D.proc})에서 생성`]);
+      total += 1;
     }
   }
   report(94, "산출물 목록 작성·ZIP 압축 중…");
@@ -9772,12 +9796,12 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
           <div style={{ flex:1, minWidth:240 }}>
             <div style={{ fontSize:12, fontWeight:700 }}>🚗 ASPICE V-모델 산출물 (시스템·SW·HW 요구 → 설계 → 검증 수단 → 추적성)</div>
             <div style={{ fontSize:10.5, color:T.muted, marginTop:2 }}>
-              {am ? `SYS ${am.reqs.SYS.length} · 요소 ${am.comps.SYS.length}${am.scope.SW ? ` · SW ${am.reqs.SW.length}` : ""}${am.scope.HW ? ` · HW ${am.reqs.HW.length}` : ""} · 검증 수단 ${am.tests.length} · 일관성 오류 ${errs}건${openLinks ? ` · 변경 검토 필요 연결 ${openLinks}건` : ""} — 저장된 내용은 아키텍처 설계서·SW/HW 명세서·검증 명세/결과서·추적 매트릭스 다운로드에 반영됩니다`
+              {am ? `SYS ${am.reqs.SYS.length} · 요소 ${am.comps.SYS.length}${am.scope.SW ? ` · SW ${am.reqs.SW.length}` : ""}${am.scope.HW ? ` · HW ${am.reqs.HW.length}` : ""} · 검증 수단 ${am.tests.length} · 일관성 오류 ${errs}건${openLinks ? ` · 변경 검토 필요 연결 ${openLinks}건` : ""} — 저장된 내용은 아래 '전체 ZIP 다운로드'의 해당 산출물에 반영됩니다${(() => { const ex = deliverablesData ? aspiceExtraKinds(deliverablesData, { ...(pdpCtx || {}), requirements }) : []; return ex.length ? ` (WBS에 없는 V-모델 문서 ${ex.length}종은 ZIP의 '99_V-모델 추가 산출물' 폴더에 함께 담김)` : ""; })()}`
                   : requirements?.items?.length ? "확정된 시스템 요구사항에서 SYS.3 → SWE.1/2 · HWE.1/2 → 검증 수단(SYS.4/5·SWE.5/6·HWE.3/4)을 생성합니다 (ASPICE 3.1·4.0 겸용)"
                   : "먼저 '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2 요구사항을 확정하세요 (DBC만으로 시작할 수도 있습니다)"}
             </div>
           </div>
-          {am && am.reqs.SYS.length > 0 && <Btn variant="outline" onClick={async()=>{ try { await downloadAspicePackage(form || {}, { requirements, tailoring: pdpCtx?.tailoring, ossp: pdpCtx?.ossp }); } catch(e) { alert(e.message); } }} title="V-모델 산출물 전체(이해관계자 요구 목록·시스템 요구사항 명세서·아키텍처·요구·상세설계·검증 명세·추적 매트릭스) ZIP" style={{ fontSize:11.5, padding:"6px 12px", marginRight:6 }}>📦 ZIP</Btn>}
+          {/* V-모델 산출물은 '전체 ZIP 다운로드'에 포함된다(WBS에 없는 V-모델 문서는 99 폴더). V-모델만 따로 받을 때는 V-모델 창의 '산출물 ZIP' 사용 */}
             <Btn onClick={()=>{ setAeInitTab(null); setAeModal(true); }} style={{ fontSize:11.5, padding:"6px 14px" }}>{am ? "V-모델 편집" : "V-모델 시작"}</Btn>
         </div>); })()}
       {deliverablesData && (
