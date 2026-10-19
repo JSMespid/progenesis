@@ -1417,9 +1417,10 @@ export function parseReviewJson(text) {
 }
 
 // AI 의견을 규칙으로 거른다 — kept(채택 후보)와 dropped(버린 이유) 반환
-export function validateReview(raw, batch) {
+export function validateReview(raw, batch, opts = {}) {
   const byId = Object.fromEntries(batch.map(r => [r.id, r]));
-  const codes = new Set(REVIEW_CRITERIA.map(c => c.code));
+  const codes = new Set((opts.criteria || REVIEW_CRITERIA).map(c => c.code));
+  const evOf = opts.evOf || (r => `${r.title} ${r.text} ${r.verifCriteria}`);
   const kept = [], dropped = [], seen = new Set();
   const norm = s => nz(s).replace(/["'“”‘’`]/g, "").toLowerCase();
   (Array.isArray(raw?.findings) ? raw.findings : []).forEach(f => {
@@ -1430,7 +1431,7 @@ export function validateReview(raw, batch) {
     const issue = nz(f?.issue);
     if (!issue) return dropped.push({ id, reason: "지적 내용 없음" });
     const ev = nz(f?.evidence);
-    if (ev && !norm(`${r.title} ${r.text} ${r.verifCriteria}`).includes(norm(ev))) return dropped.push({ id, reason: `근거 인용이 원문과 불일치("${ev.slice(0, 20)}")` });
+    if (ev && !norm(evOf(r)).includes(norm(ev))) return dropped.push({ id, reason: `근거 인용이 원문과 불일치("${ev.slice(0, 20)}")` });
     const k = `${id}|${crit}|${norm(issue).slice(0, 40)}`;
     if (seen.has(k)) return dropped.push({ id, reason: "중복 지적" });
     seen.add(k);
@@ -1446,23 +1447,23 @@ export function applyReviewRun(model, { level, reviewedIds, kept, meta }) {
   const m = normalizeModel(model);
   const at = meta?.at || new Date().toISOString();
   const prov = meta?.provider || "";
-  const reqById = Object.fromEntries((m.reqs[level] || []).map(r => [r.id, r]));
+  const itemById = Object.fromEntries(reviewItems(m, level).map(it => [it.id, it]));
   const ids = new Set(reviewedIds);
   const keep = m.aiReview.findings.filter(f => !(f.level === level && ids.has(f.reqId) && !f.judge && (f.provider || "") === prov));
   const judgedKeys = new Set(keep.map(f => f.key));
   const fresh = kept.map(f => ({
-    ...f, level, runAt: at, reqHash: reqHash(reqById[f.reqId] || {}),
+    ...f, level, runAt: at, reqHash: itemById[f.reqId]?.hash || "", targetTitle: itemById[f.reqId]?.title || "",
     provider: prov, reviewer: meta?.label || prov, reviewerModel: meta?.model || "",
     key: `${level}|${f.reqId}|${f.criterion}|${fnv1a(f.issue)}|${prov}`,
   })).filter(f => !judgedKeys.has(f.key));
   m.aiReview.findings = [...keep, ...fresh];
   const hk = prov ? `${prov}:${level}` : level;   // 검토 AI별로 '어디까지 검토했는지' 따로 기록
   const hs = { ...((m.aiReview.hashes || {})[hk] || {}) };
-  reviewedIds.forEach(id => { if (reqById[id]) hs[id] = reqHash(reqById[id]); });
+  reviewedIds.forEach(id => { if (itemById[id]) hs[id] = itemById[id].hash; });
   m.aiReview.hashes = { ...(m.aiReview.hashes || {}), [hk]: hs };
   m.aiReview.runs = [...m.aiReview.runs, {
     at, level, provider: meta?.provider || "", label: meta?.label || "", model: meta?.model || "",
-    criteria: REVIEW_CRITERIA_VER, reviewed: reviewedIds.length, kept: fresh.length, dropped: meta?.dropped || 0,
+    criteria: reviewKindOf(level).ver, reviewed: reviewedIds.length, kept: fresh.length, dropped: meta?.dropped || 0,
     failed: meta?.failed || 0, sameAsGenerator: !!meta?.sameAsGenerator,
   }].slice(-30);
   return m;
@@ -1481,11 +1482,11 @@ export function judgeReview(model, keys, state, note = "", by = "user") {
 // 지적 이후 요구가 바뀌었는지(재검토 필요) 표시
 export function reviewView(model) {
   const m = normalizeModel(model);
-  const reqById = {};
-  ["SYS", "SW", "HW"].forEach(lv => (m.reqs[lv] || []).forEach(r => { reqById[`${lv}|${r.id}`] = r; }));
+  const byScope = {};
+  const itemOf = (lv, id) => { if (!byScope[lv]) byScope[lv] = Object.fromEntries(reviewItems(m, lv).map(it => [it.id, it])); return byScope[lv][id]; };
   const list = m.aiReview.findings.map(f => {
-    const r = reqById[`${f.level}|${f.reqId}`];
-    return { ...f, reqTitle: r?.title || "", removed: !r, stale: !!r && f.reqHash !== reqHash(r) };
+    const it = itemOf(f.level, f.reqId);
+    return { ...f, reqTitle: it?.title || f.targetTitle || "", removed: !it, stale: !!it && f.reqHash !== it.hash };
   });
   const count = (lv) => {
     const xs = list.filter(f => !lv || f.level === lv);
@@ -1501,9 +1502,203 @@ export function reviewView(model) {
 // 다시 검토할 대상: mode "all" = 전체 / "changed" = 아직 검토하지 않았거나 마지막 검토 이후 내용이 바뀐 요구
 export function reviewTargets(model, level, mode = "all", provider = "") {
   const m = normalizeModel(model);
-  const reqs = m.reqs[level] || [];
-  if (mode === "all") return reqs;
+  const items = reviewItems(m, level);
+  if (mode === "all") return items;
   const hsAll = m.aiReview.hashes || {};
   const snap = hsAll[provider ? `${provider}:${level}` : level] || {};
-  return reqs.filter(r => snap[r.id] !== reqHash(r));
+  return items.filter(it => snap[it.id] !== it.hash);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11-b) 산출물 전체 교차검토 — 요구(SYS.2·SWE.1·HWE.1) · 아키텍처(SYS.3·SWE.2·HWE.2) · 상세설계(SWE.3) · 검증 명세(SWE.4~6·HWE.3·4·SYS.4·5)
+//  · 산출물 종류마다 검토 기준(버전 고정)을 따로 둔다. 요구 기준(RC)을 설계·시험에 쓰면 엉뚱한 지적이 나온다.
+//  · 검토 단위(항목)는 모두 ID를 가진다 — 요소·인터페이스·유닛·시험은 자체 ID, 동작 모드는 MODE:모드명, 설계 근거는 RATIONALE-레벨.
+//  · 항목 해시로 '검토 이후 내용 변경(재검토 필요)'·'삭제'를 판정한다(요구는 기존 reqHash 그대로 — 저장된 검토 기록 호환).
+//  · 검토하지 않는 산출물: 이해관계자 요구 목록(고객 원문 — ① 규칙의 합의 상태로 관리), 검증 결과서(실행 전),
+//    추적 매트릭스(① 규칙 검사가 결정론적으로 전수 점검). 화면에 이유를 표시한다.
+// ═══════════════════════════════════════════════════════════════════════════
+export const REVIEW_KINDS = {
+  req: { ver: REVIEW_CRITERIA_VER, basis: REVIEW_CRITERIA_BASIS, criteria: REVIEW_CRITERIA, noun: "요구" },
+  arch: { ver: "AC-1.0", basis: "ISO/IEC/IEEE 42010 아키텍처 기술 · ASPICE SYS.3/SWE.2/HWE.2 BP 기반", noun: "설계 항목", criteria: [
+    { code: "RESP",      label: "책임 명확성",   desc: "요소의 책임·기능이 모호하거나 다른 요소와 중복·누락됨" },
+    { code: "ALLOC",     label: "할당 적합성",   desc: "할당된 요구가 요소의 책임과 맞지 않거나, 책임에 비해 필요한 요구가 할당되지 않은 것으로 보임" },
+    { code: "IFDEF",     label: "인터페이스 정의", desc: "인터페이스의 방향·데이터(신호)·주기·프로토콜·범위 등 정의가 빠지거나 불명확함" },
+    { code: "DYN",       label: "동적 측면",     desc: "동작 모드·상태 전이·타이밍·거동 기술이 빠지거나 서로 모순됨" },
+    { code: "CONSIST",   label: "일관성",       desc: "요소·인터페이스·모드·요구 사이에 명칭·수치·방향이 불일치" },
+    { code: "RATIONALE", label: "설계 근거",     desc: "구조 선택의 근거·대안 검토가 없거나 요구와 연결되지 않음" },
+    { code: "AMBIG",     label: "모호성",       desc: "해석이 둘 이상 가능한 표현, 정의되지 않은 용어" },
+  ] },
+  unit: { ver: "DC-1.0", basis: "ASPICE SWE.3 BP(상세설계·유닛 인터페이스·동적 동작) 기반", noun: "유닛", criteria: [
+    { code: "RESP",    label: "유닛 책임",     desc: "유닛의 책임이 모호하거나 할당 요구와 맞지 않음" },
+    { code: "IFACE",   label: "유닛 인터페이스", desc: "함수 원형·매개변수·반환값·자료형·상수의 의미나 범위가 불명확하거나 할당 요구 처리에 필요한 인터페이스가 없어 보임" },
+    { code: "TRACE",   label: "요구 할당",     desc: "할당된 SW 요구와 유닛 내용(이름·설계·인터페이스)이 대응하지 않음" },
+    { code: "DESIGN",  label: "설계 기술",     desc: "작성된 알고리즘·자료구조·동적 동작 기술이 구현·검증하기에 불충분하거나 모순됨 (TBD로 계획된 미작성은 제외)" },
+    { code: "CONSIST", label: "일관성",       desc: "유닛명·컴포넌트·요구·인터페이스 사이의 명칭·수치 불일치" },
+    { code: "AMBIG",   label: "모호성",       desc: "해석이 둘 이상 가능한 표현" },
+  ] },
+  test: { ver: "TC-1.0", basis: "ISO/IEC/IEEE 29119-3 시험 명세 특성 기반", noun: "시험 항목", criteria: [
+    { code: "TARGET",  label: "대상 적합성",   desc: "시험 내용이 대상(요구·인터페이스·유닛)을 실제로 검증하지 않거나 일부만 검증함" },
+    { code: "PRECOND", label: "사전조건·환경",  desc: "시험 수행에 필요한 사전조건·환경·입력 데이터가 빠지거나 불명확함" },
+    { code: "STEPS",   label: "절차 재현성",   desc: "절차가 모호해 다른 사람이 같은 방법으로 재현할 수 없음" },
+    { code: "EXPECT",  label: "판정 가능성",   desc: "기대 결과·합격 기준이 정량적이지 않아 합격·불합격을 판정할 수 없음" },
+    { code: "COVER",   label: "케이스 충분성",  desc: "대상 요구에 비해 경계값·예외·고장 상황 등 필요한 케이스가 빠진 것으로 보임" },
+    { code: "CONSIST", label: "일관성",       desc: "대상 요구와 수치·조건·용어가 불일치" },
+    { code: "TECH",    label: "기법 적합성",   desc: "검증 기법이 대상의 성격(기능·성능·인터페이스·유닛)에 맞지 않음" },
+  ] },
+};
+// 검토 범위 — V-모델 순서(왼쪽 위 → 아래 → 오른쪽 아래 → 위)
+export const REVIEW_SCOPES = [
+  { key: "SYS",    kind: "req",  lv: "SYS", proc: "SYS.2", doc: "SYS_RS", group: "요구" },
+  { key: "AD_SYS", kind: "arch", lv: "SYS", proc: "SYS.3", doc: "SYS_AD", group: "설계" },
+  { key: "SW",     kind: "req",  lv: "SW",  proc: "SWE.1", doc: "SW_RS",  group: "요구" },
+  { key: "AD_SW",  kind: "arch", lv: "SW",  proc: "SWE.2", doc: "SW_AD",  group: "설계" },
+  { key: "DD_SW",  kind: "unit", lv: "SW",  proc: "SWE.3", doc: "SW_DD",  group: "설계" },
+  { key: "HW",     kind: "req",  lv: "HW",  proc: "HWE.1", doc: "HW_RS",  group: "요구" },
+  { key: "AD_HW",  kind: "arch", lv: "HW",  proc: "HWE.2", doc: "HW_AD",  group: "설계" },
+  { key: "T_SWE4", kind: "test", lv: "SW",  proc: "SWE.4", doc: "V_SWE4", group: "검증", test: "SWE4" },
+  { key: "T_SWE5", kind: "test", lv: "SW",  proc: "SWE.5", doc: "V_SWE5", group: "검증", test: "SWE5" },
+  { key: "T_SWE6", kind: "test", lv: "SW",  proc: "SWE.6", doc: "V_SWE6", group: "검증", test: "SWE6" },
+  { key: "T_HWE3", kind: "test", lv: "HW",  proc: "HWE.3", doc: "V_HWE3", group: "검증", test: "HWE3" },
+  { key: "T_HWE4", kind: "test", lv: "HW",  proc: "HWE.4", doc: "V_HWE4", group: "검증", test: "HWE4" },
+  { key: "T_SYS4", kind: "test", lv: "SYS", proc: "SYS.4", doc: "V_SYS4", group: "검증", test: "SYS4" },
+  { key: "T_SYS5", kind: "test", lv: "SYS", proc: "SYS.5", doc: "V_SYS5", group: "검증", test: "SYS5" },
+].map(x => ({ ...x, label: ASPICE_DOCS[x.doc].title }));
+export const REVIEW_EXCLUDED = [
+  { doc: "STK_LIST", why: "고객(OEM) 원문 — 우리가 작성한 산출물이 아니므로 품질 검토 대신 합의 상태를 ① 규칙 검사로 관리" },
+  { doc: "RTM", why: "추적 관계는 ① 규칙 검사가 전수·결정론적으로 점검(AI 의견 불필요)" },
+  { doc: null, label: "검증 결과서", why: "시험 실행 전에는 결과가 없음 — 실행 결과 기록 후 검토" },
+];
+export function reviewScope(key) { return REVIEW_SCOPES.find(x => x.key === key) || null; }
+export function reviewKindOf(key) { return REVIEW_KINDS[reviewScope(key)?.kind || "req"]; }
+// 현재 모델에서 검토할 수 있는 범위 (개발 범위 SW/HW 반영)
+export function reviewScopesFor(model) {
+  const m = normalizeModel(model);
+  return REVIEW_SCOPES.filter(x => x.lv === "SYS" || m.scope[x.lv]);
+}
+
+const clip = (s, n = 240) => { const t = nz(s); return t.length > n ? t.slice(0, n) + "…" : t; };
+// 검토 단위 항목 — { id, title, hash, body(검토 AI에 보내는 내용), ev(근거 인용 검증용 원문), refs(관련 항목 ID), src }
+export function reviewItems(model, key) {
+  const S = reviewScope(key); if (!S) return [];
+  const m = normalizeModel(model);
+  const lv = S.lv;
+  if (S.kind === "req") return (m.reqs[lv] || []).map(r => ({ id: r.id, title: nz(r.title), hash: reqHash(r), src: r,
+    ev: `${r.title} ${r.text} ${r.verifCriteria}`, refs: r.parents || [] }));
+  if (S.kind === "arch") {
+    const comps = m.comps[lv] || [], ifs = m.interfaces[lv] || [];
+    const nameOf = Object.fromEntries(comps.map(c => [c.id, c.name]));
+    const reqsOf = cid => (m.reqs[lv] || []).filter(r => (m.alloc[lv][r.id] || []).includes(cid)).map(r => r.id);
+    const out = comps.map(c => {
+      const ar = reqsOf(c.id), cif = ifs.filter(i => i.from === c.id || i.to === c.id).map(i => i.id);
+      return { id: c.id, title: nz(c.name), hash: fnv1a(JSON.stringify([c.name, c.kind, c.desc, c.behavior, ar])),
+        body: { id: c.id, 항목: "요소", 이름: nz(c.name), 구분: nz(c.kind), 책임: nz(c.desc) || "(작성 안 됨)", 거동: nz(c.behavior) || "(작성 안 됨)", 할당요구: ar, 인터페이스: cif },
+        ev: `${c.name} ${c.kind} ${c.desc} ${c.behavior}`, refs: ar };
+    });
+    ifs.forEach(i => out.push({ id: i.id, title: `${nameOf[i.from] || i.from || "?"} → ${nameOf[i.to] || i.to || "?"}`,
+      hash: fnv1a(JSON.stringify([i.from, i.to, i.kind, i.signals, i.periodMs, i.desc])),
+      body: { id: i.id, 항목: "인터페이스", 송신: `${i.from || ""} ${nameOf[i.from] || ""}`.trim(), 수신: `${i.to || ""} ${nameOf[i.to] || ""}`.trim(), 종류: nz(i.kind), "신호·데이터": nz(i.signals) || "(작성 안 됨)", 주기ms: nz(i.periodMs), 설명: nz(i.desc) },
+      ev: `${nameOf[i.from] || ""} ${nameOf[i.to] || ""} ${i.kind} ${i.signals} ${i.periodMs} ${i.desc}`, refs: [] }));
+    if (lv === "SYS") m.modes.filter(md => nz(md.name)).forEach(md => out.push({ id: `MODE:${nz(md.name)}`, title: `동작 모드 ${nz(md.name)}`,
+      hash: fnv1a(JSON.stringify([md.name, md.desc, md.transition])),
+      body: { id: `MODE:${nz(md.name)}`, 항목: "동작 모드", 모드: nz(md.name), 설명: nz(md.desc), "진입·이탈": nz(md.transition) || "(작성 안 됨)" },
+      ev: `${md.name} ${md.desc} ${md.transition}`, refs: [] }));
+    const rt = nz(m.rationale[lv]);
+    out.push({ id: `RATIONALE-${lv}`, title: "아키텍처 분석·설계 근거", hash: fnv1a(rt),
+      body: { id: `RATIONALE-${lv}`, 항목: "설계 근거", 내용: rt || "(작성 안 됨)", 요소수: comps.length, 인터페이스수: ifs.length }, ev: rt, refs: [] });
+    return out;
+  }
+  if (S.kind === "unit") {
+    const cn = Object.fromEntries((m.comps.SW || []).map(c => [c.id, c.name]));
+    return (m.units.SW || []).map(u => {
+      const fs = (u.funcs || []).map(f => `${f.ret} ${f.name}(${f.params || ""})`), ms = (u.macros || []).map(x => `${x.name}=${x.value}`);
+      return { id: u.id, title: nz(u.name), hash: fnv1a(JSON.stringify([u.name, u.comp, u.desc, u.reqs, u.funcs, u.types, u.macros])),
+        body: { id: u.id, 유닛: nz(u.name), 컴포넌트: `${u.comp || ""} ${cn[u.comp] || ""}`.trim() || "(미지정)", 할당요구: u.reqs || [],
+          설계: nz(u.desc) || "(작성 안 됨)", 설계상태: u.designDone || u.origin === "header" ? "작성(또는 코드 근거)" : "TBD — 코드 확정 후 작성 예정",
+          함수: fs.slice(0, 15), 자료형: (u.types || []).slice(0, 15), 상수: ms.slice(0, 15) },
+        ev: `${u.name} ${u.desc} ${fs.join(" ")} ${(u.types || []).join(" ")} ${ms.join(" ")}`, refs: u.reqs || [] };
+    });
+  }
+  // test
+  return (m.tests || []).filter(t => t.level === S.test).map(t => ({ id: t.id, title: nz(t.title),
+    hash: fnv1a(JSON.stringify([t.title, t.technique, t.precondition, t.env, t.steps, t.expected, t.passCriteria, t.targets])),
+    body: { id: t.id, 시험명: nz(t.title), 대상: t.targets || [], 기법: nz(t.technique), 사전조건: nz(t.precondition) || "(작성 안 됨)", 환경: nz(t.env),
+      절차: nz(t.steps) || "(작성 안 됨)", 기대결과: nz(t.expected) || "(작성 안 됨)", 합격기준: nz(t.passCriteria) || "(작성 안 됨)" },
+    ev: `${t.title} ${t.technique} ${t.precondition} ${t.env} ${t.steps} ${t.expected} ${t.passCriteria}`, refs: t.targets || [] }));
+}
+// 관련 항목(판단 근거) — 참조 ID를 요구·요소·인터페이스·유닛에서 찾아 짧게 요약
+function reviewContext(m, ids) {
+  const want = [...new Set(ids)].slice(0, 40);
+  if (!want.length) return [];
+  const pool = {};
+  (m.reqs.STK || []).forEach(r => { pool[r.id] = { id: r.id, 구분: "이해관계자 요구", 내용: clip(r.text) }; });
+  ["SYS", "SW", "HW"].forEach(lv => {
+    (m.reqs[lv] || []).forEach(r => { pool[r.id] = { id: r.id, 구분: `${LEVELS[lv].label} 요구`, 제목: nz(r.title), 내용: clip(r.text), 검증기준: clip(r.verifCriteria, 160) }; });
+    (m.comps[lv] || []).forEach(c => { pool[c.id] = { id: c.id, 구분: LEVELS[lv].compLabel, 이름: nz(c.name), 책임: clip(c.desc, 160) }; });
+    (m.interfaces[lv] || []).forEach(i => { pool[i.id] = { id: i.id, 구분: `${LEVELS[lv].label} 인터페이스`, "송신→수신": `${i.from}→${i.to}`, "신호·데이터": clip(i.signals, 160), 주기ms: nz(i.periodMs) }; });
+  });
+  (m.units.SW || []).forEach(u => { pool[u.id] = { id: u.id, 구분: "SW 유닛", 이름: nz(u.name), 설계: clip(u.desc, 160) }; });
+  return want.map(id => pool[id]).filter(Boolean);
+}
+const KIND_NOTES = {
+  arch: "8) 구분이 '외부'인 요소는 시스템 경계 밖 상대이므로 책임 기술이 짧아도 지적하지 않는다. '(작성 안 됨)'은 빠진 정보이므로 해당 기준으로 지적할 수 있다(이때 evidence는 빈 문자열).",
+  unit: "8) 설계상태가 'TBD — 코드 확정 후 작성 예정'인 유닛은 알고리즘·자료구조·동적 동작이 아직 없는 것이 계획된 상태이므로 그 누락 자체는 지적하지 않는다(규칙 검사가 관리). 유닛명·컴포넌트·할당 요구·함수 원형·자료형 사이의 불일치와 책임 모호성을 본다.",
+  test: "8) 'TBD'로 명시된 부분(예: 코드 확정 후 작성, 기준 등급 TBD)은 계획된 미작성이므로 지적하지 않는다. 시험이 [관련 항목]의 대상을 실제로 검증하는지, 기대 결과·합격 기준으로 합격·불합격을 판정할 수 있는지를 중심으로 본다.",
+};
+// 검토 프롬프트 — 요구는 기존 프롬프트(promptReview) 그대로, 그 밖의 산출물은 종류별 기준으로
+export function reviewPrompt(model, key, batch, version = "both") {
+  const S = reviewScope(key), K = reviewKindOf(key);
+  const m = normalizeModel(model);
+  if (S.kind === "req") {
+    const parents = S.lv === "SYS" ? m.reqs.STK : parentsForLevel(m, S.lv);
+    return promptReview({ level: S.lv, reqs: batch.map(b => b.src), parents, version });
+  }
+  const crit = K.criteria.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n");
+  // 관련 항목은 판단 근거일 뿐이므로 길이를 제한한다 — 서버가 프롬프트를 24,000자에서 자르면 [출력 형식]이 잘려 응답 형식이 깨진다
+  const ctx = reviewContext(m, batch.flatMap(b => b.refs || []));
+  while (ctx.length && JSON.stringify(ctx).length > 9000) ctx.pop();
+  return `역할: 당신은 ASPICE ${S.proc} (${procLabel(S.proc, version)}) 산출물 「${S.label}」을 검토하는 독립 품질보증(QA) 검토자입니다.
+아래 [검토 대상] ${K.noun}을 [검토 기준]에 따라 검토하고, 문제가 있는 것만 지적하세요.
+
+[검토 기준] (${K.ver}, ${K.basis})
+${crit}
+
+[규칙]
+1) id는 반드시 [검토 대상]에 있는 ID만 사용한다. [관련 항목]의 ID로 지적하지 않는다. 다른 ID를 만들지 않는다.
+2) criterion은 위 기준 코드 중 하나만 쓴다.
+3) evidence는 해당 항목의 값에서 그대로 복사한 짧은 구절(30자 이내)이다. 원문에 없는 문구를 쓰지 않는다. 빠진 정보를 지적할 때는 빈 문자열로 둔다.
+4) severity는 major(검증·구현 불가 수준) / minor(수정 권장) / info(개선 제안) 중 하나.
+5) 문제가 없는 항목은 지적하지 않는다. 항목 하나당 최대 3건.
+6) issue와 suggestion은 한국어 한 문장, 줄바꿈 없이 작성한다. suggestion에 원문에 없는 수치를 확정값처럼 쓰지 말고 필요하면 'TBD(확인 필요)'로 쓴다.
+7) [관련 항목]은 일관성·적합성 판단의 근거로만 쓴다.
+${KIND_NOTES[S.kind] || ""}
+
+[관련 항목]
+${ctx.length ? JSON.stringify(ctx) : "(없음)"}
+
+[검토 대상]
+${JSON.stringify(batch.map(b => b.body))}
+
+[출력 형식] JSON만:
+{"findings":[{"id":"","criterion":"${K.criteria[0].code}","severity":"minor","evidence":"","issue":"","suggestion":""}]}`;
+}
+// 검토 범위에 맞춘 의견 검증 (대상 ID·기준 코드·근거 인용)
+export function validateReviewScope(raw, batch, key) {
+  const S = reviewScope(key);
+  if (!S || S.kind === "req") return validateReview(raw, batch.map(b => b.src || b));
+  return validateReview(raw, batch, { criteria: reviewKindOf(key).criteria, evOf: b => b.ev || "" });
+}
+// 검토 범위별 현황 — 항목 수 · 현재 내용 기준 검토 완료 수(선택 검토 AI / 아무 검토 AI) · 의견 판정 현황
+export function reviewCoverage(model, provider = "") {
+  const m = normalizeModel(model);
+  const v = reviewView(m);
+  const hs = m.aiReview.hashes || {};
+  return reviewScopesFor(m).map(S => {
+    const items = reviewItems(m, S.key);
+    const snaps = Object.entries(hs).filter(([k]) => k === S.key || k.endsWith(`:${S.key}`)).map(([, x]) => x || {});
+    const mine = hs[provider ? `${provider}:${S.key}` : S.key] || {};
+    const cur = it => snaps.some(sn => sn[it.id] === it.hash);
+    const fs = v.list.filter(f => f.level === S.key);
+    return { ...S, total: items.length, reviewedAny: items.filter(cur).length, reviewedMine: items.filter(it => mine[it.id] === it.hash).length,
+      open: fs.filter(f => !f.judge).length, valid: fs.filter(f => f.judge?.state === "valid").length, stale: fs.filter(f => f.stale || f.removed).length, findings: fs.length };
+  });
 }
