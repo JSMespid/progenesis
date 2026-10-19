@@ -2012,3 +2012,33 @@ ${JSON.stringify(targets.map(t => ({ id: t.id, fields: Object.fromEntries(t.fiel
 export function impactNoEffectCandidates(links) {
   return links.filter(l => l.state === "suspect" && (l.kind === "alloc" || l.kind === "derive") && (l.fields || []).length > 0 && (l.fields || []).every(f => f === "검증 기준")).map(l => l.key);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 12) 길잡이 — 8단계 진행 상태와 '다음 할 일' (기존 커버리지·일관성 로직을 그대로 읽어서 계산)
+// ═══════════════════════════════════════════════════════════════════════════
+export const AE_STEP_ORDER = ["setup", "req", "SYS", "SW", "HW", "verif", "trace", "review"];
+const STEP_COV = { req: ["stkDerive"], SYS: ["sysAlloc"], SW: ["swDerive", "swAlloc", "swUnit"], HW: ["hwDerive", "hwAlloc"] };
+export function aeProgress(model, opts = {}) {
+  const m = normalizeModel(model);
+  const cov = coverageDetail(m);
+  const byKey = Object.fromEntries(cov.map(c => [c.key, c]));
+  const missOf = keys => keys.map(k => byKey[k]).filter(c => c && c.missing.length);
+  const errs = checkConsistency(m).filter(f => f.sev === "error");
+  const openLinks = linkStatus(m).open.length;
+  const rcov = opts.reviewCov || reviewCoverage(m);
+  const steps = [];
+  const add = (id, state, note, next) => steps.push({ id, state, note, next });
+  add("setup", opts.saved || m.reqs.SYS.length ? "done" : (Object.keys(m.inputs || {}).length ? "partial" : "todo"), "적용 버전·개발 범위·입력자료 체크", { tab: "setup" });
+  { const mi = missOf(STEP_COV.req); add("req", !m.reqs.SYS.length ? "todo" : mi.length ? "partial" : "done", m.reqs.SYS.length ? `시스템 요구 ${m.reqs.SYS.length}건 확정` : "고객 요구에서 시스템 요구를 도출·확정", mi[0] ? { cov: mi[0] } : { tab: "req" }); }
+  { const mi = missOf(STEP_COV.SYS); add("SYS", !m.comps.SYS.length ? "todo" : mi.length ? "partial" : "done", m.comps.SYS.length ? `요소 ${m.comps.SYS.length}개 · 인터페이스 ${m.interfaces.SYS.length}건` : "시스템 요소를 나누고 요구를 할당", mi[0] ? { cov: mi[0] } : { tab: "SYS" }); }
+  ["SW", "HW"].forEach(lv => { if (!m.scope[lv]) return; const mi = missOf(STEP_COV[lv]); const n = m.reqs[lv].length;
+    add(lv, !n ? "todo" : mi.length ? "partial" : "done", n ? `${lv} 요구 ${n}건 · 컴포넌트 ${m.comps[lv].length}개${lv === "SW" ? ` · 유닛 ${m.units.SW.length}개` : ""}` : `시스템 요구를 ${lv} 요구로 내리고 컴포넌트에 할당`, mi[0] ? { cov: mi[0] } : { tab: lv }); });
+  { const mi = cov.filter(c => c.group === "verif" && c.missing.length); add("verif", !m.tests.length ? "todo" : mi.length ? "partial" : "done", m.tests.length ? `시험 ${m.tests.length}건` : "요구·인터페이스·유닛마다 시험 생성", mi[0] ? { cov: mi[0] } : { tab: "verif" }); }
+  add("trace", !m.reqs.SYS.length ? "todo" : errs.length || openLinks ? "partial" : "done", errs.length || openLinks ? `오류 ${errs.length} · 변경 영향 확인 대기 ${openLinks}` : "오류 없음", { tab: "trace" });
+  { const tot = rcov.reduce((a, c) => a + c.total, 0), rv = rcov.reduce((a, c) => a + c.reviewedAny, 0), op = rcov.reduce((a, c) => a + c.open, 0);
+    add("review", tot && rv === tot && !op ? "done" : rv ? "partial" : "todo", tot ? `검토 ${rv}/${tot} · 미판정 ${op}` : "검토할 산출물 없음", { tab: "review" }); }
+  // 다음 할 일: 순서상 첫 미완료 단계. 단, 앞 단계가 아직이면 뒤 단계의 '부분'은 보이지 않게 한다
+  const next = steps.find(s => s.state !== "done") || null;
+  const done = steps.filter(s => s.state === "done").length;
+  return { steps, next, pct: Math.round(done / steps.length * 100) };
+}
