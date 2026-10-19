@@ -8423,6 +8423,10 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
 // ASPICE V-모델 엔지니어링 모달 — SYS.2 확정 요구 → SYS.3 → SWE.1/2 · HWE.1/2 → 검증 수단 → 추적·충족도
 // 저장 위치: requirements.aspice (tailoring JSON 내부 — DB 스키마 변경 없음)
 // ═══════════════════════════════════════════════════════════════════════════
+// V-모델 편집 상태 서명 — 저장 안 된 변경 감지용 (저장 시각 updatedAt은 비교에서 제외)
+function aeSig(m, items) {
+  try { const { updatedAt, ...rest } = m || {}; return JSON.stringify([rest, items || []]); } catch { return String(Math.random()); }
+}
 // V-모델 창의 기본 탭 = "다음에 할 단계" (작업 순서 ①→⑥, 모두 갖춰지면 ⑦ 점검)
 // saved: 저장본(requirements.aspice)이 있는지 — 있으면 ① 설정은 이미 거친 것으로 보고 ②부터 판정
 function aeNextTab(m, saved) {
@@ -8819,8 +8823,23 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     const out = { ...AE.baselineLinks({ ...model, reqs: { ...model.reqs, STK: AE.syncStkReqs(requirements?.stk?.items || [], model.reqs.STK), SYS: AE.syncSysReqs(items, model.reqs.SYS) } }), updatedAt: new Date().toISOString() };
     setRequirements({ ...(requirements || {}), items, aspice: out, idRegistry: nextIdRegistry(requirements, items), updatedAt: requirements?.updatedAt || new Date().toISOString(),
       ...(srcRef.current ? { source: srcRef.current, sourceName: srcRef.current.files?.length ? srcRef.current.files.map(f => f.name).join(", ") : (requirements?.sourceName || "직접 입력") } : {}) });
+    // 저장해도 창은 닫지 않는다(작업 계속). 화면 모델도 저장본(기준선 등록 반영)과 같게 맞춘다.
+    setModel(out);
+    savedSig.current = aeSig(out, items);
+    setErr(null);
+    setNote(`저장했습니다 (${new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}) — 창은 그대로 열려 있으니 계속 작업하세요. 닫을 때는 '닫기' 또는 ✕를 누르세요.`);
+  }
+  // 저장되지 않은 변경 감지 — 마지막 저장(또는 창을 연 시점) 상태와 비교
+  const savedSig = useRef(null);
+  if (savedSig.current === null) savedSig.current = aeSig(model, items);
+  const dirty = React.useMemo(() => aeSig(model, items) !== savedSig.current, [model, items]);
+  // 닫기(✕·닫기 버튼·바깥 클릭) — 저장 안 된 변경이 있으면 확인
+  function requestClose() {
+    if (dirty && !window.confirm("저장하지 않은 변경 내용이 있습니다.\n저장하지 않고 닫을까요?\n\n(취소를 누르면 창으로 돌아갑니다)")) return;
     onClose();
   }
+  // 바깥(어두운 배경) 클릭으로 닫기: 누른 곳과 뗀 곳이 모두 배경일 때만 — 입력란에서 드래그하다 바깥에서 놓아 닫히는 것 방지
+  const downOnBackdrop = useRef(false);
   // ── ① 요구 도출·명세 탭에서 확정: 변경 전 기준선 등록 → 새 요구로 동기화 → 즉시 저장 ──
   function confirmReqs(meta) {
     const base = AE.baselineLinks(model);
@@ -8829,6 +8848,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     setModel(next);
     setItems(meta.items);
     setRequirements({ ...(requirements || {}), ...meta, aspice: next });
+    savedSig.current = aeSig(next, meta.items);
     setErr(null);
     setNote(`${meta.stk?.items?.length ? `이해관계자 요구 ${meta.stk.items.length}건 · ` : ""}시스템 요구 ${meta.items.length}건을 확정·저장했습니다.${st.open.length ? ` 변경된 요구의 하위 연결 ${st.open.length}건은 ⑦ 추적성 탭 '변경 영향 검토'에서 확인하세요.` : " 다음은 ③ 시스템 탭에서 아키텍처를 작성하세요."}`);
   }
@@ -8951,14 +8971,16 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
 
   return (
     <AeRunCtx.Provider value={runCtx}>
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+    <div onMouseDown={e => { downOnBackdrop.current = e.target === e.currentTarget; }}
+      onClick={e => { if (e.target === e.currentTarget && downOnBackdrop.current) requestClose(); downOnBackdrop.current = false; }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div onClick={e => e.stopPropagation()} onClickCapture={e => { clickSec.current = e.target?.closest ? e.target.closest("[data-aesec]") : null; }} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, width: "100%", maxWidth: 1080, maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700 }}>🚗 ASPICE V-모델 산출물 엔지니어링 <Badge color={T.accent}>{AE.ASPICE_VERSIONS.find(v => v.id === V)?.label}</Badge></div>
             <div style={{ fontSize: 10.5, color: T.muted, marginTop: 2 }}>확정 시스템 요구(SYS.2) → 아키텍처(SYS.3) → SW·HW 요구/설계 → 검증 수단 → 양방향 추적성 — 하나의 추적 모델에서 모든 산출물을 생성합니다</div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: T.muted, fontSize: 18, cursor: "pointer" }}>✕</button>
+          <button onClick={requestClose} title="닫기" style={{ background: "none", border: "none", color: T.muted, fontSize: 18, cursor: "pointer" }}>✕</button>
         </div>
         <div style={{ display: "flex", gap: 3, padding: "8px 18px 0", flexShrink: 0, flexWrap: "wrap" }}>
           {AE_TABS.filter(([id]) => !(id === "SW" && !model.scope.SW) && !(id === "HW" && !model.scope.HW)).map(([id, label]) => (
@@ -9403,7 +9425,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px", borderTop: `1px solid ${T.border}`, flexShrink: 0, gap: 8 }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 10.5, color: T.muted }}>SYS {model.reqs.SYS.length} · 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW ${model.reqs.SW.length}/${model.comps.SW.length}${model.units.SW.length ? `/유닛 ${model.units.SW.length}` : ""}` : ""}{model.scope.HW ? ` · HW ${model.reqs.HW.length}/${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}{requirements?.aspice?.updatedAt ? ` · 저장본 ${String(requirements.aspice.updatedAt).slice(0, 10)}` : ""}</div>
+            <div style={{ fontSize: 10.5, color: T.muted }}>SYS {model.reqs.SYS.length} · 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW ${model.reqs.SW.length}/${model.comps.SW.length}${model.units.SW.length ? `/유닛 ${model.units.SW.length}` : ""}` : ""}{model.scope.HW ? ` · HW ${model.reqs.HW.length}/${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}{requirements?.aspice?.updatedAt ? ` · 저장본 ${(d => isNaN(d) ? String(requirements.aspice.updatedAt).slice(0, 10) : `${d.toLocaleDateString("sv-SE")} ${d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false })}`)(new Date(requirements.aspice.updatedAt))}` : ""}</div>
             <div style={{ fontSize: 9.5, color: T.muted, opacity: 0.8, marginTop: 2 }}>SYS = 시스템 요구 수 · 요소 = 시스템 구성요소 수 · SW/HW = 하위 요구 수 / 컴포넌트 수 (/ SW 유닛 수) · 검증 수단 = 시험 항목(TC) 수</div>
             {(() => {
               // 규칙 기반 상속 초안(시스템 요구를 그대로 복사한 하위 요구)이 남아 있으면 한 줄로 안내
@@ -9413,8 +9435,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="이해관계자 요구 목록·시스템 요구사항 명세서·아키텍처·하위 요구·상세설계·검증 명세·추적 매트릭스를 한 번에 내려받습니다 (저장 전 편집 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 산출물 ZIP</Btn>
-            <Btn variant="outline" onClick={onClose} style={{ fontSize: 12, padding: "7px 14px" }}>취소</Btn>
-            <Btn onClick={save} disabled={busy} style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
+            <span style={{ alignSelf: "center", fontSize: 10.5, color: dirty ? T.amber : T.green, whiteSpace: "nowrap" }}>{dirty ? "● 저장 안 된 변경 있음" : "✓ 저장됨"}</span>
+            <Btn variant="outline" onClick={requestClose} style={{ fontSize: 12, padding: "7px 14px" }}>닫기</Btn>
+            <Btn onClick={save} disabled={busy} title="작업 내용을 프로젝트에 반영합니다. 창은 닫히지 않습니다." style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
           </div>
         </div>
       </div>
