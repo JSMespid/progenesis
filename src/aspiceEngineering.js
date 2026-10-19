@@ -555,7 +555,7 @@ export function emptyModel() {
     tests: [], updatedAt: null,
     linkReview: {}, reqSnaps: {}, reviewLog: [],   // 변경 영향 분석(링크 단위 의심 표시) — 9절
     units: { SW: [] },                              // SWE.3 유닛 골격 — 10절
-    aiReview: { runs: [], findings: [], hashes: {} },           // 3단 교차검토(규칙 → 검토 AI 의견 → 사람 판정) — 11절
+    aiReview: { runs: [], findings: [], hashes: {}, edits: [] }, // 3단 교차검토(규칙 → 검토 AI 의견 → 사람 판정 → 대상 수정 기록) — 11절
   };
 }
 export function normalizeModel(m) {
@@ -572,7 +572,7 @@ export function normalizeModel(m) {
     tests: [...(x.tests || [])],
     linkReview: { ...(x.linkReview || {}) }, reqSnaps: { ...(x.reqSnaps || {}) }, reviewLog: [...(x.reviewLog || [])],
     units: { SW: [...((x.units || {}).SW || [])] },
-    aiReview: { runs: [...((x.aiReview || {}).runs || [])], findings: [...((x.aiReview || {}).findings || [])], hashes: { ...((x.aiReview || {}).hashes || {}) } },
+    aiReview: { runs: [...((x.aiReview || {}).runs || [])], findings: [...((x.aiReview || {}).findings || [])], hashes: { ...((x.aiReview || {}).hashes || {}) }, edits: [...((x.aiReview || {}).edits || [])] },
   };
 }
 
@@ -1486,13 +1486,14 @@ export function reviewView(model) {
   const itemOf = (lv, id) => { if (!byScope[lv]) byScope[lv] = Object.fromEntries(reviewItems(m, lv).map(it => [it.id, it])); return byScope[lv][id]; };
   const list = m.aiReview.findings.map(f => {
     const it = itemOf(f.level, f.reqId);
-    return { ...f, reqTitle: it?.title || f.targetTitle || "", removed: !it, stale: !!it && f.reqHash !== it.hash };
+    const edits = (m.aiReview.edits || []).filter(e => e.scope === f.level && e.id === f.reqId && (!f.runAt || e.at > f.runAt));
+    return { ...f, reqTitle: it?.title || f.targetTitle || "", removed: !it, stale: !!it && f.reqHash !== it.hash, edits };
   });
   const count = (lv) => {
     const xs = list.filter(f => !lv || f.level === lv);
     return { total: xs.length, open: xs.filter(f => !f.judge).length, valid: xs.filter(f => f.judge?.state === "valid").length,
       invalid: xs.filter(f => f.judge?.state === "invalid").length, opinion: xs.filter(f => f.judge?.state === "opinion").length,
-      stale: xs.filter(f => f.stale).length };
+      stale: xs.filter(f => f.stale).length, edited: xs.filter(f => f.edits.length).length };
   };
   const reviewedAt = {};
   m.aiReview.runs.forEach(r => { reviewedAt[r.level] = r.at; });
@@ -1788,10 +1789,17 @@ export function reviewEditSpec(model, key, id) {
     fields: [F("title", "시험명", 1), F("precondition", "사전조건", 2), F("steps", "절차", 3), F("expected", "기대 결과", 2), F("passCriteria", "합격 기준", 2)] };
 }
 // 수정 적용 (SYS 요구 제목·내용 제외 — 화면이 확정 요구 items로 처리). 수정한 시험은 수동 작성으로 표시해 규칙 재생성 때 덮어쓰지 않는다.
-export function applyReviewEdit(model, key, id, patch) {
+export function applyReviewEdit(model, key, id, patch, meta = {}) {
   const S = reviewScope(key); if (!S) return model;
   const m = normalizeModel(JSON.parse(JSON.stringify(model)));
   const lv = S.lv, p = { ...patch };
+  // 수정 기록(조치 증적) — 어떤 필드를 무엇에서 무엇으로 바꿨는지. 판정 화면에서 '수정함' 표시와 RTM 기록에 쓴다
+  const spec = reviewEditSpec(m, key, id);
+  if (spec) {
+    const changes = spec.fields.filter(f => f.k in patch && String(patch[f.k] ?? "") !== String(spec.values[f.k] ?? ""))
+      .map(f => ({ k: f.k, label: f.label, before: String(spec.values[f.k] ?? ""), after: String(patch[f.k] ?? "") }));
+    if (changes.length) m.aiReview.edits = [...m.aiReview.edits, { at: meta.at || new Date().toISOString(), scope: key, id, changes, by: meta.by || "user", via: meta.via || "review" }].slice(-500);
+  }
   if (S.kind === "req") {
     const i = (m.reqs[lv] || []).findIndex(x => x.id === id); if (i < 0) return m;
     if (lv === "SYS") { delete p.title; delete p.text; if ("verifCriteria" in p) p.verifCriteriaEdited = true; }

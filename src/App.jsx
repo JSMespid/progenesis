@@ -7564,8 +7564,8 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
     [`AI 검토 대상 제외: ${AE.REVIEW_EXCLUDED.map(x => `${x.doc ? AE.ASPICE_DOCS[x.doc].title : x.label}(${x.why})`).join(" · ")}`],
     [`실행 이력(최근 5회): ${rvw.runs.slice(-5).map(r => `${String(r.at).slice(0, 16).replace("T", " ")} ${scopeName(r.level)} ${r.label || r.provider} ${r.model} ${r.criteria || ""}`).join(" / ") || "-"}`],
     [],
-    ["산출물", "대상 ID", "대상명", "기준", "심각도", "근거 인용", "검토 의견", "개선 제안", "검토 AI·모델·일시", "판정", "판정 의견", "판정일시"],
-    ...rvw.list.map(f => { const run = rvw.runs.find(r => r.at === f.runAt); return [scopeName(f.level), f.reqId, f.reqTitle || (f.removed ? "(삭제됨)" : ""), critName(f.level, f.criterion), AE.REVIEW_SEV[f.severity] || f.severity, f.evidence || "", f.issue, f.suggestion || "", `${f.reviewer ? `${f.reviewer} ${f.reviewerModel || ""}` : run ? `${run.label || run.provider} ${run.model}` : ""} ${String(f.runAt || "").slice(0, 16).replace("T", " ")}`.trim(), f.judge ? AE.REVIEW_JUDGE[f.judge.state] : (f.removed ? "미판정 (대상 삭제됨)" : f.stale ? "미판정 (내용 변경됨)" : "미판정"), f.judge?.note || "", f.judge ? String(f.judge.at).slice(0, 16).replace("T", " ") : ""]; })];
+    ["산출물", "대상 ID", "대상명", "기준", "심각도", "근거 인용", "검토 의견", "개선 제안", "검토 AI·모델·일시", "판정", "판정 의견", "판정일시", "조치(대상 수정)"],
+    ...rvw.list.map(f => { const run = rvw.runs.find(r => r.at === f.runAt); return [scopeName(f.level), f.reqId, f.reqTitle || (f.removed ? "(삭제됨)" : ""), critName(f.level, f.criterion), AE.REVIEW_SEV[f.severity] || f.severity, f.evidence || "", f.issue, f.suggestion || "", `${f.reviewer ? `${f.reviewer} ${f.reviewerModel || ""}` : run ? `${run.label || run.provider} ${run.model}` : ""} ${String(f.runAt || "").slice(0, 16).replace("T", " ")}`.trim(), f.judge ? AE.REVIEW_JUDGE[f.judge.state] : (f.removed ? "미판정 (대상 삭제됨)" : f.stale ? "미판정 (내용 변경됨)" : "미판정"), f.judge?.note || "", f.judge ? String(f.judge.at).slice(0, 16).replace("T", " ") : "", f.edits.length ? f.edits.map(e => `${String(e.at).slice(0, 16).replace("T", " ")} ${e.changes.map(c => `${c.label}: ${c.before || "(빈칸)"} → ${c.after || "(빈칸)"}`).join("; ")}`).join("\n") + (f.stale ? "\n(재검토로 확인 필요)" : "") : "수정 안 함"]; })];
   const rvHdr2 = 3 + rvCov.length + 3;   // 의견 목록 머리행 위치 (제목·기준·현황 머리 + 현황 행 + 제외·이력·빈 줄)
   const w = [...(hasStk ? [16] : []), 12, 26, 16, 22, 16, 16, ...(sc.SW ? [16, 14, 16, 16] : []), ...(sc.HW ? [16, 14, 16, 16] : []), 18];
   const std = xlsxStdParts({ title: doc?.name || AE.ASPICE_DOCS.RTM.title, docCode: projectDocNo(meta, doc?.code || "SY2105"), phase: "SYS.2~SWE.6", meta, infoRows: [["적용 기준", `Automotive SPICE ${AE.ASPICE_VERSIONS.find(v => v.id === model.version)?.label || model.version}`], ["정보항목(WP)", AE.wpLabel("RTM", model.version)]] });
@@ -7580,7 +7580,7 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
     ...((sc.SW && fullModel.units.SW.length) ? [{ name: "SW 요구→유닛", rows: unitRows, widths: [12, 30, 40, 24, 10], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...((fullModel.stakeholders || []).length ? [{ name: "이해관계자 요구 추적", rows: stk, widths: [12, 22, 46, 16, 40, 40], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
     ...(prjReqs.length ? [{ name: "프로젝트·프로세스 요구", rows: prj, widths: [10, 30, 16, 18, 40, 30, 14], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
-    ...((rvw.list.length || rvw.runs.length) ? [{ name: "교차검토·판정 기록", rows: rvRows, widths: [22, 12, 26, 12, 8, 22, 44, 36, 22, 16, 30, 16], headerRows: [2, rvHdr2], titleRows: [0], freezeRow: 3 }] : []),
+    ...((rvw.list.length || rvw.runs.length) ? [{ name: "교차검토·판정 기록", rows: rvRows, widths: [22, 12, 26, 12, 8, 22, 44, 36, 22, 16, 30, 16, 44], headerRows: [2, rvHdr2], titleRows: [0], freezeRow: 3 }] : []),
     ...((fullModel.openIssues || []).length ? [{ name: "미결 사항", rows: oi, widths: [8, 26, 54, 44, 12, 12, 8], headerRows: [2], titleRows: [0], freezeRow: 3 }] : []),
   ], std.opts);
 }
@@ -8565,9 +8565,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       newItems = items.map(it => it.id !== id ? it : { ...it, ...("title" in patch ? { name: patch.title } : {}), ...("text" in patch ? { detail: patch.text } : {}) });
       setItems(newItems); setItemsVer(v => v + 1);
     }
-    setModel(m => { const n = AE.applyReviewEdit(m, key, id, patch); if (newItems) n.reqs.SYS = AE.syncSysReqs(newItems, n.reqs.SYS); return n; });
+    setModel(m => { const n = AE.applyReviewEdit(m, key, id, patch, { via: String(rvEdit.fkey || "").startsWith("qf|") || String(rvEdit.fkey || "").startsWith("rule") ? "rule" : "review" }); if (newItems) n.reqs.SYS = AE.syncSysReqs(newItems, n.reqs.SYS); return n; });
     setRvEdit(null);
-    setNote(`${id} 수정을 반영했습니다 — 이 항목의 의견은 '내용 변경됨'으로 표시되며, '변경분 검토'로 수정 결과를 다시 확인할 수 있습니다. 저장을 눌러 확정하세요.`);
+    setNote(`${id} 수정을 반영했습니다 — 판정 목록에 '✎ 수정함'으로 표시되고, '변경분 검토'로 수정 결과를 다시 확인할 수 있습니다. 저장을 눌러 확정하세요.`);
   }                       // 중지 요청 — 진행 중인 묶음이 끝나면 멈추고, 받은 의견은 반영           // 판정 목록: 검토 AI별 보기
   useEffect(() => { apiFetch("/api/review").then(c => { setRv(c); const ready = (c.available || []).filter(a => a.ready); setRvProv(ready.some(a => a.id === c.defaultProvider) ? c.defaultProvider : (ready[0]?.id || "")); }).catch(e => setRv({ error: e.message })); }, []);
   const rvSel = (rv?.available || []).find(a => a.id === rvProv) || null;
@@ -9298,7 +9298,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             const sevColor = { major: T.red, minor: T.amber, info: T.muted };
             const jColor = { valid: T.green, invalid: T.muted, opinion: T.accent };
             const reviewers = [...new Set(v.list.filter(f => f.level === rvLevel).map(f => f.reviewer || f.provider || "검토 AI"))];
-            const list = v.list.filter(f => f.level === rvLevel).filter(f => rvBy === "all" || (f.reviewer || f.provider || "검토 AI") === rvBy).filter(f => rvFilter === "all" ? true : rvFilter === "open" ? !f.judge : f.judge?.state === rvFilter);
+            const list = v.list.filter(f => f.level === rvLevel).filter(f => rvBy === "all" || (f.reviewer || f.provider || "검토 AI") === rvBy).filter(f => rvFilter === "all" ? true : rvFilter === "open" ? !f.judge : rvFilter === "edited" ? f.edits.length > 0 : rvFilter === "validTodo" ? f.judge?.state === "valid" && !f.edits.length && !f.removed : f.judge?.state === rvFilter);
             const lastRun = [...v.runs].reverse().find(r => r.level === rvLevel && (!rvSel || r.provider === rvSel.id));
             const changedN = rvSel ? AE.reviewTargets(model, rvLevel, "changed", rvSel.id).length : lvItems.length;
             const chOf = Object.fromEntries(scopes.map(x => [x.key, rvSel ? AE.reviewTargets(model, x.key, "changed", rvSel.id).length : 0]));
@@ -9522,8 +9522,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </AeSec>
 
               <div id="rv-judge" />
-              <AeSec title={`③ QA 담당자 판정 — 미판정 ${cnt.open} · 유효 ${cnt.valid} · 무효 ${cnt.invalid} · 의견 ${cnt.opinion}${cnt.stale ? ` · 내용 변경됨 ${cnt.stale}` : ""}`}
-                right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정"], ["valid", "유효"], ["invalid", "무효"], ["opinion", "의견"], ["all", "전체"]].map(([k, l]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.accent }}>{l}</button>)}</div>}>
+              <AeSec title={`③ QA 담당자 판정 — 미판정 ${cnt.open} · 유효 ${cnt.valid} · 무효 ${cnt.invalid} · 의견 ${cnt.opinion}${cnt.edited ? ` · ✎ 수정함 ${cnt.edited}` : ""}${cnt.stale ? ` · 내용 변경됨 ${cnt.stale}` : ""}`}
+                right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정"], ["valid", "유효"], ["invalid", "무효"], ["opinion", "의견"], ["edited", "✎ 수정함"], ["validTodo", "유효·미수정"], ["all", "전체"]].map(([k, l]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.accent }}>{l}</button>)}</div>}>
                 <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 6, lineHeight: 1.6 }}>
                   <b style={{ color: T.green }}>유효</b> = AI 지적이 맞음 → 산출물 수정 · <b>무효</b> = 지적이 틀림 → 그대로 두고 사유 기록 · <b style={{ color: T.accent }}>의견</b> = 보류·참고. 판정과 관계없이 <b>✎ 대상 수정</b>으로 산출물을 바로 고칠 수 있습니다.
                 </div>
@@ -9539,7 +9539,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       <tbody>{list.map(f => (<React.Fragment key={f.key}>
                         <tr style={{ borderTop: `1px solid ${T.border}`, verticalAlign: "top", opacity: f.judge?.state === "invalid" && rvEdit?.fkey !== f.key ? 0.6 : 1 }}>
                           <td style={{ padding: "6px", fontFamily: "monospace", wordBreak: "break-all" }}>{f.reqId}
-                            {f.stale && <div style={{ color: f.judge?.state === "valid" ? T.green : T.amber, fontSize: 9.5, fontFamily: "inherit" }}>{f.judge?.state === "valid" ? "수정함 — 재검토로 확인" : "내용 변경됨 — 재검토 권장"}</div>}
+                            {f.edits.length > 0
+                              ? <div style={{ marginTop: 4, padding: "2px 6px", borderRadius: 5, background: T.green + "1F", border: `1px solid ${T.green}66`, color: T.green, fontSize: 9.5, fontFamily: "inherit", fontWeight: 700 }}>✎ 수정함 {f.edits.length > 1 ? `${f.edits.length}회` : ""}<div style={{ fontWeight: 400 }}>{String(f.edits[f.edits.length - 1].at).slice(5, 16).replace("T", " ")}</div></div>
+                              : !f.removed && <div style={{ marginTop: 4, color: T.muted, fontSize: 9.5, fontFamily: "inherit" }}>수정 안 함</div>}
+                            {f.stale && <div style={{ color: T.amber, fontSize: 9.5, fontFamily: "inherit", marginTop: 2 }}>{f.edits.length ? "재검토로 확인 필요" : "내용 변경됨 — 재검토 권장"}</div>}
                             {f.removed && <div style={{ color: T.red, fontSize: 9.5, fontFamily: "inherit" }}>대상 삭제됨</div>}</td>
                           <td style={{ padding: "6px" }}><div>{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }} title={f.reviewerModel}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}</td>
                           <td style={{ padding: "6px", lineHeight: 1.5 }}>
@@ -9547,6 +9550,15 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                             {f.evidence && <div style={{ fontSize: 10.5 }}>근거: <span style={{ background: T.amber + "22", padding: "0 3px", borderRadius: 3 }}>"{f.evidence}"</span></div>}
                             <div>{f.issue}</div>
                             {f.suggestion && <div style={{ color: T.green, fontSize: 10.5 }}>제안: {f.suggestion}</div>}
+                            {f.edits.length > 0 && (
+                              <details style={{ marginTop: 4, fontSize: 10.5 }}>
+                                <summary style={{ cursor: "pointer", color: T.green }}>수정 내용 보기 — {[...new Set(f.edits.flatMap(e => e.changes.map(c => c.label)))].join(", ")}</summary>
+                                {f.edits.map((e, i) => (
+                                  <div key={i} style={{ marginTop: 4, paddingLeft: 8, borderLeft: `2px solid ${T.green}66` }}>
+                                    <div style={{ color: T.muted, fontSize: 9.5 }}>{String(e.at).slice(0, 16).replace("T", " ")}{e.via === "rule" ? " · 규칙 검사 결과에서 수정" : ""}</div>
+                                    {e.changes.map((c, j) => <div key={j}><b>{c.label}</b>: <span style={{ color: T.red, textDecoration: "line-through" }}>{c.before || "(비어 있음)"}</span> → <span style={{ color: T.green }}>{c.after || "(비어 있음)"}</span></div>)}
+                                  </div>))}
+                              </details>)}
                           </td>
                           <td style={{ padding: "6px" }}>
                             <div style={{ fontSize: 10, marginBottom: 3, color: f.judge ? jColor[f.judge.state] : T.amber }}>{f.judge ? `판정: ${AE.REVIEW_JUDGE[f.judge.state]}` : "○ 미판정 — 아래에서 선택"}</div>
@@ -9557,7 +9569,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                             </div>
                             {f.judge && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 3 }}>{String(f.judge.at).slice(0, 16).replace("T", " ")}{f.judge.note ? ` — ${f.judge.note}` : ""}</div>}
                             {!f.removed && <button disabled={busy} onClick={() => openEdit(f.key, rvLevel, f.reqId)}
-                              style={{ ...small, padding: "2px 8px", marginTop: 5, background: rvEdit?.fkey === f.key ? T.accent : "none", color: rvEdit?.fkey === f.key ? "#fff" : (f.judge?.state === "valid" && !f.stale ? T.green : T.accent), borderColor: f.judge?.state === "valid" && !f.stale ? T.green + "88" : undefined }}>✎ 대상 수정{f.judge?.state === "valid" && !f.stale ? " (수정 필요)" : ""}</button>}
+                              style={{ ...small, padding: "2px 8px", marginTop: 5, background: rvEdit?.fkey === f.key ? T.accent : "none", color: rvEdit?.fkey === f.key ? "#fff" : (f.judge?.state === "valid" && !f.edits.length ? T.green : T.accent), borderColor: f.judge?.state === "valid" && !f.edits.length ? T.green + "88" : undefined }}>{f.edits.length ? "✎ 다시 수정" : `✎ 대상 수정${f.judge?.state === "valid" ? " (수정 필요)" : ""}`}</button>}
                           </td>
                         </tr>
                         {rvEdit?.fkey === f.key && <tr><td colSpan={4} style={{ padding: "4px 6px 12px" }}>{editorBox(f.suggestion)}</td></tr>}
