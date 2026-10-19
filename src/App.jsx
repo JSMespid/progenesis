@@ -1271,6 +1271,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   function restoreDraft() {
     const d = loadDraft();
     if (!d) return;
+    setEditingId(null);   // 임시저장본은 항상 신규 과제 — 직전에 열어둔 수정 모드가 남아 '완료' 시 다른 프로젝트를 지우지 않도록
+    setGenError(null);
     setWizardStep(d.wizardStep || 0);
     if (d.projectForm) setProjectForm(d.projectForm);
     setSelectedOSSP(d.selectedOSSP || null);
@@ -1379,6 +1381,28 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     setPdpData(null); setWbsData(null); setWbsSetup({ pbsText: "", selected: {} }); setDeliverablesData(null); setRequirements(null);
   }
 
+  // ── '새 프로젝트' 진입: 항상 빈 위저드로 시작 ──
+  // (이전에는 nav("new_project")만 호출해 메모리에 남은 위저드 상태 — 이어서 작성한 초안·수정 중이던 프로젝트 — 가 그대로 보였다)
+  // 작성 중이던 신규 과제는 임시저장본으로 보존한 뒤 비우므로, 빈 위저드 진입 시 '이어서 작성 / 새로 시작' 안내로 다시 고를 수 있다.
+  const [wizardKey, setWizardKey] = useState(0);   // 위저드 재마운트용 — 내부 상태(복원 안내 등)를 새로 초기화
+  function startNewProject() {
+    const dirty = !!(projectForm.name || projectForm.client || projectForm.track || selectedOSSP || selectedSDLC || pdpData || wbsData || deliverablesData || requirements);
+    if (dirty) {
+      if (editingId) {
+        // 저장된 프로젝트 수정 중 — 임시저장본에 넣으면 '완료' 시 별도 프로젝트로 중복 저장되므로 보관하지 않는다
+        if (page === "new_project" && !confirm("수정 중인 프로젝트의 변경 내용은 저장되지 않습니다.\n새 프로젝트를 시작할까요?")) return;
+      } else if (!saveDraft()) {
+        if (!confirm("작성 중인 내용을 임시저장하지 못했습니다(브라우저 저장 공간 부족).\n이대로 새 프로젝트를 시작하면 작성 내용이 사라집니다. 계속할까요?")) return;
+      }
+    }
+    resetWizardState();
+    setGenError(null);
+    setWizardKey(k => k + 1);
+    nav("new_project");
+  }
+  // 하위 화면에 넘기는 nav — '새 프로젝트' 이동만 startNewProject로 보낸다 (이어서 작성·수정 진입은 기존 nav 그대로)
+  const navFromMenu = (p) => (p === "new_project" ? startNewProject() : nav(p));
+
   // 삭제 진행 표시 (작성 중 항목·저장된 프로젝트 공통)
   const [busyOp, setBusyOp] = useState(null);   // { label, percent, error? }
   const [, setDraftVer] = useState(0);          // 작성 중 항목 삭제 후 대시보드 즉시 갱신용
@@ -1416,9 +1440,9 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   }
 
   const pages = {
-    dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={nav} setCurrentProject={setCurrentProject} canCreate={role !== "viewer"} onDelete={deleteProject}
+    dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={navFromMenu} setCurrentProject={setCurrentProject} canCreate={role !== "viewer"} onDelete={deleteProject}
       draft={loadDraft()} onContinueDraft={()=>{ restoreDraft(); nav("new_project"); }} onDiscardDraft={discardDraft} />,
-    new_project: <NewProjectWizard step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
+    new_project: <NewProjectWizard key={wizardKey} step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
       pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError} genProgress={genProgress}
       onGeneratePDP={generatePDP} onRecommendPBS={recommendPBS} setWbsData={setWbsData}
@@ -1432,7 +1456,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       editing={!!editingId} saving={savingProject}
       onSaveDraft={saveDraft} loadDraft={loadDraft} onRestoreDraft={restoreDraft} onClearDraft={clearDraft} />,
     project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} onEdit={editProject} />,
-    ossp: <OSSPPage nav={nav} customOSSP={customOSSP} builtinOSSP={builtinOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
+    ossp: <OSSPPage nav={navFromMenu} customOSSP={customOSSP} builtinOSSP={builtinOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
     regulation: <LibraryPage nav={nav} kind="regulation"
       title="규제 (Regulation / Compliance)" subtitle="프로젝트가 준수해야 할 규제·컴플라이언스 자산"
       categories={["법령/규정","감독규정","인증/심사기준","보안/개인정보","산업표준","기타"]} />,
@@ -1483,7 +1507,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       {menuOpen && (
         <div style={{ background:T.surface, borderBottom:`1px solid ${T.border}`, padding:"8px 12px", zIndex:99 }}>
           {navItems.map(item=>(
-            <button key={item.id} onClick={()=>nav(item.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", borderRadius:10, background:page===item.id?T.accentGlow:"transparent", color:page===item.id?T.accent:T.muted, border:"none", cursor:"pointer", fontSize:14, fontWeight:page===item.id?600:400, fontFamily:"inherit", width:"100%", marginBottom:4 }}>
+            <button key={item.id} onClick={()=>navFromMenu(item.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", borderRadius:10, background:page===item.id?T.accentGlow:"transparent", color:page===item.id?T.accent:T.muted, border:"none", cursor:"pointer", fontSize:14, fontWeight:page===item.id?600:400, fontFamily:"inherit", width:"100%", marginBottom:4 }}>
               <span>{item.icon}</span> {item.label}
             </button>
           ))}
@@ -1508,7 +1532,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
           </div>
           <nav style={{ padding:"14px 10px", flex:1, display:"flex", flexDirection:"column", gap:2 }}>
             {navItems.map(item=>(
-              <button key={item.id} onClick={()=>nav(item.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", borderRadius:10, background:page===item.id?T.accentGlow:"transparent", color:page===item.id?T.accent:T.muted, border:page===item.id?`1px solid ${T.accentDim}`:"1px solid transparent", cursor:"pointer", fontSize:13, fontWeight:page===item.id?600:400, fontFamily:"inherit", transition:"all .15s", textAlign:"left", width:"100%" }}>
+              <button key={item.id} onClick={()=>navFromMenu(item.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", borderRadius:10, background:page===item.id?T.accentGlow:"transparent", color:page===item.id?T.accent:T.muted, border:page===item.id?`1px solid ${T.accentDim}`:"1px solid transparent", cursor:"pointer", fontSize:13, fontWeight:page===item.id?600:400, fontFamily:"inherit", transition:"all .15s", textAlign:"left", width:"100%" }}>
                 <span style={{ fontSize:15 }}>{item.icon}</span> {item.label}
               </button>
             ))}
