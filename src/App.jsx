@@ -306,6 +306,31 @@ const _LEGACY_KEYS = [["progenesis_auth", AUTH_KEY], ["progenesis_wizard_draft",
   } catch { /* 스토리지 접근 불가 환경 — 무시 */ }
 })();
 
+// ── 위저드 임시저장본: 여러 건 보관 (작성 중 항목마다 draftId) ──
+// 이전에는 슬롯이 1개(DRAFT_KEY)라 새 프로젝트를 임시저장하면 기존 작성 중 과제가 덮어써져 사라졌다.
+// 이제 spiderqa_wizard_drafts 배열에 건별로 보관하고, 구버전 단일 슬롯은 처음 읽을 때 배열로 이관한다.
+const DRAFTS_KEY = "spiderqa_wizard_drafts";
+const newDraftId = () => "d" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const draftHasContent = d => !!(d && (d.projectForm?.name || d.projectForm?.client || d.projectForm?.track || d.selectedOSSP || d.selectedSDLC));
+function readDrafts() {
+  let arr = [];
+  try { const raw = localStorage.getItem(DRAFTS_KEY); const v = raw ? JSON.parse(raw) : []; if (Array.isArray(v)) arr = v.filter(d => d && typeof d === "object"); } catch (e) { console.error(e); }
+  try {
+    const legacy = localStorage.getItem(DRAFT_KEY);
+    if (legacy) {
+      const d = JSON.parse(legacy);
+      if (d && typeof d === "object" && !arr.some(x => x.draftId && x.draftId === d.draftId)) {
+        arr.push({ ...d, draftId: d.draftId || newDraftId() });
+        localStorage.setItem(DRAFTS_KEY, JSON.stringify(arr));
+      }
+      localStorage.removeItem(DRAFT_KEY);   // 이관 성공 후에만 제거 (setItem 실패 시 예외로 여기까지 오지 않음)
+    }
+  } catch (e) { console.error(e); }
+  arr.forEach(d => { if (!d.draftId) d.draftId = newDraftId(); });
+  return arr.sort((a, b) => String(b.savedAt || "").localeCompare(String(a.savedAt || "")));
+}
+function writeDrafts(arr) { localStorage.setItem(DRAFTS_KEY, JSON.stringify(arr)); }   // 공간 부족 시 예외 — 호출부에서 처리
+
 function b64urlDecode(s) {
   let x = String(s || "").replace(/-/g, "+").replace(/_/g, "/");
   while (x.length % 4) x += "=";
@@ -1224,17 +1249,20 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     setGenerating(false);
   }
 
-  // ── 위저드 임시저장 (localStorage) — 키는 모듈 스코프 DRAFT_KEY 사용 ──
-
+  // ── 위저드 임시저장 (localStorage, 여러 건) — 지금 위저드에 열린 작성 건의 id는 draftIdRef ──
+  // ref를 쓰는 이유: 자동 저장 타이머가 연달아 돌 때 state 반영 지연으로 같은 작성 건이 두 건으로 갈라지지 않도록.
+  const draftIdRef = useRef(null);
   function saveDraft() {
     try {
+      if (!draftIdRef.current) draftIdRef.current = newDraftId();
       const draft = {
+        draftId: draftIdRef.current, editingId: editingId || null,   // 수정 중 저장본이면 원본 프로젝트 id를 함께 보관
         wizardStep, projectForm, selectedOSSP,
         sdlcFactors, selectedSDLC, sdlcRecommendation,
         tailoring, pdpData, wbsData, wbsSetup, deliverablesData, requirements,
         savedAt: new Date().toISOString(),
       };
-      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+      writeDrafts([draft, ...readDrafts().filter(d => d.draftId !== draft.draftId)]);
       return true;
     } catch (e) { console.error(e); return false; }
   }
@@ -1259,22 +1287,22 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     return () => clearTimeout(draftTimer.current);
   }, [requirements]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  function loadDraft() {
-    try {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      if (!raw) return null;
-      return JSON.parse(raw);
-    } catch (e) { console.error(e); return null; }
+  function loadDrafts() { return readDrafts().filter(draftHasContent); }
+  function loadDraft(id) { return id ? (readDrafts().find(d => d.draftId === id) || null) : null; }
+
+  // 해당 작성 건 1개만 지운다 (다른 작성 중 항목은 보존)
+  function clearDraft(id) {
+    if (!id) return;
+    try { writeDrafts(readDrafts().filter(d => d.draftId !== id)); } catch (e) { console.error(e); }
   }
 
-  function clearDraft() {
-    try { localStorage.removeItem(DRAFT_KEY); } catch (e) { console.error(e); }
-  }
-
-  function restoreDraft() {
-    const d = loadDraft();
+  function restoreDraft(id) {
+    const d = loadDraft(id);
     if (!d) return;
-    setEditingId(null);   // 임시저장본은 항상 신규 과제 — 직전에 열어둔 수정 모드가 남아 '완료' 시 다른 프로젝트를 지우지 않도록
+    clearTimeout(draftTimer.current);
+    draftIdRef.current = d.draftId;
+    // 저장본에 기록된 수정 대상만 복원 — 직전에 열어둔 다른 수정 모드가 남아 '완료' 시 엉뚱한 프로젝트를 지우지 않도록
+    setEditingId(d.editingId || null);
     setGenError(null);
     setWizardStep(d.wizardStep || 0);
     if (d.projectForm) setProjectForm(d.projectForm);
@@ -1292,6 +1320,9 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
 
   // 완료(저장)된 프로젝트를 위저드로 다시 열어 수정 — 저장된 데이터를 위저드 상태로 복원
   function editProject(p) {
+    clearTimeout(draftTimer.current);
+    // 같은 프로젝트를 수정하다 임시저장한 건이 있으면 그 슬롯을 이어서 쓴다 (작성 중 항목이 중복으로 쌓이지 않도록)
+    draftIdRef.current = (readDrafts().find(d => d.editingId === p.id) || {}).draftId || null;
     setEditingId(p.id);
     const dm = p.tailoring?.docMeta || {};
     setProjectForm({ name:p.name||"", client:p.client||"", type:p.type||"신규개발", systemName:p.tailoring?.systemName||"",
@@ -1365,8 +1396,9 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       savingRef.current = false; setSavingProject(false);
       return;
     }
+    const doneDraftId = draftIdRef.current;
     resetWizardState();
-    clearDraft();   // 완료된 프로젝트의 임시저장본 제거
+    clearDraft(doneDraftId);   // 완료된 작성 건의 임시저장본만 제거 (다른 작성 중 항목은 보존)
     savingRef.current = false; setSavingProject(false);
     nav("dashboard");
   }
@@ -1374,6 +1406,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   // 위저드 메모리 상태 초기화 — 완료 저장 후, 작성 중 항목 삭제 시 공통 사용
   function resetWizardState() {
     clearTimeout(draftTimer.current);
+    draftIdRef.current = null;   // 다음 임시저장은 새 작성 건으로
     setEditingId(null);
     setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",systemName:"",startDate:"",endDate:"",pm:"",
       ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=""; return o; }, {}) });
@@ -1386,17 +1419,13 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
 
   // ── '새 프로젝트' 진입: 항상 빈 위저드로 시작 ──
   // (이전에는 nav("new_project")만 호출해 메모리에 남은 위저드 상태 — 이어서 작성한 초안·수정 중이던 프로젝트 — 가 그대로 보였다)
-  // 작성 중이던 신규 과제는 임시저장본으로 보존한 뒤 비우므로, 빈 위저드 진입 시 '이어서 작성 / 새로 시작' 안내로 다시 고를 수 있다.
+  // 작성 중이던 내용은 자기 임시저장 슬롯에 보존한 뒤 비운다 — 작성 중 항목은 여러 건 보관되며 대시보드에서 골라 이어서 작성한다.
   const [wizardKey, setWizardKey] = useState(0);   // 위저드 재마운트용 — 내부 상태(복원 안내 등)를 새로 초기화
   function startNewProject() {
     const dirty = !!(projectForm.name || projectForm.client || projectForm.track || selectedOSSP || selectedSDLC || pdpData || wbsData || deliverablesData || requirements);
-    if (dirty) {
-      if (editingId) {
-        // 저장된 프로젝트 수정 중 — 임시저장본에 넣으면 '완료' 시 별도 프로젝트로 중복 저장되므로 보관하지 않는다
-        if (page === "new_project" && !confirm("수정 중인 프로젝트의 변경 내용은 저장되지 않습니다.\n새 프로젝트를 시작할까요?")) return;
-      } else if (!saveDraft()) {
-        if (!confirm("작성 중인 내용을 임시저장하지 못했습니다(브라우저 저장 공간 부족).\n이대로 새 프로젝트를 시작하면 작성 내용이 사라집니다. 계속할까요?")) return;
-      }
+    // 작성(수정) 중이던 내용은 자기 슬롯에 임시저장한 뒤 비운다 — 수정 건은 원본 id를 함께 저장하므로 이어서 작성해도 중복 저장되지 않는다
+    if (dirty && !saveDraft()) {
+      if (!confirm("작성 중인 내용을 임시저장하지 못했습니다(브라우저 저장 공간 부족).\n이대로 새 프로젝트를 시작하면 작성 내용이 사라집니다. 계속할까요?")) return;
     }
     resetWizardState();
     setGenError(null);
@@ -1413,13 +1442,13 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
 
   // 작성 중(임시저장) 항목 삭제: 브라우저 임시저장본 + 메모리의 위저드 상태를 함께 비운다.
   // (이전에는 임시저장본만 지우고 화면을 다시 그리지 않아, 카드가 남고 '새 프로젝트'에 이전 입력값이 보였다)
-  function discardDraft() {
+  function discardDraft(id) {
     setBusyOp({ label: "작성 중인 내용 삭제 중…", percent: 40 });
-    clearDraft();
-    resetWizardState();
+    clearDraft(id);
+    if (draftIdRef.current === id) resetWizardState();   // 지금 위저드에 열린 작성 건일 때만 메모리 상태도 비운다
     setBusyOp({ label: "작성 중인 내용 삭제 중…", percent: 80 });
     setDraftVer(v => v + 1);
-    finishBusy(loadDraft() ? "삭제 확인 실패 — 새로고침 후 다시 시도하세요" : "작성 중인 내용을 삭제했습니다");
+    finishBusy(loadDraft(id) ? "삭제 확인 실패 — 새로고침 후 다시 시도하세요" : "작성 중인 내용을 삭제했습니다");
   }
 
   async function deleteProject(id) {
@@ -1444,7 +1473,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
 
   const pages = {
     dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={navFromMenu} setCurrentProject={setCurrentProject} canCreate={role !== "viewer"} onDelete={deleteProject}
-      draft={loadDraft()} onContinueDraft={()=>{ restoreDraft(); nav("new_project"); }} onDiscardDraft={discardDraft} />,
+      drafts={loadDrafts()} onContinueDraft={(id)=>{ restoreDraft(id); setWizardKey(k => k + 1); nav("new_project"); }} onDiscardDraft={discardDraft} />,
     new_project: <NewProjectWizard key={wizardKey} step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
       pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError} genProgress={genProgress}
@@ -1457,7 +1486,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       selectedSDLC={selectedSDLC} setSelectedSDLC={setSelectedSDLC}
       sdlcRecommendation={sdlcRecommendation} recommending={recommending} onRecommendSDLC={recommendSDLC}
       editing={!!editingId} saving={savingProject}
-      onSaveDraft={saveDraft} loadDraft={loadDraft} onRestoreDraft={restoreDraft} onClearDraft={clearDraft} />,
+      onSaveDraft={saveDraft} loadDrafts={loadDrafts} onRestoreDraft={(id)=>{ restoreDraft(id); setWizardKey(k => k + 1); }} />,
     project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} onEdit={editProject} />,
     ossp: <OSSPPage nav={navFromMenu} customOSSP={customOSSP} builtinOSSP={builtinOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
     regulation: <LibraryPage nav={nav} kind="regulation"
@@ -1588,8 +1617,8 @@ function projectStage(p) {
   return { label: "기본정보 단계", color: T.muted };
 }
 
-function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinueDraft, onDiscardDraft, canCreate = true, onDelete }) {
-  const hasDraft = draft && (draft.projectForm?.name || draft.selectedSDLC || draft.selectedOSSP);
+function Dashboard({ projects, loading, nav, setCurrentProject, drafts = [], onContinueDraft, onDiscardDraft, canCreate = true, onDelete }) {
+  const hasDraft = drafts.length > 0;
   const stats = [
     { label:"전체 프로젝트", value:projects.length, color:T.accent },
     { label:"PDP 생성", value:projects.filter(p=>p.pdp).length, color:T.green },
@@ -1622,12 +1651,12 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
         ) : (
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {/* 작성 중(임시저장) 항목 */}
-            {hasDraft && (
-              <div onClick={onContinueDraft}
+            {drafts.map(draft => (
+              <div key={draft.draftId} onClick={()=>onContinueDraft(draft.draftId)}
                 style={{ padding:"12px 14px", background:T.bg, borderRadius:10, border:`1px dashed ${T.amber}88`, cursor:"pointer" }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
                   <div style={{ fontWeight:600, fontSize:14 }}>{draft.projectForm?.name || "(제목 미입력)"}</div>
-                  <Badge color={T.amber}>작성 중</Badge>
+                  <span style={{ display:"flex", gap:4 }}>{draft.editingId && <Badge color={T.accent}>수정 중</Badge>}<Badge color={T.amber}>작성 중</Badge></span>
                 </div>
                 <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>
                   {draft.projectForm?.client || "고객사 미입력"}
@@ -1636,11 +1665,11 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
                   {draft.savedAt && ` · ${new Date(draft.savedAt).toLocaleString("ko-KR")} 저장`}
                 </div>
                 <div style={{ display:"flex", gap:6, alignItems:"center" }}>
-                  <Btn variant="primary" onClick={(e)=>{ e.stopPropagation(); onContinueDraft(); }} style={{ fontSize:11, padding:"4px 10px" }}>이어서 작성</Btn>
-                  <Btn variant="ghost" onClick={(e)=>{ e.stopPropagation(); if(confirm("작성 중인 내용을 삭제할까요?")) onDiscardDraft(); }} style={{ fontSize:11, padding:"4px 10px" }}>삭제</Btn>
+                  <Btn variant="primary" onClick={(e)=>{ e.stopPropagation(); onContinueDraft(draft.draftId); }} style={{ fontSize:11, padding:"4px 10px" }}>이어서 작성</Btn>
+                  <Btn variant="ghost" onClick={(e)=>{ e.stopPropagation(); if(confirm(`「${draft.projectForm?.name || "제목 미입력"}」 작성 중인 내용을 삭제할까요?`)) onDiscardDraft(draft.draftId); }} style={{ fontSize:11, padding:"4px 10px" }}>삭제</Btn>
                 </div>
               </div>
-            )}
+            ))}
             {/* 같은 이름·고객사가 2건 이상이면 정리하도록 안내 (과거 중복 저장분) */}
             {(() => {
               const cnt = {};
@@ -1710,7 +1739,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, draft, onContinu
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, pbsNoAi, onTogglePbsNoAi, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, requirements, setRequirements, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, saving, onSaveDraft, loadDraft, onRestoreDraft, onClearDraft }) {
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, pbsNoAi, onTogglePbsNoAi, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, requirements, setRequirements, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, saving, onSaveDraft, loadDrafts, onRestoreDraft }) {
   const STEP_NAMES = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   // 과제 유형·목표 능력수준에 따라 보이는 단계(내부 단계 번호 0~7 중 일부)
   const isAspiceTrack = form.track === "aspice";
@@ -1776,10 +1805,10 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       return { ...t, aspiceScope: { ...sc, ...want } };
     });
   }, [isAspiceTrack, form.aspiceDev, !!tailoring?.aspiceScope]);
-  // 진입 시 임시저장본이 있으면 복원 안내. 이미 입력 중이면(폼에 값 있음) 안내 생략.
-  const [draftInfo, setDraftInfo] = useState(() => {
-    const d = loadDraft ? loadDraft() : null;
-    return d && !form.name ? d : null;
+  // 빈 위저드로 들어오면 작성 중 항목(여러 건) 안내 — 고르면 이어서 작성, '닫기'는 안내만 닫는다 (임시저장본은 지우지 않음)
+  const [draftList, setDraftList] = useState(() => {
+    const ds = loadDrafts ? loadDrafts() : [];
+    return ds.length && !form.name && !form.track ? ds : null;
   });
 
   function handleSave() {
@@ -1801,18 +1830,20 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       </div>
 
       {/* 임시저장본 복원 안내 */}
-      {draftInfo && (
+      {draftList && (
         <Card style={{ padding:14, marginBottom:16, border:`1px solid ${T.accent}55`, background:T.bg }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
-            <div style={{ fontSize:12, color:T.text }}>
-              저장된 작성 내용이 있습니다
-              {draftInfo.savedAt && <span style={{ color:T.muted }}> ({new Date(draftInfo.savedAt).toLocaleString("ko-KR")})</span>}
-              . 이어서 작성하시겠어요?
-            </div>
-            <div style={{ display:"flex", gap:6 }}>
-              <Btn variant="primary" onClick={()=>{ onRestoreDraft && onRestoreDraft(); setDraftInfo(null); }} style={{ fontSize:11, padding:"5px 10px" }}>이어서 작성</Btn>
-              <Btn variant="ghost" onClick={()=>{ onClearDraft && onClearDraft(); setDraftInfo(null); }} style={{ fontSize:11, padding:"5px 10px" }}>새로 시작</Btn>
-            </div>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, marginBottom:8 }}>
+            <div style={{ fontSize:12, color:T.text }}>작성 중인 항목이 {draftList.length}건 있습니다. 이어서 작성하려면 고르고, 새로 시작하려면 닫으세요 (작성 중 항목은 지워지지 않습니다).</div>
+            <Btn variant="ghost" onClick={()=>setDraftList(null)} style={{ fontSize:11, padding:"5px 10px" }}>닫고 새로 시작</Btn>
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            {draftList.slice(0, 5).map(d => (
+              <div key={d.draftId} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12 }}>
+                <Btn variant="primary" onClick={()=>{ onRestoreDraft && onRestoreDraft(d.draftId); }} style={{ fontSize:11, padding:"3px 10px" }}>이어서 작성</Btn>
+                <b>{d.projectForm?.name || "(제목 미입력)"}</b>
+                <span style={{ color:T.muted }}>{d.projectForm?.client || "고객사 미입력"}{d.savedAt ? ` · ${new Date(d.savedAt).toLocaleString("ko-KR")}` : ""}</span>
+              </div>))}
+            {draftList.length > 5 && <div style={{ fontSize:11, color:T.muted }}>외 {draftList.length - 5}건은 대시보드에서 볼 수 있습니다.</div>}
           </div>
         </Card>
       )}
