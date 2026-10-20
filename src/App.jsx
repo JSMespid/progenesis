@@ -8314,7 +8314,8 @@ function packReqSource(text, files) {
   });
   return { text: String(text || "").slice(0, SRC_FILE_CAP), files: out, updatedAt: new Date().toISOString() };
 }
-function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, embedded = false, onEmbeddedConfirm, previewAspice, seedItems, onSourceChange, focusIds = null }) {
+function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, embedded = false, onEmbeddedConfirm, previewAspice, seedItems, onSourceChange, focusIds = null, part = null, onGoPart }) {
+  // part(V-모델 안): "STK" = SYS.1 원문·이해관계자 요구 / "SYS" = SYS.2 시스템 요구 / null = 둘 다 (기능·상태는 공유, 표시만 나눔)
   // OSSP별 문구·AI 역할 — 가이드에 reqGen이 없으면 기존(정보공학) 문구 사용
   const RG = getGuideForOSSP(ossp || {})?.reqGen || {};
   const QSTD = RG.qualityStd || { name: "ISO 9126", chars: "기능성/신뢰성/사용성/효율성/유지보수성/이식성" };
@@ -8526,8 +8527,8 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
 
   const bodyEl = (
         <div style={embedded ? {} : { padding:"14px 18px", overflowY:"auto" }}>
-          <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} />
-          <div onDragOver={e=>{ e.preventDefault(); if (!busy) setSrcDrag(true); }} onDragLeave={()=>setSrcDrag(false)}
+          {part !== "SYS" && <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} />}
+          {part !== "SYS" && (<div onDragOver={e=>{ e.preventDefault(); if (!busy) setSrcDrag(true); }} onDragLeave={()=>setSrcDrag(false)}
             onDrop={e=>{ e.preventDefault(); setSrcDrag(false); addSrcFiles(Array.from(e.dataTransfer.files || [])); }}
             style={{ border:`1px solid ${srcDrag ? T.accent : T.accentDim}`, borderLeft:`3px solid ${T.accent}`, borderRadius:9, background: srcDrag ? T.accent+"22" : T.accent+"08", padding:"10px 12px", marginBottom:12 }}>
             <div style={{ fontSize:11.5, fontWeight:600, marginBottom:6, color:T.accent }}>📝 이해관계자 요구사항 원문 <span style={{ color:T.muted, fontWeight:400, fontSize:10.5 }}>({RG.srcHint || "RFP 발췌·인터뷰 기록·회의록 등 붙여넣기 또는 파일 업로드"})</span></div>
@@ -8551,10 +8552,10 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
               <div style={{ flex:1 }} />
               <Btn onClick={generate} disabled={busy} style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ AI 재생성" : "⚡ AI 도출·명세"}</Btn>
             </div>
-          </div>
+          </div>)}
           {(busy || prog) && <GenProgressBar progress={prog || { percent:3, label:"요구사항 분석 준비 중…" }} subText="원문 분량·요구사항 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
           {error && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9, marginBottom:10 }}>{error}</div>}
-          {STK_ON && (items.length > 0 || stk.length > 0) && (() => {
+          {part !== "SYS" && STK_ON && (items.length > 0 || stk.length > 0) && (() => {
             const sysCount = {}; items.forEach(it => (it.stkIds || []).forEach(id => { sysCount[id] = (sysCount[id] || 0) + 1; }));
             const updS = (i, k, v) => setStk(l => l.map((x, j) => j === i ? { ...x, [k]: v } : x));
             const delS = i => { const id = stk[i]?.id; setStk(l => l.filter((_, j) => j !== i)); if (id) setItems(l => l.map(it => ({ ...it, stkIds: (it.stkIds || []).filter(x => x !== id) }))); };
@@ -8603,7 +8604,17 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                 {!stk.length && <div style={{ fontSize:11, color:T.muted, padding:6 }}>AI 도출을 실행하면 원문에서 이해관계자 요구가 먼저 발췌됩니다. 직접 입력하려면 '+ 행 추가'.</div>}
               </div>
             </div>); })()}
-          {items.length > 0 && (
+          {part === "STK" && items.length > 0 && (
+            <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:11, color:T.muted, padding:"7px 10px", border:`1px dashed ${T.border}`, borderRadius:8, marginTop:8 }}>
+              <span style={{ flex:1 }}>도출된 시스템 요구 {items.length}건은 SYS.2 탭에서 검토·편집합니다.</span>
+              {onGoPart && <button onClick={() => onGoPart("SYS")} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:10.5, padding:"3px 9px" }}>SYS.2 시스템 요구 →</button>}
+            </div>)}
+          {part === "SYS" && !items.length && (
+            <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:11, color:T.muted, padding:"10px 12px", border:`1px dashed ${T.border}`, borderRadius:8 }}>
+              <span style={{ flex:1 }}>아직 시스템 요구가 없습니다. SYS.1에서 고객 사양서를 올리고 [AI 도출·명세]를 누르면 이해관계자 요구와 시스템 요구가 함께 만들어집니다.</span>
+              {onGoPart && <button onClick={() => onGoPart("STK")} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:10.5, padding:"3px 9px" }}>← SYS.1 고객 요구</button>}
+            </div>)}
+          {part !== "STK" && items.length > 0 && (
             <div style={{ marginTop:8 }}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
                 <div style={{ fontSize:12, fontWeight:600 }}>{STK_ON ? "시스템 요구 (SYS.2)" : "도출된 요구사항"} <span style={{ color:T.accent }}>{items.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 수정·추가·삭제 후 확정하세요. '상세'에서 명세 내용을 편집합니다.</span></div>
@@ -8716,7 +8727,37 @@ function aeNextTab(m, saved) {
   return "trace";
 }
 // 탭: [id, 쉬운 이름, ASPICE 코드(작게 병기)]
-const AE_TABS = [["setup", "① 준비", "버전·범위·입력자료"], ["req", "② 고객 요구 → 시스템 요구", "SYS.1·SYS.2"], ["SYS", "③ 시스템 구조", "SYS.3"], ["SW", "④ SW", "SWE.1·2·3"], ["HW", "⑤ HW", "HWE.1·2"], ["verif", "⑥ 시험", "SYS.4·5 SWE.4·5·6 HWE.3·4"], ["trace", "⑦ 빠진 곳 점검", "추적성·WP 충족도"], ["review", "⑧ QA 검토", "SUP.1 교차검토"]];
+const AE_TABS = [["setup", "준비", "버전·범위·입력자료"], ["req", "SYS.1·2 고객·시스템 요구", "SYS.1·SYS.2"], ["SYS", "SYS.3 시스템 구조", "SYS.3"], ["SW", "SWE.1~3 SW 요구·설계", "SWE.1·2·3"], ["HW", "HWE.1·2 HW 요구·설계", "HWE.1·2"], ["verif", "시험", "SYS.4·5 SWE.4·5·6 HWE.3·4"], ["trace", "빠진 곳 점검", "추적성·WP 충족도"], ["review", "QA 교차검토", "SUP.1 교차검토"]];
+// ── 화면 구성: 프로세스 그룹(SYS·SWE·HWE·점검·QA) → 프로세스 탭 ──
+// 내부 탭(tab)과 데이터·기능은 그대로 두고, 프로세스 탭이 (내부 탭 + 섹션/시험 레벨)을 가리키는 화면 계층만 얹는다.
+// sub: req → STK(SYS.1)·SYS(SYS.2) / SW·HW → req·arch·unit / verif → 시험 레벨 키 / pair: 이 시험이 검증하는 왼쪽 프로세스
+const AE_GROUPS = [{ id: "SYS", label: "SYS" }, { id: "SWE", label: "SWE", scope: "SW" }, { id: "HWE", label: "HWE", scope: "HW" }, { id: "QA", label: "점검·QA" }];
+const AE_PROCS = [
+  { id: "SYS.1", grp: "SYS", short: "고객 요구", tab: "req", sub: "STK" },
+  { id: "SYS.2", grp: "SYS", short: "시스템 요구", tab: "req", sub: "SYS" },
+  { id: "SYS.3", grp: "SYS", short: "시스템 구조", tab: "SYS", sub: null },
+  { id: "SYS.4", grp: "SYS", short: "통합 검증", tab: "verif", sub: "SYS4", pair: "SYS.3" },
+  { id: "SYS.5", grp: "SYS", short: "시스템 검증", tab: "verif", sub: "SYS5", pair: "SYS.2" },
+  { id: "SWE.1", grp: "SWE", short: "SW 요구", tab: "SW", sub: "req" },
+  { id: "SWE.2", grp: "SWE", short: "SW 구조", tab: "SW", sub: "arch" },
+  { id: "SWE.3", grp: "SWE", short: "상세설계", tab: "SW", sub: "unit" },
+  { id: "SWE.4", grp: "SWE", short: "유닛 검증", tab: "verif", sub: "SWE4", pair: "SWE.3" },
+  { id: "SWE.5", grp: "SWE", short: "통합 검증", tab: "verif", sub: "SWE5", pair: "SWE.2" },
+  { id: "SWE.6", grp: "SWE", short: "SW 검증", tab: "verif", sub: "SWE6", pair: "SWE.1" },
+  { id: "HWE.1", grp: "HWE", short: "HW 요구", tab: "HW", sub: "req" },
+  { id: "HWE.2", grp: "HWE", short: "HW 설계", tab: "HW", sub: "arch" },
+  { id: "HWE.3", grp: "HWE", short: "설계 검증", tab: "verif", sub: "HWE3", pair: "HWE.2" },
+  { id: "HWE.4", grp: "HWE", short: "요구 검증", tab: "verif", sub: "HWE4", pair: "HWE.1" },
+  { id: "TRACE", grp: "QA", short: "빠진 곳 점검", tab: "trace", sub: null, code: "추적성·WP 충족도" },
+  { id: "SUP.1", grp: "QA", short: "QA 교차검토", tab: "review", sub: null },
+];
+// 내부 탭으로 이동할 때 기본으로 보여줄 프로세스(섹션) — 아직 비어 있는 첫 단계
+function aeInitSub(t, m) {
+  if (t === "req") return m.reqs.SYS.length ? "SYS" : "STK";
+  if (t === "SW" || t === "HW") return !m.reqs[t].length ? "req" : !m.comps[t].length ? "arch" : t === "SW" ? "unit" : "arch";
+  if (t === "verif") { const ks = AE_PROCS.filter(p => p.tab === "verif" && m.scope[AE.TEST_LEVELS[p.sub].level]).map(p => p.sub); return ks.find(k => !m.tests.some(x => x.level === k)) || ks[0] || null; }
+  return null;
+}
 // 단계별 안내 — 왜 하는지 · 할 일 · 끝났다고 보는 기준 (기능은 그대로, 화면 위에 안내만 얹는다)
 const AE_GUIDE = {
   setup: { why: "V-모델 전체에 적용되는 기준을 정합니다. 여기서 정한 ASPICE 버전·개발 범위(SW/HW)에 따라 이후 탭과 생성되는 문서가 달라집니다.",
@@ -8736,13 +8777,13 @@ const AE_GUIDE = {
     done: "HW 담당 시스템 요구가 모두 HW 요구로 내려가고 컴포넌트가 지정되면 끝." },
   verif: { why: "요구마다 '어떻게 확인할 것인가'(시험)를 미리 정해야 요구가 검증 가능해집니다. 시스템·SW·HW 요구 시험, 인터페이스 통합 시험, 유닛 시험을 한 모델에서 만들어 추적성을 닫습니다.",
     todo: ["[전체 생성]으로 규칙(+AI) 시험을 만듭니다. 이미 있으면 [빠진 시험만 생성]을 쓰세요.", "레벨 탭(SYS.5·SWE.6 …)을 돌며 기대 결과·합격 기준이 판정 가능한지 봅니다.", "TBD로 남은 합격 기준은 코드·사양 확정 후 채웁니다."],
-    done: "⑦에서 '요구마다 시험이 있나' 등 검증 항목이 모두 100%면 끝." },
+    done: "'빠진 곳 점검'에서 '요구마다 시험이 있나' 등 검증 항목이 모두 100%면 끝." },
   trace: { why: "V-모델이 어디에서 끊겼는지 한눈에 봅니다. 커버리지 막대가 100%가 아니면 그 줄의 [빠짐 →]으로 가서 처리하고, 일관성 점검의 오류는 반드시 해소합니다.",
     todo: ["커버리지의 [빠짐 N건 →]을 눌러 해당 탭에서 처리합니다(처리 방법 💡가 함께 표시됨).", "'변경 영향 검토'가 있으면 하위 연결마다 '영향 없음' 또는 '하위 수정 필요'로 판정합니다.", "일관성 점검의 줄을 눌러 처리 방법을 보고 ✎로 바로 고칩니다. WP 특성 충족도의 누락은 사유를 적거나 N/A로 정리합니다."],
     done: "오류 0, 변경 영향 확인 대기 0, 사유 없는 누락 0이면 끝. 경고·정보는 사유가 있으면 남아 있어도 됩니다." },
   review: { why: "작성한 산출물을 생성 AI와 다른 검토 AI가 보고 의견을 내고, QA 담당자가 그 의견이 맞는지 판정합니다. 판정 기록이 SUP.1 QA 증적이 됩니다.",
     todo: ["검토 AI를 고르고 [전체 산출물 변경분 검토] 또는 표에서 산출물을 골라 검토합니다(시스템 요구부터 권장).", "②-b [✦ 수정안 생성]으로 수정안을 만들고 카드마다 승인·편집·반려합니다. 승인 전에는 아무것도 바뀌지 않습니다.", "남은 의견은 ③에서 '맞음 → 고침 / 틀림 / 보류'로 판정하고, 끝나면 [변경분 검토]로 수정 결과를 재검토합니다."],
-    done: "현황표의 모든 산출물이 '완료'(검토됨 100%, 미판정 0)면 끝. ⑦에서 [교차검토 끝난 요구 → Reviewed]로 상태를 올립니다." },
+    done: "현황표의 모든 산출물이 '완료'(검토됨 100%, 미판정 0)면 끝. \'빠진 곳 점검\'에서 [교차검토 끝난 요구 → Reviewed]로 상태를 올립니다." },
 };
 const AE_LS_INTRO = "spiderqa_ae_intro_seen", AE_LS_GUIDE = "spiderqa_ae_guide_hidden";
 const AE_STEP_IDS = AE_TABS.map(t => t[0]);
@@ -8786,7 +8827,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   });
   // 기본 탭: 다음에 할 단계(aeNextTab) — 처음 여는 V-모델은 ①, 진행 중이면 비어 있는 첫 단계, 모두 갖춰지면 ⑦ 점검.
   // initTab은 특정 진입점(예: 요구사항 산출물 행의 '요구 도출·명세' 버튼 → ②)에서만 지정한다.
-  const [tab, setTab] = useState(() => initTab || aeNextTab(model, !!requirements?.aspice));
+  const [tab, setTabRaw] = useState(() => initTab || aeNextTab(model, !!requirements?.aspice));
+  const [sub, setSub] = useState(() => aeInitSub(initTab || aeNextTab(model, !!requirements?.aspice), model));
+  // 내부 탭 이동: s를 주면 그 섹션(프로세스), null이면 탭 전체, 생략하면 비어 있는 첫 프로세스
+  const setTab = (id, s) => { setTabRaw(id); setSub(s === undefined ? aeInitSub(id, model) : s); };
   const [itemsVer, setItemsVer] = useState(0);   // V-모델 쪽에서 요구 목록이 바뀌면(DBC 등) ① 탭 패널을 새 목록으로 다시 연다
   const srcRef = useRef(requirements?.source || null);   // ② 탭의 원문·파일 (확정 전이라도 저장에 포함)
   const [srcSig, setSrcSig] = useState(() => ((requirements?.source?.files) || []).map(f => f.name).join("|"));   // 파일명 변경 감지용
@@ -8805,7 +8849,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [focus, setFocus] = useState(null);
   const focusOn = tab === focus?.tab ? focus : null;
   const applyFocus = (list) => (focusOn && list.some(x => focusOn.ids.has(x.id))) ? list.filter(x => focusOn.ids.has(x.id)) : list;
-  const goMissing = (c) => { setFocus({ key: c.key, tab: c.tab, level: c.level || null, ids: new Set(c.missing), q: c.q, n: c.missing.length }); setTab(c.tab); if (c.level) setVFilter(c.level); };
+  const goMissing = (c) => { setFocus({ key: c.key, tab: c.tab, level: c.level || null, ids: new Set(c.missing), q: c.q, n: c.missing.length }); setTab(c.tab, c.level || null); if (c.level) setVFilter(c.level); };
   const [guides, setGuides] = useState([]);
   useEffect(() => { fetchWritingGuides().then(gs => setGuides(gs.filter(g => g.is_active !== false))).catch(() => {}); }, []);
   const guideBlock = buildGuideBlock(guides);
@@ -9122,7 +9166,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         setFocus(null);
         return `${todo0.map(p => p.id).join(", ")}에서 ${level} 요구 ${added.length}건(${added.join(", ")})을 추가했습니다 — 기존 요구·할당은 그대로입니다. 새 요구 아래 '할당 →'에서 담당 ${AE.LEVELS[level].compLabel}를 눌러 지정하세요.`;
       }
-      if (!parents.length) throw new Error(`${level} 포함 시스템 요소(구분 ${level === "SW" ? "SW·HW+SW" : "HW·HW+SW"})에 할당된 시스템 요구가 없습니다. ② 시스템 탭에서 요소 구분과 할당을 먼저 확인하세요.`);
+      if (!parents.length) throw new Error(`${level} 포함 시스템 요소(구분 ${level === "SW" ? "SW·HW+SW" : "HW·HW+SW"})에 할당된 시스템 요구가 없습니다. SYS.3 시스템 구조에서 요소 구분과 할당을 먼저 확인하세요.`);
       if (!n.useAI) { n.reqs[level] = AE.ruleDeriveReqs(n, level); setModel(n); return `규칙 기반: 상위 요구 ${parents.length}건을 상속한 ${level} 요구 초안 생성 — ${level} 관점으로 구체화하세요.`; }
       const keep = n.reqs[level].filter(r => r.origin === "manual");
       const out = [...keep];
@@ -9370,7 +9414,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     setRequirements({ ...(requirements || {}), ...meta, aspice: next });
     savedSig.current = aeSig(next, meta.items);
     setErr(null);
-    setNote(`${meta.stk?.items?.length ? `이해관계자 요구 ${meta.stk.items.length}건 · ` : ""}시스템 요구 ${meta.items.length}건을 확정·저장했습니다.${st.open.length ? ` 변경된 요구의 하위 연결 ${st.open.length}건은 ⑦ 추적성 탭 '변경 영향 검토'에서 확인하세요.` : " 다음은 ③ 시스템 탭에서 아키텍처를 작성하세요."}`);
+    setNote(`${meta.stk?.items?.length ? `이해관계자 요구 ${meta.stk.items.length}건 · ` : ""}시스템 요구 ${meta.items.length}건을 확정·저장했습니다.${st.open.length ? ` 변경된 요구의 하위 연결 ${st.open.length}건은 점검·QA › 빠진 곳 점검의 '변경 영향 검토'에서 확인하세요.` : " 다음은 SYS.3 시스템 구조에서 아키텍처를 작성하세요."}`);
   }
   // ── 변경 영향 검토: 유효/무효 판정 · 고아 연결 제거 ──
   const [reviewNote, setReviewNote] = useState({});   // { 상위ID: 판정 의견 }
@@ -9521,6 +9565,26 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const errCount = findings.filter(f => f.sev === "error").length;
   const aeProg = React.useMemo(() => AE.aeProgress(model, { saved: !!requirements?.aspice }), [model, requirements?.aspice]);
   const rvOpen = AE.reviewView(model).count().open;
+  // ── 프로세스 탭 상태(✓ 완료 · ● 진행 중 · ○ 아직) — 시험 레벨은 '빠진 시험' 기준 ──
+  const procVisible = AE_PROCS.filter(p => { const g = AE_GROUPS.find(x => x.id === p.grp); return !g.scope || model.scope[g.scope]; });
+  const procStates = React.useMemo(() => {
+    const out = {};
+    AE_PROCS.forEach(p => {
+      if (p.tab === "verif") { const n = model.tests.filter(t => t.level === p.sub).length; out[p.id] = !n ? "todo" : AE.missingTestTargets(model, [p.sub]) > 0 ? "partial" : "done"; return; }
+      const base = aeProg.steps.find(x => x.id === p.tab)?.state || "todo";
+      const cnt = p.sub === "STK" ? model.reqs.STK.length : p.sub === "SYS" ? model.reqs.SYS.length : p.sub === "req" ? model.reqs[p.tab].length : p.sub === "arch" ? model.comps[p.tab].length : p.sub === "unit" ? model.units.SW.length : null;
+      out[p.id] = cnt === null ? base : !cnt ? "todo" : base === "done" ? "done" : "partial";
+    });
+    return out;
+  }, [model, aeProg]);
+  const effSub = tab === "verif" ? (sub || vFilter) : sub;
+  const activeProc = AE_PROCS.find(p => p.tab === tab && (p.sub || null) === (effSub || null)) || null;
+  const activeGrp = tab === "setup" ? null : activeProc ? activeProc.grp
+    : tab === "req" || tab === "SYS" ? "SYS" : tab === "SW" ? "SWE" : tab === "HW" ? "HWE" : tab === "trace" || tab === "review" ? "QA" : null;
+  const goProc = (id) => { const p = AE_PROCS.find(x => x.id === id); if (!p) return; setTabRaw(p.tab); setSub(p.sub || null); setFocus(null); if (p.tab === "verif") setVFilter(p.sub); };
+  const goGroup = (g) => { const ps = procVisible.filter(p => p.grp === g); const p = ps.find(x => procStates[x.id] !== "done") || ps[0]; if (p) goProc(p.id); };
+  const procMark = st => st === "done" ? "✓" : st === "partial" ? "●" : "○";
+  const procColor = st => st === "done" ? T.green : st === "partial" ? T.amber : T.muted;
   const runHere = !!(runAt && runAt.el && runAt.el.isConnected && runAt.tab === tab);
   const runCtx = { anchor: runHere ? runAt.anchor : null, busy, prog, runErr };
 
@@ -9540,19 +9604,37 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             <button onClick={requestClose} title="닫기" style={{ background: "none", border: "none", color: T.muted, fontSize: 18, cursor: "pointer" }}>✕</button>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 3, padding: "8px 18px 0", flexShrink: 0, flexWrap: "wrap" }}>
-          {AE_TABS.filter(([id]) => !(id === "SW" && !model.scope.SW) && !(id === "HW" && !model.scope.HW)).map(([id, label, code]) => {
-            const st = aeProg.steps.find(x => x.id === id)?.state;
-            const mark = st === "done" ? "✓" : st === "partial" ? "●" : "○";
-            const mc = st === "done" ? T.green : st === "partial" ? T.amber : T.muted;
-            return (
-            <button key={id} onClick={() => { setTab(id); setFocus(null); }} title={`${label} · ${code} · ${st === "done" ? "완료" : st === "partial" ? "진행 중" : "아직"}`} style={{ padding: "5px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: tab === id ? 700 : 400, background: tab === id ? T.accent : "transparent", color: tab === id ? "#fff" : T.muted, border: `1px solid ${tab === id ? T.accent : T.border}`, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
-              <span style={{ color: tab === id ? "#fff" : mc, marginRight: 4 }}>{mark}</span>{label}{id === "trace" && errCount ? ` (${errCount})` : ""}{id === "review" && rvOpen ? ` (${rvOpen})` : ""}
-              <div style={{ fontSize: 9, opacity: 0.75, fontWeight: 400 }}>{code}</div></button>);
-          })}
+        <div style={{ padding: "8px 18px 0", flexShrink: 0 }}>
+          <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+            {AE_GROUPS.filter(g => !g.scope || model.scope[g.scope]).map(g => {
+              const ps = procVisible.filter(p => p.grp === g.id); const on = activeGrp === g.id;
+              const badge = g.id === "QA" ? errCount + rvOpen : 0;
+              return (
+              <button key={g.id} onClick={() => goGroup(g.id)} title={ps.map(p => `${p.id === "TRACE" ? "" : p.id + " "}${p.short} · ${procStates[p.id] === "done" ? "완료" : procStates[p.id] === "partial" ? "진행 중" : "아직"}`).join("\n")}
+                style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12.5, fontWeight: on ? 700 : 500, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${on ? T.accent : T.border}`, background: on ? T.accent : "transparent", color: on ? "#fff" : T.text, display: "inline-flex", alignItems: "center", gap: 8 }}>
+                {g.label}{badge ? <span style={{ fontSize: 10, color: on ? "#fff" : T.amber }}>({badge})</span> : null}
+                <span style={{ fontSize: 9, letterSpacing: 1.5 }}>{ps.map(p => <span key={p.id} style={{ color: on ? "#fff" : procColor(procStates[p.id]), opacity: on && procStates[p.id] === "todo" ? 0.55 : 1 }}>{procStates[p.id] === "done" ? "●" : procStates[p.id] === "partial" ? "◐" : "○"}</span>)}</span>
+              </button>); })}
+            <div style={{ flex: 1 }} />
+            <button onClick={() => setTab("setup")} title="준비 — ASPICE 버전·개발 범위·입력자료(DBC 등). 눌러서 확인·변경"
+              style={{ ...small, padding: "5px 10px", color: tab === "setup" ? "#fff" : T.text, background: tab === "setup" ? T.accent : "transparent", borderColor: tab === "setup" ? T.accent : T.border }}>
+              ⚙ {AE.ASPICE_VERSIONS.find(v => v.id === V)?.label || V} · SYS + SW{model.scope.HW ? " + HW" : ""} ✎</button>
+          </div>
+          {activeGrp && (
+            <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "wrap" }}>
+              {procVisible.filter(p => p.grp === activeGrp).map(p => { const on = activeProc?.id === p.id; const st = procStates[p.id]; return (
+                <button key={p.id} onClick={() => goProc(p.id)} title={`${p.id === "TRACE" ? p.code : AE.procLabel(p.id, V)}${p.pair ? ` — ${p.pair} 검증` : ""} · ${st === "done" ? "완료" : st === "partial" ? "진행 중" : "아직"}`}
+                  style={{ padding: "4px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: on ? 700 : 400, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${on ? T.accent : T.border}`, background: on ? T.accent + "22" : "transparent", color: T.text }}>
+                  <span style={{ color: procColor(st), marginRight: 4 }}>{procMark(st)}</span>
+                  {p.id !== "TRACE" && <b style={{ fontFamily: "monospace", marginRight: 4 }}>{p.id}</b>}{p.short}
+                  {p.pair && <span style={{ fontSize: 9.5, color: T.muted, marginLeft: 4 }}>↔{p.pair}</span>}
+                  {p.id === "TRACE" && errCount ? <span style={{ color: T.red, marginLeft: 3 }}>({errCount})</span> : null}
+                  {p.id === "SUP.1" && rvOpen ? <span style={{ color: T.amber, marginLeft: 3 }}>({rvOpen})</span> : null}
+                </button>); })}
+            </div>)}
         </div>
         {/* 진행 현황 · 다음 할 일 */}
-        <div style={{ margin: "8px 18px 0", padding: progOpen ? "8px 12px" : "4px 12px", border: `1px solid ${T.border}`, borderRadius: 9, background: T.bg, flexShrink: 0, fontSize: 11 }}>
+        <div style={{ margin: "8px 18px 0", padding: "6px 12px", border: `1px solid ${T.border}`, borderRadius: 9, background: T.bg, flexShrink: 0, fontSize: 11 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <b>진행 {aeProg.pct}%</b>
             <span style={{ flex: 1, minWidth: 120, height: 6, background: T.border, borderRadius: 3, overflow: "hidden" }}><span style={{ display: "block", width: `${aeProg.pct}%`, height: "100%", background: aeProg.pct === 100 ? T.green : T.accent }} /></span>
@@ -9560,13 +9642,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               return <>
                 <span style={{ color: T.text }}>👉 다음 할 일: <b>{lab}</b>{c ? ` — '${c.q}' 빠짐 ${c.missing.length}건` : nx.state === "todo" ? " — 아직 시작 전" : ` — ${nx.note}`}</span>
                 <button onClick={() => { if (c) goMissing(c); else { setTab(nx.next?.tab || nx.id); setFocus(null); } }} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>바로 가기 →</button>
-              </>; })() : <span style={{ color: T.green }}>✓ 8단계가 모두 끝났습니다. 저장한 뒤 위저드 '완료'로 서버에 저장하세요.</span>}
-            <button onClick={() => setProgOpen(o => !o)} style={{ ...small, padding: "2px 7px", color: T.muted }}>{progOpen ? "접기 ▴" : "펼치기 ▾"}</button>
+              </>; })() : <span style={{ color: T.green }}>✓ 모든 단계가 끝났습니다. 저장한 뒤 위저드 '완료'로 서버에 저장하세요.</span>}
           </div>
-          {progOpen && <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>
-            {aeProg.steps.map(st => { const t = AE_TABS.find(x => x[0] === st.id); const col = st.state === "done" ? T.green : st.state === "partial" ? T.amber : T.muted; return (
-              <button key={st.id} onClick={() => { setTab(st.id); setFocus(null); }} title={st.note} style={{ ...small, padding: "2px 8px", color: col, borderColor: col + "66", background: tab === st.id ? col + "18" : "none" }}>{st.state === "done" ? "✓" : st.state === "partial" ? "●" : "○"} {t?.[1]}<span style={{ color: T.muted, marginLeft: 4 }}>{st.note.length > 28 ? st.note.slice(0, 28) + "…" : st.note}</span></button>); })}
-          </div>}
         </div>
         <div style={{ padding: "12px 18px", overflowY: "auto", flex: 1 }}>
           {AE_GUIDE[tab] && (guideHidden.has(tab)
@@ -9574,17 +9651,26 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             : <div style={{ border: `1px solid ${T.accent}44`, borderLeft: `3px solid ${T.accent}`, borderRadius: 9, padding: "10px 12px", marginBottom: 12, background: T.accent + "08", fontSize: 11.5, lineHeight: 1.65 }}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, marginBottom: 2 }}>{AE_TABS.find(t => t[0] === tab)?.[1]} — 이 단계에서 할 일</div>
+                    <div style={{ fontWeight: 700, marginBottom: 2 }}>{activeProc ? `${activeProc.id === "TRACE" ? "" : activeProc.id + " "}${activeProc.short}` : AE_TABS.find(t => t[0] === tab)?.[1]} — 이 단계에서 할 일</div>
                     <div style={{ color: T.muted, marginBottom: 6 }}>{AE_GUIDE[tab].why}</div>
                     <ol style={{ margin: "0 0 6px 18px", padding: 0 }}>{AE_GUIDE[tab].todo.map((t, i) => <li key={i} style={{ marginBottom: 2 }}>{t}</li>)}</ol>
                     <div style={{ color: T.green, fontSize: 11 }}>✓ 끝났다고 보는 기준: {AE_GUIDE[tab].done}</div>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
                     <button onClick={() => hideGuide(tab, true)} title="이 단계의 안내를 숨깁니다(❓로 다시 볼 수 있음)" style={{ ...small, padding: "2px 8px", color: T.muted }}>안내 숨기기</button>
-                    {(() => { const i = AE_STEP_IDS.indexOf(tab); const nextId = AE_STEP_IDS.slice(i + 1).find(id => !((id === "SW" && !model.scope.SW) || (id === "HW" && !model.scope.HW))); return nextId ? <button onClick={() => { setTab(nextId); setFocus(null); }} style={{ ...small, padding: "2px 8px" }}>다음 단계 →</button> : null; })()}
+                    {(() => { const i = activeProc ? procVisible.findIndex(p => p.id === activeProc.id) : -1; const nx = i >= 0 ? procVisible[i + 1] : tab === "setup" ? procVisible[0] : null; return nx ? <button onClick={() => goProc(nx.id)} title={`${nx.id === "TRACE" ? "" : nx.id + " "}${nx.short}`} style={{ ...small, padding: "2px 8px" }}>다음: {nx.id === "TRACE" ? nx.short : nx.id} →</button> : null; })()}
                   </div>
                 </div>
               </div>)}
+          {activeProc && activeProc.id !== "TRACE" && (() => {
+            const docs = Object.values(AE.ASPICE_DOCS).filter(d => d.proc === activeProc.id); const vs = AE.versionsOf(V);
+            const pair = activeProc.pair ? AE_PROCS.find(x => x.id === activeProc.pair) : null;
+            return (
+              <div style={{ fontSize: 10.5, color: T.muted, padding: "5px 10px", border: `1px dashed ${T.border}`, borderRadius: 8, marginBottom: 10 }}>
+                <b style={{ color: T.text }}>{AE.procLabel(activeProc.id, V)}</b>
+                {docs.length > 0 && <> · 산출물: {docs.map(d => `${d.title} (${vs.map(v => `${v === "3.1" ? "3.1 WP" : "4.0 정보항목"} ${d.wp[v]}`).join(" / ")})`).join(" · ")}</>}
+                {pair && <> · 검증 대상: <button onClick={() => goProc(pair.id)} style={{ ...small, padding: "0 6px", fontSize: 10 }}>{pair.id} {pair.short}</button></>}
+              </div>); })()}
           {(busy || prog) && !runHere && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
           {runErr && !runHere && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{runErr}</div>}
           {err && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{err}</div>}
@@ -9608,11 +9694,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               : "";
             return tip ? <div style={{ fontSize: 11, color: T.text, padding: "6px 10px", background: T.green + "10", border: `1px solid ${T.green}44`, borderRadius: 8, marginTop: -4, marginBottom: 10 }}>💡 {tip}</div> : null;
           })()}
-          {!model.reqs.SYS.length && tab !== "req" && <div style={{ color: T.amber, fontSize: 11.5, padding: 9, background: T.amber + "11", borderRadius: 8, marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}><span style={{ flex: 1 }}>확정된 시스템 요구사항이 없습니다. ② 요구 도출·명세 탭에서 SYS.2를 먼저 확정하거나, ① 입력자료 탭에서 DBC를 가져오세요.</span><button onClick={() => setTab("req")} style={{ ...small, color: T.amber, borderColor: T.amber + "88" }}>② 탭으로</button></div>}
+          {!model.reqs.SYS.length && tab !== "req" && <div style={{ color: T.amber, fontSize: 11.5, padding: 9, background: T.amber + "11", borderRadius: 8, marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}><span style={{ flex: 1 }}>확정된 시스템 요구사항이 없습니다. SYS.1에서 고객 요구를 도출해 SYS.2를 확정하거나, ⚙ 준비에서 DBC를 가져오세요.</span><button onClick={() => setTab("req", "STK")} style={{ ...small, color: T.amber, borderColor: T.amber + "88" }}>SYS.1로</button></div>}
 
           {/* ② 요구 도출·명세 (SYS.1·2) — 탭을 옮겨도 작성 중인 내용이 유지되도록 항상 마운트하고 숨김 처리 */}
           <div style={{ display: tab === "req" ? "block" : "none" }}>
-            <ReqGenModal key={itemsVer} embedded form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={ossp}
+            <ReqGenModal key={itemsVer} embedded part={sub === "STK" || sub === "SYS" ? sub : null} onGoPart={pt => setTab("req", pt)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={ossp}
               previewAspice={model} seedItems={itemsVer ? items : undefined} onEmbeddedConfirm={confirmReqs} onClose={() => {}} onSourceChange={src => { srcRef.current = src; const sig = (src.files || []).map(f => f.name).join("|"); setSrcSig(v => v === sig ? v : sig); }} focusIds={focusOn ? focusOn.ids : null} />
           </div>
 
@@ -9632,11 +9718,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </div>
               {scopeLocked && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 6 }}>SW·HW 범위는 과제의 개발 범위({ASPICE_DEVS.find(d => d.id === devFromScope(tailoring.aspiceScope))?.label})를 따릅니다 — 바꾸려면 새 프로젝트의 기본정보(개발 범위) 또는 적용 범위 단계에서 변경하세요. WBS·산출물 목록과 V-모델 범위가 항상 같게 유지됩니다.</div>}
               {(hiddenHW > 0 || hiddenSW > 0) && <div style={{ fontSize: 10.5, color: T.amber, marginTop: 6 }}>⚠ 범위 밖으로 숨겨진 데이터가 있습니다{hiddenSW ? ` — SW ${hiddenSW}건` : ""}{hiddenHW ? ` — HW ${hiddenHW}건` : ""}. 삭제되지 않고 보존되며, 개발 범위에 다시 포함하면 그대로 나타납니다.</div>}
-              <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>※ SWE.3(상세설계)·SWE.4(유닛 검증)는 코드가 근거이므로 ④ SW 탭에서 유닛 분해·요구 추적 골격과 헤더(.h) 기반 인터페이스만 생성하고 알고리즘·동적 동작은 TBD로 둡니다. HWE 상세설계는 회로 확정 후 OSSP 템플릿으로 작성합니다.</div>
+              <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>※ SWE.3(상세설계)·SWE.4(유닛 검증)는 코드가 근거이므로 SWE.3 상세설계 탭에서 유닛 분해·요구 추적 골격과 헤더(.h) 기반 인터페이스만 생성하고 알고리즘·동적 동작은 TBD로 둡니다. HWE 상세설계는 회로 확정 후 OSSP 템플릿으로 작성합니다.</div>
             </AeSec>
             <AeSec title="입력자료 체크리스트 — 확보한 자료를 표시하면 WP 충족도에 반영됩니다 (없는 자료는 AI가 지어내지 않고 TBD로 남깁니다)"
               right={(() => { const pend = Object.keys(autoInputs).filter(id => !model.inputs[id]); return pend.length ? <button onClick={() => set(n => { pend.forEach(id => { n.inputs[id] = "have"; }); })} style={{ ...small, color: T.green, borderColor: T.green + "88" }}>감지된 {pend.length}건 모두 확보로 표시</button> : null; })()}>
-              {Object.keys(autoInputs).some(id => !model.inputs[id]) && <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 6 }}>② 탭에 첨부한 파일명에서 자료를 감지했습니다 — <span style={{ color: T.accent }}>확보(자동)</span>는 추정이므로, 내용을 확인한 뒤 '확보'를 눌러 확정하세요. 확정된 것만 WP 충족도에 반영됩니다.</div>}
+              {Object.keys(autoInputs).some(id => !model.inputs[id]) && <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 6 }}>SYS.1에 첨부한 파일명에서 자료를 감지했습니다 — <span style={{ color: T.accent }}>확보(자동)</span>는 추정이므로, 내용을 확인한 뒤 '확보'를 눌러 확정하세요. 확정된 것만 WP 충족도에 반영됩니다.</div>}
               <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                 {AE.INPUT_CHECKLIST.map(it => (
                   <div key={it.id} style={{ display: "grid", gridTemplateColumns: "1fr 230px", gap: 8, alignItems: "center", fontSize: 11 }}>
@@ -9708,11 +9794,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
 
           {(tab === "SW" || tab === "HW") && (() => { const lv = tab; const L = AE.LEVELS[lv]; const parents = AE.parentsForLevel(model, lv); return (<>
             {lv === "HW" && V === "3.1" && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 8 }}>※ ASPICE 3.1에는 HWE 프로세스가 없어 4.0 HWE.1~4를 PAM 확장으로 준용합니다 (문서에 명기됨).</div>}
-            <AeSec title={`${lv} 요구사항 ${model.reqs[lv].length}건 (${AE.procLabel(L.reqProc, V)}) — 파생 대상 시스템 요구 ${parents.length}건`} right={(() => { const miss = parents.filter(p => !model.reqs[lv].some(r => (r.parents || []).includes(p.id))).map(p => p.id); return (<div style={{ display: "flex", gap: 6 }}>
+            {(!sub || sub === "req") && (<AeSec title={`${lv} 요구사항 ${model.reqs[lv].length}건 (${AE.procLabel(L.reqProc, V)}) — 파생 대상 시스템 요구 ${parents.length}건`} right={(() => { const miss = parents.filter(p => !model.reqs[lv].some(r => (r.parents || []).includes(p.id))).map(p => p.id); return (<div style={{ display: "flex", gap: 6 }}>
                 {miss.length > 0 && model.reqs[lv].length > 0 && <Btn onClick={() => derive(lv, miss)} disabled={busy} title="기존 하위 요구·할당은 그대로 두고, 아직 파생되지 않은 시스템 요구에서만 새로 만듭니다" style={{ fontSize: 11, padding: "4px 12px" }}>빠진 {miss.length}건만 파생</Btn>}
                 <Btn variant={model.reqs[lv].length ? "outline" : undefined} onClick={() => { const auto = model.reqs[lv].filter(r => r.origin !== "manual").length; if (auto && !window.confirm(`전체 다시 파생하면 직접 추가하지 않은 ${lv} 요구 ${auto}건을 새로 만듭니다.\n기존 요구의 컴포넌트 할당·유닛·시험·교차검토 연결이 바뀔 수 있습니다.\n빠진 것만 채우려면 '빠진 N건만 파생'을 쓰세요.\n\n계속할까요?`)) return; derive(lv); }} disabled={busy || !parents.length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.reqs[lv].length ? `전체 다시 파생` : `${aiLabel} 요구 파생`}</Btn>
               </div>); })()}>
-              {!parents.length && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 6 }}>'{lv}'가 포함된 시스템 요소에 할당된 요구가 없습니다. ② 시스템 탭에서 요소 구분(HW/SW/HW+SW)과 할당을 확인하세요.</div>}
+              {!parents.length && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 6 }}>'{lv}'가 포함된 시스템 요소에 할당된 요구가 없습니다. SYS.3 시스템 구조에서 요소 구분(HW/SW/HW+SW)과 할당을 확인하세요.</div>}
               {(() => {
                 // ⑦에서 '빠짐'으로 들어왔을 때: 빠진 것은 하위 요구가 아니라 '아직 내려오지 않은 시스템 요구' — 여기서 바로 처리
                 const miss = parents.filter(p => !model.reqs[lv].some(r => (r.parents || []).includes(p.id)));
@@ -9722,7 +9808,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 return (
                   <div style={{ border: `1px solid ${T.amber}88`, background: T.amber + "10", borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
                     <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 4 }}>아직 {lv} 요구로 내려오지 않은 시스템 요구 {show.length}건</div>
-                    <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>아래 시스템 요구는 {lv}가 포함된 요소에 할당돼 있지만 {lv} 요구가 하나도 없습니다. <b>[이 요구에서 파생]</b>을 누르면 기존 {lv} 요구·할당은 그대로 두고 이 요구에서만 새로 만듭니다. {lv}가 할 일이 없는 요구라면 ③ 시스템 탭에서 요소 할당을 바로잡으세요.</div>
+                    <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>아래 시스템 요구는 {lv}가 포함된 요소에 할당돼 있지만 {lv} 요구가 하나도 없습니다. <b>[이 요구에서 파생]</b>을 누르면 기존 {lv} 요구·할당은 그대로 두고 이 요구에서만 새로 만듭니다. {lv}가 할 일이 없는 요구라면 SYS.3 시스템 구조에서 요소 할당을 바로잡으세요.</div>
                     {show.map(p => (
                       <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", borderTop: `1px solid ${T.border}`, padding: "6px 0" }}>
                         <div style={{ flex: 1, fontSize: 11 }}>
@@ -9737,18 +9823,18 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               })()}
               {ReqList({ lv: lv })}
               <button onClick={() => set(n => { n.reqs[lv].push({ id: AE.nextId(AE.REQ_PREFIX[lv], n.reqs[lv], 4), level: lv, parents: [], sysElems: [], title: "", text: "", type: "기능", priority: "중", verifMethod: "Test", verifCriteria: "", status: "Draft", origin: "manual" }); })} style={{ ...small, marginTop: 6 }}>＋ {lv} 요구 추가</button>
-            </AeSec>
-            <AeSec title={`${L.compLabel} ${model.comps[lv].length}개 (${AE.procLabel(L.archProc, V)})`} right={<Btn variant={model.comps[lv].length ? "outline" : undefined} onClick={() => { if (model.comps[lv].length && !window.confirm(`${L.compLabel} 설계·할당을 처음부터 다시 만듭니다.\n기존 컴포넌트·할당·인터페이스와 그에 연결된 유닛·시험·교차검토가 바뀔 수 있습니다.\n요구 몇 건만 할당하려면 요구의 '할당 →' 칩을 누르세요.\n\n계속할까요?`)) return; compose(lv); }} disabled={busy || !model.reqs[lv].length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.comps[lv].length ? "전체 다시 설계·할당" : `${aiLabel} 컴포넌트 설계·할당`}</Btn>}>
+            </AeSec>)}
+            {(!sub || sub === "arch") && (<><AeSec title={`${L.compLabel} ${model.comps[lv].length}개 (${AE.procLabel(L.archProc, V)})`} right={<Btn variant={model.comps[lv].length ? "outline" : undefined} onClick={() => { if (model.comps[lv].length && !window.confirm(`${L.compLabel} 설계·할당을 처음부터 다시 만듭니다.\n기존 컴포넌트·할당·인터페이스와 그에 연결된 유닛·시험·교차검토가 바뀔 수 있습니다.\n요구 몇 건만 할당하려면 요구의 '할당 →' 칩을 누르세요.\n\n계속할까요?`)) return; compose(lv); }} disabled={busy || !model.reqs[lv].length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.comps[lv].length ? "전체 다시 설계·할당" : `${aiLabel} 컴포넌트 설계·할당`}</Btn>}>
               {CompList({ lv: lv })}
             </AeSec>
-            <AeSec title={`${lv} 인터페이스 ${model.interfaces[lv].length}건`}>{IfList({ lv: lv })}</AeSec>
-            {lv === "SW" && (
+            <AeSec title={`${lv} 인터페이스 ${model.interfaces[lv].length}건`}>{IfList({ lv: lv })}</AeSec></>)}
+            {lv === "SW" && (!sub || sub === "unit") && (
               <FileDrop bare accept=".h,.hpp,.txt" multiple onFiles={fs => onHeaders(asFileEvent(fs))} dropLabel="여기에 놓으면 C 헤더에서 유닛 인터페이스를 가져옵니다 (.h · .hpp · .txt · 여러 개 가능)">
               <AeSec title={`SW 유닛·상세설계 골격 ${model.units.SW.length}개 (${AE.procLabel("SWE.3", V)})`}
                 right={<div style={{ display: "flex", gap: 6 }}>
                   <label title="헤더 파일을 이 섹션으로 끌어다 놓아도 됩니다" style={{ ...small, display: "inline-block", padding: "4px 10px" }}>📎 .h 헤더 가져오기 (끌어다 놓기 가능)<input type="file" accept=".h,.hpp,.txt" multiple onChange={onHeaders} style={{ display: "none" }} /></label>
                   {(() => { const r = AE.addMissingUnits(model); return model.units.SW.length > 0 && r.added.length > 0
-                    ? <Btn onClick={() => { const x = AE.addMissingUnits(model); set(n => { n.units.SW = x.units; }); setNote(`유닛 ${x.added.join(", ")}을(를) 추가했습니다 — 기존 유닛은 그대로입니다. SWE.4 유닛 시험은 ⑥ 검증 수단의 [빠진 시험만 생성]으로 추가하세요.`); }} disabled={busy} title="기존 유닛(수정·헤더 반영분 포함)은 그대로 두고, 유닛이 없는 SW 요구에만 골격을 추가합니다" style={{ fontSize: 11, padding: "4px 12px" }}>빠진 유닛만 추가 ({r.added.length})</Btn>
+                    ? <Btn onClick={() => { const x = AE.addMissingUnits(model); set(n => { n.units.SW = x.units; }); setNote(`유닛 ${x.added.join(", ")}을(를) 추가했습니다 — 기존 유닛은 그대로입니다. SWE.4 유닛 시험은 SWE.4 유닛 검증 탭의 [빠진 시험만 생성]으로 추가하세요.`); }} disabled={busy} title="기존 유닛(수정·헤더 반영분 포함)은 그대로 두고, 유닛이 없는 SW 요구에만 골격을 추가합니다" style={{ fontSize: 11, padding: "4px 12px" }}>빠진 유닛만 추가 ({r.added.length})</Btn>
                     : null; })()}
                   <Btn variant={model.units.SW.length ? "outline" : undefined} onClick={() => { if (model.units.SW.some(u => u.origin === "rule") && !window.confirm("규칙으로 만든 유닛을 모두 다시 만들고 유닛 번호를 다시 매깁니다.\n이 화면이나 교차검토에서 고친 유닛 설계, SWE.4 유닛 시험, 유닛 교차검토 기록이 바뀔 수 있습니다(헤더로 가져온 유닛은 유지).\n빠진 것만 채우려면 [빠진 유닛만 추가]를 쓰세요.\n\n계속할까요?")) return; genUnits(); }} disabled={busy || !model.comps.SW.length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.units.SW.length ? "⚙ 골격 다시 생성" : "⚙ 규칙 골격 생성"}</Btn>
                 </div>}>
@@ -9786,16 +9872,16 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </AeSec>
               </FileDrop>
             )}
-            <AeSec title="설계 근거"><textarea value={model.rationale[lv]} onChange={e => set(n => { n.rationale[lv] = e.target.value; })} style={{ ...ta, minHeight: 50 }} /></AeSec>
+            {(!sub || sub === "arch") && <AeSec title="설계 근거"><textarea value={model.rationale[lv]} onChange={e => set(n => { n.rationale[lv] = e.target.value; })} style={{ ...ta, minHeight: 50 }} /></AeSec>}
           </>); })()}
 
           {tab === "verif" && (() => {
             const lvKeys = Object.keys(AE.TEST_LEVELS).filter(k => model.scope[AE.TEST_LEVELS[k].level]);
-            const cur = lvKeys.includes(vFilter) ? vFilter : lvKeys[0];
+            const cur = sub && lvKeys.includes(sub) ? sub : lvKeys.includes(vFilter) ? vFilter : lvKeys[0];
             const ts = model.tests.filter(t => t.level === cur).filter(t => !focusOn || focusOn.level !== cur || (t.targets || []).some(x => focusOn.ids.has(x)));
             return (<>
               <div data-aesec="verif-bar" style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-                {lvKeys.map(k => <button key={k} onClick={() => setVFilter(k)} style={{ ...small, padding: "5px 10px", color: cur === k ? "#fff" : T.muted, background: cur === k ? T.accent : "transparent", borderColor: cur === k ? T.accent : T.border }}>{AE.TEST_LEVELS[k].proc} {AE.TEST_LEVELS[k].label} ({model.tests.filter(t => t.level === k).length})</button>)}
+                {!sub && lvKeys.map(k => <button key={k} onClick={() => setVFilter(k)} style={{ ...small, padding: "5px 10px", color: cur === k ? "#fff" : T.muted, background: cur === k ? T.accent : "transparent", borderColor: cur === k ? T.accent : T.border }}>{AE.TEST_LEVELS[k].proc} {AE.TEST_LEVELS[k].label} ({model.tests.filter(t => t.level === k).length})</button>)}
                 <div style={{ flex: 1 }} />
                 {(() => { const mt = AE.missingTestTargets(model, lvKeys); return mt > 0 && model.tests.length > 0
                   ? <Btn onClick={() => { const x = AE.addMissingTests(model, lvKeys); set(n => { n.tests = x.tests; }); setNote(`시험 ${x.added.length}건(${x.added.slice(0, 8).join(", ")}${x.added.length > 8 ? " …" : ""})을 추가했습니다 — 기존 시험은 그대로입니다. 새 시험의 기대 결과·합격 기준을 다듬으세요.`); }} disabled={busy} title="시험이 하나도 없는 요구·인터페이스·유닛에만 규칙 시험을 추가합니다. 기존 시험의 ID·내용·교차검토 기록은 그대로입니다" style={{ fontSize: 11, padding: "4px 12px" }}>빠진 시험만 생성 ({mt}개 대상)</Btn>
@@ -9966,10 +10052,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                             <div style={{ fontSize: 11 }}><span style={{ color: sevC[f.sev], fontWeight: 700, marginRight: 6 }}>{sevL[f.sev]}</span>{f.msg}</div>
                             {f.bp && AE.bpKnown(f.bp) && <div style={{ fontSize: 10, color: T.muted }}>근거: {AE.bpLabel(f.bp, model.version)}</div>}
                             {f.bp === "CHANGE" && <div style={{ marginTop: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                              <button onClick={() => setTab("trace")} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>⑦ 변경 영향 검토로 이동</button>
+                              <button onClick={() => setTab("trace")} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>빠진 곳 점검 › 변경 영향 검토로 이동</button>
                               <span style={{ fontSize: 10, color: T.muted }}>요구를 고치면 자동으로 생기는 항목입니다. 하위(할당·파생 요구·시험)를 확인하고 판정하면 사라집니다. ✎로 요구를 다시 고쳐도 해소되지 않습니다.</span>
                             </div>}
-                            {ids.length > 0 && <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap" }}>{ids.map(id => idBtn(id, fk))}{f.count > ids.length && <span style={{ fontSize: 10, color: T.muted }}>… 외 {f.count - ids.length}건 (⑦ 추적성·충족도에서 전체 보기)</span>}</div>}
+                            {ids.length > 0 && <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap" }}>{ids.map(id => idBtn(id, fk))}{f.count > ids.length && <span style={{ fontSize: 10, color: T.muted }}>… 외 {f.count - ids.length}건 (빠진 곳 점검에서 전체 보기)</span>}</div>}
                             {ed && <div style={{ marginTop: 6 }}>{editorBox()}</div>}
                           </div>);
                       })}
@@ -10098,7 +10184,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               <AeSec title={`③ QA 담당자 판정 — 미판정 ${cnt.open} · 맞음 ${cnt.valid} · 틀림 ${cnt.invalid} · 보류 ${cnt.opinion}${cnt.edited ? ` · ✎ 수정함 ${cnt.edited}` : ""}${cnt.stale ? ` · 내용 변경됨 ${cnt.stale}` : ""}`}
                 right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정"], ["valid", "✓ 맞음"], ["invalid", "✕ 틀림"], ["opinion", "△ 보류"], ["edited", "✎ 수정함"], ["validTodo", "맞음인데 아직 안 고침"], ["all", "전체"]].map(([k, l]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.accent }}>{l}</button>)}</div>}>
                 <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 6, lineHeight: 1.6 }}>
-                  각 의견마다 <b>"AI의 이 지적이 맞는가?"</b>를 판정합니다. <b style={{ color: T.green }}>✓ 맞음</b> = 지적이 맞다 → 산출물을 고친다(✎ 대상 수정) · <b>✕ 틀림</b> = 지적이 틀리거나 이 과제에 맞지 않다 → 그대로 두고 사유를 적는다 · <b style={{ color: T.accent }}>△ 보류</b> = 지금 판단하기 어렵다 → 참고로 남긴다. ⑦ 변경 영향 검토의 '영향 없음·하위 수정 필요'와는 다른 판정입니다.
+                  각 의견마다 <b>"AI의 이 지적이 맞는가?"</b>를 판정합니다. <b style={{ color: T.green }}>✓ 맞음</b> = 지적이 맞다 → 산출물을 고친다(✎ 대상 수정) · <b>✕ 틀림</b> = 지적이 틀리거나 이 과제에 맞지 않다 → 그대로 두고 사유를 적는다 · <b style={{ color: T.accent }}>△ 보류</b> = 지금 판단하기 어렵다 → 참고로 남긴다. 빠진 곳 점검의 변경 영향 검토 '영향 없음·하위 수정 필요'와는 다른 판정입니다.
                 </div>
                 {!cnt.total && <div style={{ fontSize: 11, color: T.muted }}>아직 검토 AI 의견이 없습니다. ②에서 검토를 실행하세요.</div>}
                 {cnt.total > 0 && !list.length && <div style={{ fontSize: 11, color: T.muted }}>해당하는 항목이 없습니다.</div>}
@@ -10254,7 +10340,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     <b style={{ color: T.green }}>영향 없음</b><span>하위를 고칠 필요가 없음 → 연결을 그대로 인정합니다. (예: 검증 기준만 추가됐고 하위 요구 내용과 어긋나지 않음)</span>
                     <b style={{ color: T.red }}>하위 수정 필요</b><span>하위를 고쳐야 함 → 무엇을 고칠지 의견을 적고 누릅니다. 고친 뒤 <b>수정 완료</b>를 누르면 연결이 인정됩니다. (예: 시험의 합격 기준을 새 검증 기준에 맞춰 수정)</span>
                   </div>
-                  <div style={{ marginTop: 4 }}>판정은 추적 매트릭스의 '변경 영향·판정 이력' 시트에 남습니다. ⑧ QA 교차검토의 유효·무효(AI 의견이 맞는지)와는 다른 판정입니다.</div></div>}
+                  <div style={{ marginTop: 4 }}>판정은 추적 매트릭스의 '변경 영향·판정 이력' 시트에 남습니다. QA 교차검토의 유효·무효(AI 의견이 맞는지)와는 다른 판정입니다.</div></div>}
                 {Object.entries(groups).map(([up, ls]) => {
                   const cur = lstat.reqById[up];
                   const sus = ls.filter(l => l.state === "suspect");
@@ -10347,10 +10433,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 const fk = `cons${i}`, opened = !!open[fk];
                 const msg = String(f.msg || "");
                 const ready = /Draft인 요구/.test(msg) ? AE.reviewReadyReqs(model) : [];
-                const how = /검증 기준이 없는|모호어·정량 기준/.test(msg) ? "ID 옆 ✎를 눌러 검증 기준(합격·불합격을 가를 수치·조건)을 적으세요. 시스템 요구는 ② 요구 도출·명세의 [상세]에서 고쳐도 됩니다."
-                  : /합의되지 않은 이해관계자/.test(msg) ? "고객(OEM)과 요구 내용을 합의한 뒤 ② 요구 도출·명세의 이해관계자 요구 '합의' 칸을 '합의'로 바꾸세요. 합의 회의록 등 근거가 있을 때만 바꾸며, 착수 시점에는 '검토 중'으로 남아 있어도 됩니다(정보)."
-                  : /골격\(TBD\)/.test(msg) ? "착수 단계에서는 정상입니다. 코드가 나오면 ④ SW 탭 유닛 섹션에 .h 헤더를 끌어다 놓거나, 유닛 설계(알고리즘·동적 동작)를 작성하세요."
-                  : /Draft인 요구/.test(msg) ? "요구를 검토한 뒤 상태를 Reviewed(검토 완료)·Agreed(고객 합의)로 올립니다. 근거는 ⑧ QA 교차검토의 판정 기록입니다 — 아래 버튼은 교차검토가 끝난 요구만 Reviewed로 올립니다. Agreed는 고객 합의 후 각 요구의 상태 칸에서 직접 바꾸세요."
+                const how = /검증 기준이 없는|모호어·정량 기준/.test(msg) ? "ID 옆 ✎를 눌러 검증 기준(합격·불합격을 가를 수치·조건)을 적으세요. 시스템 요구는 SYS.2 시스템 요구의 [상세]에서 고쳐도 됩니다."
+                  : /합의되지 않은 이해관계자/.test(msg) ? "고객(OEM)과 요구 내용을 합의한 뒤 SYS.1 고객 요구의 이해관계자 요구 '합의' 칸을 '합의'로 바꾸세요. 합의 회의록 등 근거가 있을 때만 바꾸며, 착수 시점에는 '검토 중'으로 남아 있어도 됩니다(정보)."
+                  : /골격\(TBD\)/.test(msg) ? "착수 단계에서는 정상입니다. 코드가 나오면 SWE.3 상세설계 탭에 .h 헤더를 끌어다 놓거나, 유닛 설계(알고리즘·동적 동작)를 작성하세요."
+                  : /Draft인 요구/.test(msg) ? "요구를 검토한 뒤 상태를 Reviewed(검토 완료)·Agreed(고객 합의)로 올립니다. 근거는 QA 교차검토의 판정 기록입니다 — 아래 버튼은 교차검토가 끝난 요구만 Reviewed로 올립니다. Agreed는 고객 합의 후 각 요구의 상태 칸에서 직접 바꾸세요."
                   : /변경 영향 검토 대기|하위 수정 필요'로 판정/.test(msg) ? "이 화면 위쪽 '변경 영향 검토' 목록에서 하위 연결마다 '영향 없음' 또는 '하위 수정 필요'로 판정하세요. 요구를 고치면 자동으로 생기는 항목이며, 판정이 끝나면 사라집니다."
                   : /할당되지 않은|파생되지 않은|도출되지 않은|시험이 없는|연결되지 않은/.test(msg) ? "위 '추적·검증 커버리지'의 '빠짐 N건 →'을 누르면 해당 탭에서 빠진 항목과 처리 방법(💡)이 나옵니다."
                   : "ID를 확인해 해당 탭에서 바로잡으세요.";
@@ -10371,13 +10457,13 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                             {k && <button onClick={() => openEditC(ek, k, id)} title={`${id} 바로 수정`} style={{ ...small, padding: "0 5px", fontSize: 10, background: rvEdit?.fkey === ek ? T.accent : "none", color: rvEdit?.fkey === ek ? "#fff" : T.accent }}>✎</button>}
                           </span>); })}{f.count > ids.length && <span style={{ fontSize: 10, color: T.muted }}>… 외 {f.count - ids.length}건</span>}</div>}
                         {rvEdit?.fkey?.startsWith(fk + "|") && <div style={{ marginTop: 8 }}>{editorBoxC()}</div>}
-                        {/합의되지 않은 이해관계자/.test(msg) && <button onClick={() => setTab("req")} style={{ ...small, marginTop: 6 }}>② 요구 도출·명세로 이동</button>}
-                        {/골격\(TBD\)/.test(msg) && <button onClick={() => setTab("SW")} style={{ ...small, marginTop: 6 }}>④ SW 유닛으로 이동</button>}
+                        {/합의되지 않은 이해관계자/.test(msg) && <button onClick={() => setTab("req", "STK")} style={{ ...small, marginTop: 6 }}>SYS.1 고객 요구로 이동</button>}
+                        {/골격\(TBD\)/.test(msg) && <button onClick={() => setTab("SW", "unit")} style={{ ...small, marginTop: 6 }}>SWE.3 상세설계로 이동</button>}
                         {/Draft인 요구/.test(msg) && (
                           <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
                             <Btn disabled={busy || !ready.length} onClick={() => { if (!window.confirm(`교차검토가 끝난 요구 ${ready.length}건(현재 내용으로 검토됨 · 미판정 의견 없음 · 유효 의견은 수정 완료)의 상태를 Draft → Reviewed로 바꿉니다.\n변경은 수정 이력에 'QA 교차검토 근거'로 기록됩니다.\n\n계속할까요?`)) return; setModel(m => AE.markReviewed(m, ready)); setNote(`요구 ${ready.length}건을 Reviewed로 바꿨습니다 — 근거: QA 교차검토 판정 기록. 저장을 눌러 확정하세요.`); }} style={{ fontSize: 11, padding: "4px 10px" }}>교차검토 끝난 요구 {ready.length}건 → Reviewed</Btn>
-                            <button onClick={() => setTab("review")} style={small}>⑧ QA 교차검토로 이동</button>
-                            {!ready.length && <span style={{ fontSize: 10.5, color: T.muted }}>아직 교차검토·판정이 끝난 Draft 요구가 없습니다. ⑧에서 검토하고 의견을 모두 판정하면 여기서 올릴 수 있습니다.</span>}
+                            <button onClick={() => setTab("review")} style={small}>QA 교차검토로 이동</button>
+                            {!ready.length && <span style={{ fontSize: 10.5, color: T.muted }}>아직 교차검토·판정이 끝난 Draft 요구가 없습니다. QA 교차검토에서 검토하고 의견을 모두 판정하면 여기서 올릴 수 있습니다.</span>}
                           </div>)}
                       </div>)}
                   </div>);
@@ -10434,7 +10520,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                  │                    ▲
                  ▼                    │
               유닛(코드) ─────▶ 유닛 시험`}</div>
-                  <div style={{ color: T.muted, fontSize: 11, marginTop: 4 }}>왼쪽으로 내려가며 구체화하고(화살표), 오른쪽에서 같은 높이의 시험으로 확인합니다(점선). 어느 한 줄이 끊기면 ⑦에서 '빠짐'으로 보입니다.</div>
+                  <div style={{ color: T.muted, fontSize: 11, marginTop: 4 }}>왼쪽으로 내려가며 구체화하고(화살표), 오른쪽에서 같은 높이의 시험으로 확인합니다(점선). 어느 한 줄이 끊기면 '빠진 곳 점검'에서 '빠짐'으로 보입니다.</div>
                 </div>
                 <div>
                   <div style={{ fontWeight: 700, marginBottom: 4 }}>보통 진행하는 순서</div>

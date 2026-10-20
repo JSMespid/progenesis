@@ -1236,9 +1236,9 @@ export function changeFindings(model) {
   const F = [];
   const uniq = a => [...new Set(a)];
   const sus = st.links.filter(l => l.state === "suspect");
-  if (sus.length) { const ups = uniq(sus.map(l => l.up)); F.push({ sev: "error", bp: "CHANGE", msg: `[변경 영향 검토 대기] 요구 ${ups.length}건(${ups.slice(0, 3).join(", ")}${ups.length > 3 ? " …" : ""})을 고친 뒤 하위 연결 ${sus.length}건이 아직 확인되지 않음 — 고장이 아니라 '고친 뒤 하위를 확인했는가'가 비어 있는 상태. ⑦ 변경 영향 검토에서 '영향 없음' 또는 '하위 수정 필요'로 판정하면 해소`, ids: ups.slice(0, 30), count: ups.length }); }
+  if (sus.length) { const ups = uniq(sus.map(l => l.up)); F.push({ sev: "error", bp: "CHANGE", msg: `[변경 영향 검토 대기] 요구 ${ups.length}건(${ups.slice(0, 3).join(", ")}${ups.length > 3 ? " …" : ""})을 고친 뒤 하위 연결 ${sus.length}건이 아직 확인되지 않음 — 고장이 아니라 '고친 뒤 하위를 확인했는가'가 비어 있는 상태. '빠진 곳 점검'의 변경 영향 검토에서 '영향 없음' 또는 '하위 수정 필요'로 판정하면 해소`, ids: ups.slice(0, 30), count: ups.length }); }
   const inv = st.links.filter(l => l.state === "invalid");
-  if (inv.length) { const ds = uniq(inv.map(l => l.down)); F.push({ sev: "error", bp: "CHANGE", msg: `'하위 수정 필요'로 판정했지만 아직 완료 처리되지 않은 추적 연결 ${inv.length}건 — 하위 항목을 고친 뒤 ⑦에서 '✓ 수정 완료'`, ids: ds.slice(0, 30), count: ds.length }); }
+  if (inv.length) { const ds = uniq(inv.map(l => l.down)); F.push({ sev: "error", bp: "CHANGE", msg: `'하위 수정 필요'로 판정했지만 아직 완료 처리되지 않은 추적 연결 ${inv.length}건 — 하위 항목을 고친 뒤 '빠진 곳 점검'에서 '✓ 수정 완료'`, ids: ds.slice(0, 30), count: ds.length }); }
   const orp = st.links.filter(l => l.state === "orphan");
   if (orp.length) { const ds = uniq(orp.map(l => l.down)); F.push({ sev: "error", bp: "CHANGE", msg: `삭제된 상위 요구를 참조하는 추적 연결 ${orp.length}건 (고아 연결) — 연결 제거 또는 상위 재지정 필요`, ids: ds.slice(0, 30), count: ds.length }); }
   return F;
