@@ -7960,6 +7960,38 @@ function hw2ModelFiles(meta, ctx, folder = "HW4101_HW설계_모델") {
   files.push({ path: `${folder}/README.txt`, content: [`HWE.2 HW 설계 모델 — ${meta.name || ""}`, ``, `block/      : HW 아키텍처 블록도(04-52) SVG`, `schematics/ : 블록별 회로도(04-54) SVG — 넷 라벨 방식`, `EDA 교환 파일(${S.schematicFmt} 회로도 · ${S.layoutFmt} · ${S.fabFmt})은 다음 생성 단계에서 같은 폴더에 추가됩니다.`, `부품 PN은 AI 후보(BOM 14-54 참조). 모든 부품·넷·특성에 근거 HW 요구 ID가 기록됩니다.`].join("\n") });
   return files;
 }
+// ── 산출물 보기용 미리보기: 생성한 docx/xlsx 바이트를 HTML로 (외부 라이브러리 없이 문단·표·시트만) ──
+const PV_ESC = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const PV_UNESC = x => String(x).replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, d) => String.fromCharCode(d));
+async function previewOfficeBytes(bytes, ext) {
+  const files = await unzipBytes(bytes); const td = new TextDecoder(); const byPath = {}; files.forEach(f => { byPath[f.path] = f; });
+  const read = p => { const f = byPath[p]; return f ? (typeof f.content === "string" ? f.content : td.decode(f.content)) : ""; };
+  if (ext === "docx") {
+    const xml = read("word/document.xml"); const body = /<w:body>([\s\S]*)<\/w:body>/.exec(xml)?.[1] || xml;
+    const runText = p => [...p.matchAll(/<w:r\b[\s\S]*?<\/w:r>/g)].map(r => { const t = [...r[0].matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map(x => PV_UNESC(x[1])).join("") + (/<w:br\b/.test(r[0]) ? "\n" : ""); const b = /<w:b\b(?![^>]*w:val="0")/.test(r[0]); return b ? `<b>${PV_ESC(t)}</b>` : PV_ESC(t); }).join("").replace(/\n/g, "<br/>");
+    const para = p => { const sz = Number(/<w:sz w:val="(\d+)"/.exec(p)?.[1] || 22); const jc = /<w:jc w:val="(center|right)"/.exec(p)?.[1]; const txt = runText(p); if (!txt.trim() && !/<w:drawing/.test(p)) return `<div style="height:6px"></div>`; const h = sz >= 32 ? "h1" : sz >= 26 ? "h2" : sz >= 24 ? "h3" : null; return h ? `<${h} style="margin:14px 0 6px;font-size:${sz / 2 + 2}px">${txt}</${h}>` : `<p style="margin:0 0 6px;font-size:${Math.max(11, sz / 2)}px;${jc ? `text-align:${jc};` : ""}line-height:1.6">${txt}</p>`; };
+    const cell = c => { const ps = [...c.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)].map(m => runText(m[0])).filter(Boolean).join("<br/>"); const shade = /<w:shd\b[^>]*w:fill="([0-9A-Fa-f]{6})"/.exec(c)?.[1]; const span = /<w:gridSpan w:val="(\d+)"/.exec(c)?.[1]; return `<td${span ? ` colspan="${span}"` : ""} style="border:1px solid #bbb;padding:4px 6px;vertical-align:top;font-size:11.5px;${shade && shade !== "FFFFFF" && shade !== "auto" ? `background:#${shade};` : ""}">${ps || "&nbsp;"}</td>`; };
+    const table = t => `<table style="border-collapse:collapse;margin:6px 0 12px;width:100%">${[...t.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)].map(tr => `<tr>${[...tr[0].matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)].map(tc => cell(tc[0])).join("")}</tr>`).join("")}</table>`;
+    // 본문을 최상위 요소 순서대로(문단·표) 순회
+    const out = []; const re = /<w:tbl\b[\s\S]*?<\/w:tbl>|<w:p\b[\s\S]*?<\/w:p>/g; let m, n = 0;
+    while ((m = re.exec(body)) && n < 4000) { out.push(m[0].startsWith("<w:tbl") ? table(m[0]) : para(m[0])); n++; }
+    return { kind: "html", html: `<div style="font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#222;background:#fff;padding:22px 28px;max-width:900px">${out.join("")}</div>` };
+  }
+  // xlsx: 시트별 표
+  const unesc = PV_UNESC;
+  const sst = [...read("xl/sharedStrings.xml").matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => unesc([...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("")));
+  const wbXml = read("xl/workbook.xml"), relXml = read("xl/_rels/workbook.xml.rels"); const relMap = {};
+  [...relXml.matchAll(/<Relationship\b[^>]*>/g)].forEach(m => { const id = /Id="([^"]+)"/.exec(m[0]); const tg = /Target="([^"]+)"/.exec(m[0]); if (id && tg) relMap[id[1]] = tg[1]; });
+  const sheets = [...wbXml.matchAll(/<sheet\b[^>]*>/g)].map(m => ({ name: unesc(/name="([^"]+)"/.exec(m[0])?.[1] || ""), rid: /r:id="([^"]+)"/.exec(m[0])?.[1] || "" })).map(s => ({ ...s, path: relMap[s.rid] ? "xl/" + relMap[s.rid].replace(/^\//, "").replace(/^xl\//, "") : "" })).filter(s => byPath[s.path]);
+  const colIdx = ref => { const L = /^[A-Z]+/.exec(ref)?.[0] || "A"; let n = 0; for (const ch of L) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
+  const cellText = (attrs, inner) => { if (/t="s"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner || ""); return v ? (sst[Number(v[1])] || "") : ""; } if (/t="inlineStr"/.test(attrs)) return unesc([...(inner || "").matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("")); const v = /<v>([\s\S]*?)<\/v>/.exec(inner || ""); return v ? unesc(v[1]) : ""; };
+  const out = sheets.map(sh => { const xml = read(sh.path); const sd = /<sheetData>([\s\S]*?)<\/sheetData>/.exec(xml)?.[1] || ""; const merges = [...xml.matchAll(/<mergeCell ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"/g)].map(m => ({ c1: colIdx(m[1]), r1: Number(m[2]), c2: colIdx(m[3]), r2: Number(m[4]) }));
+    const rows = [...sd.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)].map(m => { const rn = Number(/r="(\d+)"/.exec(m[1])?.[1] || 0); const cells = {}; [...(m[2] || "").matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)].forEach(c => { const ref = /r="([A-Z]+\d+)"/.exec(c[1])?.[1]; if (ref) cells[colIdx(ref)] = cellText(c[1], c[2]); }); return { rn, cells }; }).filter(r => Object.keys(r.cells).length);
+    const maxC = Math.max(0, ...rows.flatMap(r => Object.keys(r.cells).map(Number))); const skip = new Set(); merges.forEach(mg => { for (let r = mg.r1; r <= mg.r2; r++) for (let c = mg.c1; c <= mg.c2; c++) if (!(r === mg.r1 && c === mg.c1)) skip.add(`${r}:${c}`); });
+    const html = `<table style="border-collapse:collapse;font-size:11px;white-space:pre-wrap">${rows.slice(0, 600).map(r => `<tr>${Array.from({ length: maxC + 1 }, (_, c) => { if (skip.has(`${r.rn}:${c}`)) return ""; const mg = merges.find(x => x.r1 === r.rn && x.c1 === c); const span = mg ? ` colspan="${mg.c2 - mg.c1 + 1}" rowspan="${mg.r2 - mg.r1 + 1}"` : ""; const v = r.cells[c] ?? ""; return `<td${span} style="border:1px solid #ccc;padding:3px 6px;vertical-align:top;min-width:40px">${PV_ESC(v)}</td>`; }).join("")}</tr>`).join("")}</table>${rows.length > 600 ? `<div style="padding:6px;color:#777">… ${rows.length - 600}행 더 있음</div>` : ""}`;
+    return { name: sh.name, html }; });
+  return { kind: "sheets", sheets: out };
+}
 async function downloadAspicePackage(meta, ctx) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
   const order = ASPICE_PKG_ORDER;
@@ -8963,7 +8995,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [hdView, setHdView] = useState({ comp: null, kind: "schematic" });   // HWE.2 회로 설계 보기
   const [artSel, setArtSel] = useState(null);   // 산출물 보기: 선택 항목 { type: doc|svg|code|text|table, ... }
   const [artQ, setArtQ] = useState("");         // 산출물 보기 필터
-  const zipAllBusy = useRef(false);   // mode: diagram | code   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
+  const zipAllBusy = useRef(false);
+  const [artPrev, setArtPrev] = useState(null);   // 문서 미리보기 { key, kind: html|sheets|loading|error, html, sheets, tab, bytes, ext }   // mode: diagram | code   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
   // 커버리지 "빠짐 N건" → 해당 탭으로 이동해 미연결 항목만 표시 ({ tab, level?, ids:Set, q })
   const [focus, setFocus] = useState(null);
   const focusOn = tab === focus?.tab ? focus : null;
@@ -10685,6 +10718,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             const vis = groups.map(g => ({ ...g, items: g.items.filter(it => !q || `${g.name} ${it.label} ${it.sub || ""}`.toLowerCase().includes(q)) })).filter(g => g.items.length);
             const total = groups.reduce((n, g) => n + g.items.length, 0);
             const sel = artSel && groups.flatMap(g => g.items).find(it => it.key === artSel) || null;
+            const loadPrev = async (it) => { if (!it || it.type !== "doc" || (artPrev && artPrev.key === it.key && artPrev.kind !== "error")) return; setArtPrev({ key: it.key, kind: "loading" }); try { const of = await buildVmodelDoc(it.kind, metaF, artCtx); if (!of) { setArtPrev({ key: it.key, kind: "error", msg: "생성할 내용이 없습니다." }); return; } const pv = await previewOfficeBytes(of.bytes, of.ext); setArtPrev({ key: it.key, ...pv, tab: 0, bytes: of.bytes, ext: of.ext }); } catch (e) { setArtPrev({ key: it.key, kind: "error", msg: e.message }); } };
+            if (sel && sel.type === "doc" && (!artPrev || artPrev.key !== sel.key)) setTimeout(() => loadPrev(sel), 0);
             const dlDoc = async (it) => { try { setNote(`${it.label} 생성 중…`); const of = await buildVmodelDoc(it.kind, metaF, artCtx); if (!of) { setErr("생성할 내용이 없습니다."); return; } dl(`${AE.ASPICE_DOCS[it.kind].code}_${sanitize(AE.ASPICE_DOCS[it.kind].title)}.${of.ext}`, of.bytes, of.ext === "xlsx" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"); setNote(`${it.label} 내려받음`); } catch (e) { setErr(`${it.label} 생성 실패: ${e.message}`); } };
             const dlAll = () => { if (busy || zipAllBusy.current) return; zipAllBusy.current = true; setNote("전체 산출물 ZIP 생성 중… (V-모델 산출물 ZIP과 동일)"); downloadAspicePackage(metaF, artCtx).then(() => setNote("전체 산출물 ZIP 내려받음")).catch(e => setErr("ZIP 실패: " + e.message)).finally(() => { zipAllBusy.current = false; }); };
             return (
@@ -10707,15 +10742,23 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   </div>
                 </div>
                 <div style={{ border: `1px solid ${T.border}`, borderRadius: 9, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: 640 }}>
-                  {!sel && <div style={{ padding: 16, fontSize: 11.5, color: T.muted }}>왼쪽에서 산출물을 고르세요. 다이어그램·회로도·코드·표는 여기서 바로 보이고, Word·Excel 문서는 내려받기로 확인합니다. 모든 항목은 '전체 ZIP 다운로드'에도 같은 내용으로 들어갑니다.</div>}
+                  {!sel && <div style={{ padding: 16, fontSize: 11.5, color: T.muted }}>왼쪽에서 산출물을 고르세요. 문서(Word·Excel)·다이어그램·회로도·코드·표가 모두 여기서 바로 보입니다(문서는 현재 모델로 생성해 미리보기로 변환 — 서식은 단순화됨). 모든 항목은 '전체 ZIP 다운로드'에도 같은 내용으로 들어갑니다.</div>}
                   {sel && (
                     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.bg, borderBottom: `1px solid ${T.border}` }}>
                       <b style={{ fontSize: 12 }}>{sel.label}</b><span style={{ fontSize: 10, color: T.muted }}>{sel.sub}</span><div style={{ flex: 1 }} />
-                      {sel.type === "doc" && <button onClick={() => dlDoc(sel)} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>⬇ 문서 내려받기</button>}
+                      {sel.type === "doc" && <button onClick={() => { if (artPrev?.key === sel.key && artPrev.bytes) dl(`${AE.ASPICE_DOCS[sel.kind].code}_${sanitize(AE.ASPICE_DOCS[sel.kind].title)}.${artPrev.ext}`, artPrev.bytes, artPrev.ext === "xlsx" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"); else dlDoc(sel); }} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>⬇ 문서 내려받기</button>}
                       {(sel.type === "svg" || sel.type === "code" || sel.type === "text") && <button onClick={() => dl(sel.file, sel.get(), sel.type === "svg" ? "image/svg+xml" : sel.mime || "text/plain")} style={small}>⬇ {sel.file}</button>}
                       {sel.type === "table" && sel.xlsx && <button onClick={() => dl(sel.file, sel.xlsx(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")} style={small}>⬇ xlsx</button>}
                     </div>)}
-                  {sel?.type === "doc" && (() => { const D = AE.ASPICE_DOCS[sel.kind]; return (
+                  {sel?.type === "doc" && artPrev?.key === sel.key && artPrev.kind === "loading" && <div style={{ padding: 16, fontSize: 11.5, color: T.muted }}>⏳ 문서를 생성해 미리보기로 바꾸는 중…</div>}
+                  {sel?.type === "doc" && artPrev?.key === sel.key && artPrev.kind === "error" && <div style={{ padding: 16, fontSize: 11.5, color: T.red }}>미리보기 실패: {artPrev.msg}</div>}
+                  {sel?.type === "doc" && artPrev?.key === sel.key && artPrev.kind === "html" && <div style={{ overflow: "auto", flex: 1, background: "#E9EBEF" }}><div dangerouslySetInnerHTML={{ __html: artPrev.html }} /></div>}
+                  {sel?.type === "doc" && artPrev?.key === sel.key && artPrev.kind === "sheets" && (
+                    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+                      <div style={{ display: "flex", gap: 3, padding: "6px 8px", background: T.bg, borderBottom: `1px solid ${T.border}`, flexWrap: "wrap" }}>{artPrev.sheets.map((sh, i) => <button key={i} onClick={() => setArtPrev(v => ({ ...v, tab: i }))} style={{ ...small, padding: "3px 9px", color: artPrev.tab === i ? "#fff" : T.muted, background: artPrev.tab === i ? T.accent : "transparent", borderColor: artPrev.tab === i ? T.accent : T.border }}>{sh.name}</button>)}</div>
+                      <div style={{ overflow: "auto", flex: 1, background: "#fff", color: "#222", padding: 8 }} dangerouslySetInnerHTML={{ __html: artPrev.sheets[artPrev.tab]?.html || "" }} />
+                    </div>)}
+                  {sel?.type === "doc" && !(artPrev?.key === sel.key) && (() => { const D = AE.ASPICE_DOCS[sel.kind]; return (
                     <div style={{ padding: 14, fontSize: 11.5, lineHeight: 1.7 }}>
                       <div><b>{D.code} {D.title}</b> — {AE.procLabel(D.proc.split("~")[0], V)}</div>
                       <div style={{ color: T.muted }}>정보항목: {AE.wpLabel(sel.kind, V)}</div>
