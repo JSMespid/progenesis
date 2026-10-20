@@ -9141,16 +9141,13 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       const seed = form?.id || form?.name || "project";
       const settings = AE.ddSettings(n);
       let done = 0, aiOk = 0, ruleN = 0;
-      for (const u of targets) {
-        const idx = n.units.SW.findIndex(x => x.id === u.id); if (idx < 0) continue;
-        const base = 5 + (done / targets.length) * 90, step = 90 / targets.length;
-        setProg({ percent: base, label: `${n.useAI ? "AI: " : "규칙: "}${u.id} ${u.name} — 정적 구조 설계 중… (${done + 1}/${targets.length})` });
+      const designOne = async (u) => {
+        const idx = n.units.SW.findIndex(x => x.id === u.id); if (idx < 0) return;
         let dd = null;
         if (n.useAI) {
           try {
             const a = await callClaudeJson(AE.promptDDStructure({ unit: u, model: n, version: V, settings }), 5000);
             const st = AE.normalizeDD(a, u, n, seed);
-            setProg({ percent: base + step * 0.5, label: `AI: ${u.id} ${u.name} — 상태 머신·시퀀스·액티비티 설계 중… (${done + 1}/${targets.length})` });
             let b = {};
             try { b = await callClaudeJson(AE.promptDDBehavior({ unit: u, model: n, version: V, settings, structure: st }), 5000); } catch (_) { b = {}; }
             dd = AE.normalizeDD({ ...(a || {}), ...(b || {}) }, u, n, seed); aiOk++;
@@ -9162,7 +9159,12 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           desc: /TBD/.test(cur.desc || "") || !cur.desc ? dd.summary : cur.desc,
           funcs: (cur.funcs || []).length ? cur.funcs : dd.classes.flatMap(c => c.ops.map(o => ({ ret: o.ret, name: o.name, params: o.params.map(pp => `${pp.type} ${pp.name}`).join(", ") }))) };
         done++;
-      }
+        setProg({ percent: 5 + (done / targets.length) * 90, label: `${n.useAI ? "AI: " : "규칙: "}상세설계 ${done}/${targets.length} 유닛 완료 — ${u.id} ${u.name}` });
+      };
+      // 유닛 3개씩 동시 설계 (유닛당 AI 2회 호출 → 92개 유닛이면 순차 처리 시 30분 이상 걸리므로)
+      const CONC = n.useAI ? 3 : 20;
+      setProg({ percent: 5, label: `${n.useAI ? "AI: " : "규칙: "}상세설계 시작 — ${targets.length}개 유닛 (${CONC}개씩 동시)` });
+      for (let i = 0; i < targets.length; i += CONC) await Promise.all(targets.slice(i, i + CONC).map(designOne));
       setModel(n);
       if (targets.length === 1) setDdView({ unit: targets[0].id, kind: "component" });
       return `유닛 ${done}개 상세설계 완료 (AI ${aiOk} · 규칙 ${ruleN}) — 각 유닛의 [다이어그램]에서 7종을 확인하세요. 설계 요소마다 근거 SW 요구 ID가 기록되며, QA 교차검토 대상에 포함됩니다.`;
@@ -9725,7 +9727,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           {focusOn && (() => {
             const k = String(focusOn.key || "");
             const tip = /Alloc$/.test(k) && /^(sw|hw)/.test(k) ? "처리: 아래 요구의 '할당 →'에서 담당 컴포넌트 칩을 눌러 지정하세요(여러 개 가능, 다시 누르면 해제). 'AI 컴포넌트 설계·할당'은 전체를 다시 만들므로 누르지 마세요."
-              : k === "swUnit" ? "처리: 먼저 이 요구에 담당 컴포넌트를 할당한 뒤, 아래 'SW 유닛·상세설계 골격'의 [빠진 유닛만 추가]를 누르세요. 기존 유닛은 그대로 둡니다."
+              : k === "swUnit" ? "처리: 먼저 이 요구에 담당 컴포넌트를 할당한 뒤, 아래 'SW 유닛 분해'의 [빠진 유닛만 추가]를 누르세요. 기존 유닛은 그대로 둡니다."
               : /Derive$/.test(k) && k !== "stkDerive" ? "처리: 아래 주황 상자의 [이 요구에서 파생]을 누르세요. 기존 하위 요구·할당은 그대로 둡니다."
               : focusOn.tab === "verif" ? "처리: 위의 [빠진 시험만 생성]을 누르세요. 기존 시험의 ID·내용·검토 기록은 그대로 둡니다. 생성 후 기대 결과·합격 기준을 다듬으세요."
               : "";
@@ -9867,7 +9869,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             <AeSec title={`${lv} 인터페이스 ${model.interfaces[lv].length}건`}>{IfList({ lv: lv })}</AeSec></>)}
             {lv === "SW" && (!sub || sub === "unit") && (
               <FileDrop bare accept=".h,.hpp,.txt" multiple onFiles={fs => onHeaders(asFileEvent(fs))} dropLabel="여기에 놓으면 C 헤더에서 유닛 인터페이스를 가져옵니다 (.h · .hpp · .txt · 여러 개 가능)">
-              <AeSec title={`SW 유닛·상세설계 골격 ${model.units.SW.length}개 (${AE.procLabel("SWE.3", V)})`}
+              <AeSec title={`SW 유닛 분해 ${model.units.SW.length}개 (${AE.procLabel("SWE.3", V)}) — 상세설계는 아래 섹션`}
                 right={<div style={{ display: "flex", gap: 6 }}>
                   <label title="헤더 파일을 이 섹션으로 끌어다 놓아도 됩니다" style={{ ...small, display: "inline-block", padding: "4px 10px" }}>📎 .h 헤더 가져오기 (끌어다 놓기 가능)<input type="file" accept=".h,.hpp,.txt" multiple onChange={onHeaders} style={{ display: "none" }} /></label>
                   {(() => { const r = AE.addMissingUnits(model); return model.units.SW.length > 0 && r.added.length > 0
@@ -9875,9 +9877,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     : null; })()}
                   <Btn variant={model.units.SW.length ? "outline" : undefined} onClick={() => { if (model.units.SW.some(u => u.origin === "rule") && !window.confirm("규칙으로 만든 유닛을 모두 다시 만들고 유닛 번호를 다시 매깁니다.\n이 화면이나 교차검토에서 고친 유닛 설계, SWE.4 유닛 시험, 유닛 교차검토 기록이 바뀔 수 있습니다(헤더로 가져온 유닛은 유지).\n빠진 것만 채우려면 [빠진 유닛만 추가]를 쓰세요.\n\n계속할까요?")) return; genUnits(); }} disabled={busy || !model.comps.SW.length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.units.SW.length ? "⚙ 골격 다시 생성" : "⚙ 규칙 골격 생성"}</Btn>
                 </div>}>
-                <WhyBox title="상세설계는 왜 '골격'까지만 만들고, 헤더 파일로 채우나요?">
-                  상세설계서(SWE.3)의 핵심은 <b>유닛의 알고리즘·자료구조·동적 동작</b>인데, 이것은 실제 코드가 있어야 맞게 쓸 수 있습니다. 착수 단계에서 AI가 지어내면 나중에 코드와 다른 "그럴듯한 설계서"가 되고, 심사에서는 설계와 코드의 일관성을 보기 때문에 오히려 불리합니다.
-                  그래서 SPIDer는 <b>근거가 있는 것만</b> 만듭니다. ① SW 요구를 담당 컴포넌트별 유닛으로 나누고 요구↔유닛 추적을 잡는 골격(규칙 기반, AI 미사용), ② 기존 코드가 있으면 C 헤더(.h)에서 함수 원형·자료형·상수를 읽어 유닛 인터페이스를 채우는 것(코드가 근거)입니다. 알고리즘·동적 동작은 <b>TBD</b>로 남겨 코드 확정 후 채우게 하고, SWE.4 유닛 검증 명세는 정적 검증·커버리지 기준의 틀만 만듭니다.
+                <WhyBox title="상세설계는 어떤 순서로 만들어지나요? (유닛 분해 → AI 전체 설계 → 코드)">
+                  ① 먼저 SW 요구를 담당 컴포넌트별 <b>유닛</b>으로 나누어 요구↔유닛 추적을 잡습니다(규칙 기반). 기존 코드가 있으면 C 헤더(.h)에서 함수 원형·자료형·상수를 읽어 유닛 인터페이스로 삼습니다.
+                  ② 아래 <b>SWE.3 상세설계</b>에서 AI가 유닛마다 정적 구조(클래스·포트·Runnable·자료형·알고리즘)와 동적 동작(상태 머신·시퀀스·액티비티)을 <b>전부</b> 작성합니다. 지어내는 것이 아니라 할당 SW 요구·상위 시스템 요구·컴포넌트 인터페이스·운영 모드를 근거로 쓰고, 모든 요소에 <b>근거 요구 ID</b>를 남겨 심사에서 "설계 근거"에 답할 수 있게 합니다.
+                  ③ 그 설계가 다이어그램 7종(UML·SysML)·XMI 2.1(EA 17.2 가져오기)·MISRA 준거 코드(AUTOSAR CP C / AP C++)의 단일 입력이 되므로 설계와 코드가 어긋나지 않습니다. 생성된 설계는 QA 교차검토(검토 AI + 사람 판정)를 거친 뒤 확정하세요.
                 </WhyBox>
                 {!model.comps.SW.length && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 6 }}>SW 컴포넌트를 먼저 설계하세요. 유닛은 컴포넌트 아래에 만들어집니다.</div>}
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
