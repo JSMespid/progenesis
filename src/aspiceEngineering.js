@@ -573,7 +573,8 @@ export function emptyModel() {
 // 이전 생성본의 클래스명이 한글→"____"로 저장된 경우를 영문 식별자로 복구 (코드 파일명·XMI·다이어그램 공통)
 function repairUnitDD(u) {
   const dd = u && u.dd; if (!dd || !Array.isArray(dd.classes) || !dd.classes.length) return u;
-  const bad = n => !n || /^_*$/.test(n) || n === "Unnamed";
+  // 영문자 3개 미만이거나 밑줄이 3개 이상 이어지는 이름(한글이 _로 치환된 흔적)은 비정상으로 본다
+  const bad = n => !n || n === "Unnamed" || (String(n).match(/[A-Za-z]/g) || []).length < 3 || /_{3,}/.test(n) || /^_{2,}/.test(n);
   if (!dd.classes.some(c => bad(c.name))) return u;
   const base = asciiName(u.name, `Unit_${String(u.id || "").replace(/[^A-Za-z0-9]/g, "_")}`);
   const map = {}; let k = 0;
@@ -2103,7 +2104,7 @@ export function emptyDD() {
 }
 const cid = s => String(s || "").trim().replace(/[^A-Za-z0-9_]/g, "_").replace(/^(\d)/, "_$1").slice(0, 60) || "Unnamed";
 // 한글 이름 → 코드·파일명용 ASCII 식별자. 영문이 없으면 fallback(유닛 ID 기반)으로 — "____.c" 같은 파일명 방지
-export const asciiName = (s, fallback) => { const c = cid(String(s || "").replace(/\s+/g, "_")); return /^[_]*$/.test(c) || c === "Unnamed" ? cid(fallback || "Unit") : c; };
+export const asciiName = (s, fallback) => { const c = cid(String(s || "").replace(/\s+/g, "_")); const weak = c === "Unnamed" || (c.match(/[A-Za-z]/g) || []).length < 3 || /_{3,}/.test(c) || /^_{2,}/.test(c); return weak ? cid(fallback || "Unit") : c; };
 const unitIdent = u => asciiName(u?.name, `Unit_${String(u?.id || "").replace(/[^A-Za-z0-9]/g, "_")}`);
 const arr = x => (Array.isArray(x) ? x : []);
 const str = (x, n = 400) => String(x == null ? "" : x).slice(0, n);
