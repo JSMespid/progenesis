@@ -7654,7 +7654,7 @@ function makeAspiceUnitDesignDocx(meta, ctx, doc) {
   let sec = 0;
   body += docxP(`${++sec}. 개요 및 작성 원칙`, { bold: true, size: 26, spacingAfter: 120 }) +
     docxP("본 문서는 SW 아키텍처(SWE.2)의 컴포넌트를 유닛으로 분해하고, SW 요구사항을 유닛에 할당하며(요구 ↔ 유닛 추적), 유닛 인터페이스·자료형·상수를 정의한다.") +
-    docxP("작성 원칙: 유닛의 알고리즘·자료구조·동적 동작(호출 순서·상태)은 실제 코드가 있어야 정확히 기술할 수 있으므로, 착수 단계에서는 근거가 있는 부분(유닛 분해·요구 추적·헤더 파일에서 읽은 인터페이스)만 채우고 나머지는 TBD로 둔다. 코드가 확정되면 TBD 항목을 채워 설계와 코드의 일관성(SWE.3 BP 양방향 추적·일관성)을 확보한다.", { size: 20, spacingAfter: 120 }) +
+    docxP((() => { const S = AE.ddSettings(model); const dd = units.filter(u => u.dd?.classes?.length).length; return dd ? `작성 원칙: 유닛마다 정적 구조(클래스·포트·Runnable·자료형·알고리즘)와 동적 동작(상태 머신·시퀀스·액티비티)을 할당 SW 요구·상위 시스템 요구·컴포넌트 인터페이스·운영 모드를 근거로 설계하고, 모든 설계 요소에 근거 요구 ID를 기록한다(상세설계 ${dd}/${units.length} 유닛). 이 설계는 다이어그램(UML 2.5·SysML)·XMI 2.1(모델링 도구 교환)·소스코드(${AE.DD_TARGETS[S.target].label}, AUTOSAR ${S.release}, ${S.target === "CP" ? S.misraC : S.misraCpp + " · " + S.cppGuide} 준거)의 단일 입력이며, 다이어그램·XMI·소스는 산출물 ZIP의 'SW4101_상세설계_모델' 폴더에 포함된다. MISRA 준수의 최종 판정은 정적분석 도구(${S.tools.join(" · ")}) 결과로 한다.` : "작성 원칙: 유닛의 알고리즘·자료구조·동적 동작은 V-모델 SWE.3 탭의 상세설계 생성으로 작성한다(현재 미생성 — 유닛 분해·요구 추적·헤더 인터페이스만 기재)."; })(), { size: 20, spacingAfter: 120 }) +
     docxP(`유닛 출처 표기: '헤더' = C 헤더 파일에서 함수 원형·자료형·상수를 추출(코드가 근거) / '규칙' = SW 요구 → 유닛 1:1 골격(AI 미사용) / '수동' = 직접 작성.`, { size: 18, spacingAfter: 120 });
   body += docxP(`${++sec}. 유닛 분해 (컴포넌트 → 유닛)`, { bold: true, size: 26, spacingAfter: 120 }) +
     docxTable([["유닛 ID", "유닛명", "SW 컴포넌트", "할당 SW 요구", "출처", "설계 상태"], ...units.map(u => [u.id, u.name || "", u.comp ? `${u.comp} ${comp[u.comp]?.name || ""}` : "-", (u.reqs || []).join(", ") || "-", u.origin === "header" ? `헤더 (${u.file})` : u.origin === "manual" ? "수동" : "규칙 골격", u.designDone ? "작성" : "TBD"])], -1);
@@ -7667,10 +7667,21 @@ function makeAspiceUnitDesignDocx(meta, ctx, doc) {
       ["인터페이스(함수)", (u.funcs || []).length ? u.funcs.map(f => `${f.ret} ${f.name}(${f.params || "void"})`).join("; ") : "TBD — 코드·헤더 확정 후 기재"],
       ["자료형", (u.types || []).join(", ") || "TBD"],
       ["상수·설정값", (u.macros || []).map(x => `${x.name} = ${x.value}`).join("; ") || "TBD"],
-      ["알고리즘·처리 흐름", "TBD — 코드 확정 후 기술 (의사코드·흐름도)"],
-      ["동적 동작(호출 순서·상태·타이밍)", "TBD — 플랫폼(OS·BSW)·코드 확정 후 기술"],
-      ["오류 처리·진단", "TBD"],
+      ["알고리즘·처리 흐름", u.dd?.classes?.length ? "아래 '연산·알고리즘' 표 및 액티비티 다이어그램 참조" : "TBD — 상세설계 미생성"],
+      ["동적 동작(호출 순서·상태·타이밍)", u.dd?.classes?.length ? `상태 ${u.dd.states.states.length}·전이 ${u.dd.states.transitions.length} / 시나리오 ${u.dd.sequences.length} / Runnable ${u.dd.runnables.map(r => `${r.name}(${r.trigger}${r.periodMs ? " " + r.periodMs + "ms" : ""})`).join(", ")}` : "TBD — 상세설계 미생성"],
+      ["오류 처리·진단", u.dd?.classes?.length ? (u.dd.states.states.filter(x => /ERR|FAULT|DEGRAD|SAFE/i.test(x.name)).map(x => `${x.name}: ${x.entry || x.desc || ""}`).join("; ") || "상태 머신의 고장 상태 없음 — 요구 검토 필요") : "TBD"],
     ], 1);
+    const d = u.dd;
+    if (d?.classes?.length) {
+      body += docxP("구조 — 클래스·속성", { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["클래스", "스테레오타입", "속성 (가시성 이름: 형 = 초기값)", "설명", "근거 요구"], ...d.classes.map(c => [c.name, c.stereotype || "class", c.attrs.map(a => `${a.vis} ${a.name}: ${a.type}${a.init ? " = " + a.init : ""}`).join("\n") || "-", c.desc || "", (c.reqs || []).join(", ") || "-"])], -1);
+      body += docxP("연산·알고리즘", { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["연산", "시그니처", "알고리즘(단계)", "사전/사후 조건", "근거 요구"], ...d.classes.flatMap(c => c.ops.map(o => [`${c.name}::${o.name}`, `${o.ret} ${o.name}(${o.params.map(pp => `${pp.dir !== "in" ? pp.dir + " " : ""}${pp.type} ${pp.name}`).join(", ")})`, (o.algo || []).map((x, i) => `${i + 1}. ${x}`).join("\n") || o.desc || "-", [o.pre && `pre: ${o.pre}`, o.post && `post: ${o.post}`].filter(Boolean).join("\n") || "-", (o.reqs || []).join(", ") || "-"]))], -1);
+      body += docxP("포트·인터페이스", { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["포트", "방향", "종류", "인터페이스", "데이터 요소 (이름: 형 [단위/범위])", "출처"], ...d.ports.map(pp => [pp.name, pp.dir === "R" ? "Required(수신)" : "Provided(송신)", pp.kind, pp.interface, pp.elements.map(e => `${e.name}: ${e.type}${e.unit || e.range ? ` [${[e.unit, e.range].filter(Boolean).join(" / ")}]` : ""}`).join("\n"), pp.source || "-"])], -1);
+      body += docxP("Runnable(스케줄링)", { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["Runnable", "트리거", "읽기(포트)", "쓰기(포트)", "호출 연산", "근거 요구"], ...d.runnables.map(r => [r.name, r.trigger === "periodic" ? `주기 ${r.periodMs}ms` : r.trigger === "init" ? "초기화" : `이벤트 ${r.event || ""}`, r.reads.join(", ") || "-", r.writes.join(", ") || "-", r.calls.join(", ") || "-", (r.reqs || []).join(", ") || "-"])], -1);
+      if (d.states.states.length) body += docxP(`상태 머신 (초기 상태 ${d.states.initial})`, { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["상태", "entry / do / exit", "설명"], ...d.states.states.map(x => [x.name, [x.entry && `entry: ${x.entry}`, x.do && `do: ${x.do}`, x.exit && `exit: ${x.exit}`].filter(Boolean).join("\n") || "-", x.desc || ""])], -1) + docxTable([["From", "To", "트리거", "Guard", "Effect", "근거 요구"], ...d.states.transitions.map(t => [t.from, t.to, t.trigger || "-", t.guard || "-", t.effect || "-", (t.reqs || []).join(", ") || "-"])], -1);
+      d.sequences.forEach(sq => { body += docxP(`시퀀스 — ${sq.name}${sq.desc ? ": " + sq.desc : ""}`, { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["#", "From", "To", "메시지(인자)", "반환", "비고"], ...sq.steps.map((st, i) => [String(i + 1), st.from, st.to, `${st.msg}(${st.args || ""})`, st.ret || "-", st.note || ""])], -1); });
+      d.activities.forEach(a => { body += docxP(`액티비티 — ${a.name} (연산 ${a.op})`, { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["노드", "종류", "내용", "다음 (guard)"], ...a.nodes.map(n => [n.id, n.kind, n.text || "-", a.edges.filter(e => e.from === n.id).map(e => `${e.to}${e.guard ? ` [${e.guard}]` : ""}`).join(", ") || "-"])], -1); });
+      if (d.code) body += docxP(`소스코드: ${d.code.files.map(f => f.name).join(", ")} (${AE.DD_TARGETS[d.code.target]?.label}) — 산출물 ZIP 'SW4101_상세설계_모델/src_${d.code.target}' 폴더`, { size: 18, spacingAfter: 60 });
+    }
   });
   body += docxP(`${++sec}. SW 요구 ↔ 유닛 추적 (${AE.bpLabel("SW_UNIT", model.version)})`, { bold: true, size: 26, spacingAfter: 120 }) +
     docxTable([["SW 요구 ID", "요구사항명", "할당 유닛", "판정"], ...model.reqs.SW.map(r => { const us = units.filter(u => (u.reqs || []).includes(r.id)); return [r.id, r.title || "", us.map(u => `${u.id} ${u.name}`).join(", ") || "-", us.length ? "할당" : "미할당"]; })], -1);
@@ -7852,6 +7863,24 @@ function aspiceExtraKinds(deliverables, ctx) {
   const have = new Set((deliverables?.categories || []).flatMap(c => (c.documents || []).map(d => AE.aspiceDocKind(d.name)).filter(Boolean)));
   return ASPICE_PKG_ORDER.filter(k => !have.has(k) && (k === "SYS_RS" ? !!ctx.requirements.items?.length : aspiceCanBuild(k, ctx)));
 }
+// ── SWE.3 상세설계 모델 파일 묶음 (ZIP 폴더용): XMI(EA 17.2) · 다이어그램 SVG · 소스코드 · MISRA 체크리스트 ──
+function swe3ModelFiles(meta, ctx, folder = "SW4101_상세설계_모델") {
+  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const units = (model.units.SW || []).filter(u => u.dd?.classes?.length);
+  if (!units.length) return [];
+  const sanitize = x => String(x || "").replace(/[\\/:*?"<>|]/g, "_").trim();
+  const S = AE.ddSettings(model);
+  const files = [];
+  try { files.push({ path: `${folder}/xmi/${sanitize(meta.name) || "project"}_SWE3_UML2.1.xml`, content: AE.buildXmi(model, meta, { seed: meta?.id || meta?.name || "project" }) }); } catch (_) {}
+  units.forEach(u => {
+    AE.DD_DIAGRAMS.forEach(([k]) => { try { files.push({ path: `${folder}/diagrams/${u.id}/${u.id}_${k}.svg`, content: AE.ddSvg(k, u, model) }); } catch (_) {} });
+    const code = u.dd.code && u.dd.code.target === S.target ? u.dd.code : (() => { try { return AE.generateCode(u, model, meta, S, null); } catch (_) { return null; } })();
+    (code?.files || []).forEach(f => files.push({ path: `${folder}/src_${S.target}/${u.id}_${sanitize(u.name)}/${f.name}`, content: f.text }));
+  });
+  try { files.push({ path: `${folder}/MISRA_적용_체크리스트.xlsx`, content: makeXlsx({ sheetName: "MISRA", rows: AE.misraChecklistRows(S) }) }); } catch (_) {}
+  files.push({ path: `${folder}/README.txt`, content: [`SWE.3 상세설계 모델 — ${meta.name || ""}`, ``, `xmi/      : UML 2.x XMI 2.1 — Sparx Systems Enterprise Architect 17.x에서 Publish › Model Exchange › Import › XMI File('Import Diagrams' 체크)로 가져오기`, `diagrams/ : 유닛별 다이어그램 7종(SVG) — 컴포넌트·클래스·시퀀스·상태 머신·액티비티·SysML BDD·IBD`, `src_${S.target}/ : ${AE.DD_TARGETS[S.target].label} 소스 (AUTOSAR ${S.release}) — ${S.target === "CP" ? "Rte_<Unit>.h는 RTE 생성기 출력으로 교체" : "ara::com proxy/skeleton은 생성기 출력 사용"}`, `MISRA_적용_체크리스트.xlsx : 규칙 번호별 조치·보장 수준 — 최종 준수 판정은 ${S.tools.join(" · ")} 결과로`, ``, `모든 요소·파일에 근거 SW 요구 ID가 기록되어 있습니다. 생성 결과는 QA 교차검토 후 확정하세요.`].join("\n") });
+  return files;
+}
 async function downloadAspicePackage(meta, ctx) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
   const order = ASPICE_PKG_ORDER;
@@ -7862,6 +7891,7 @@ async function downloadAspicePackage(meta, ctx) {
     if (!of) continue;
     files.push({ path: `${String(i + 1).padStart(2, "0")}_${D.code}_${sanitize(D.title)}.${of.ext}`, content: of.bytes });
   }
+  try { swe3ModelFiles(meta, ctx, `${String(order.length + 1).padStart(2, "0")}_SW4101_상세설계_모델`).forEach(f => files.push(f)); } catch (_) {}
   if (!files.length) throw new Error("생성할 수 있는 ASPICE 산출물이 없습니다. 시스템 요소·하위 요구·검증 수단을 먼저 작성하세요.");
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
   const url = URL.createObjectURL(blob);
@@ -8080,6 +8110,8 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
       total += 1;
     }
   }
+  // SWE.3 상세설계 모델(XMI·다이어그램·코드·MISRA) — 상세설계가 있을 때만
+  try { const mf = swe3ModelFiles(meta, ctx); if (mf.length) { report(93, `SWE.3 상세설계 모델 ${mf.length}개 파일 추가 중…`); mf.forEach(f => files.push(f)); manifest.push([mf[0].path.split("/")[0], "-", "SW4101", docCodeWithPrefix("SW4101", meta) || "-", "SWE.3 상세설계 모델(XMI·다이어그램·소스·MISRA)", "폴더", "V-모델", `파일 ${mf.length}개 — EA 17.x XMI 가져오기 · ${AE.ddSettings(AE.normalizeModel(ctx?.requirements?.aspice)).target} 소스`]); total += 1; } } catch (_) {}
   report(94, "산출물 목록 작성·ZIP 압축 중…");
   files.unshift({ path: "00_산출물목록.xlsx", content: makeXlsx({ sheetName: "산출물목록", rows: [
     ["프로젝트", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
@@ -8845,7 +8877,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [dbc, setDbc] = useState(null);        // { fileName, parsed, own }
   const [tplGroup, setTplGroup] = useState("SYS_RS");
   const [vFilter, setVFilter] = useState("SYS5");
-  const [ddView, setDdView] = useState({ unit: null, kind: "component" });   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
+  const [ddView, setDdView] = useState({ unit: null, kind: "component", mode: "diagram", file: 0 });   // mode: diagram | code   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
   // 커버리지 "빠짐 N건" → 해당 탭으로 이동해 미연결 항목만 표시 ({ tab, level?, ids:Set, q })
   const [focus, setFocus] = useState(null);
   const focusOn = tab === focus?.tab ? focus : null;
@@ -9168,6 +9200,29 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       setModel(n);
       if (targets.length === 1) setDdView({ unit: targets[0].id, kind: "component" });
       return `유닛 ${done}개 상세설계 완료 (AI ${aiOk} · 규칙 ${ruleN}) — 각 유닛의 [다이어그램]에서 7종을 확인하세요. 설계 요소마다 근거 SW 요구 ID가 기록되며, QA 교차검토 대상에 포함됩니다.`;
+    });
+  }
+  // ── SWE.3 코드 생성: 뼈대(파일·RTE·상태 머신)는 결정적, 연산 본문·guard 식은 AI(설계 algo 기준). 결과는 unit.dd.code ──
+  function genCode(unitIds = null) {
+    const targets = (model.units.SW || []).filter(u => u.dd?.classes?.length && (!unitIds || unitIds.includes(u.id)));
+    return run(`소스코드 생성 (${targets.length}개 유닛)`, async () => {
+      if (!targets.length) throw new Error("상세설계가 있는 유닛이 없습니다. 먼저 [AI 상세설계 생성]을 실행하세요.");
+      const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
+      const S = AE.ddSettings(n);
+      let done = 0, aiOk = 0;
+      const one = async (u) => {
+        const idx = n.units.SW.findIndex(x => x.id === u.id); if (idx < 0) return;
+        let ai = null;
+        if (n.useAI) { try { ai = await callClaudeJson(AE.promptCode({ unit: u, model: n, settings: S, meta: form }), 5000); if (ai && Array.isArray(ai.ops)) aiOk++; else ai = null; } catch (_) { ai = null; } }
+        const code = AE.generateCode(u, n, form, S, ai);
+        n.units.SW[idx] = { ...n.units.SW[idx], dd: { ...n.units.SW[idx].dd, code } };
+        done++;
+        setProg({ percent: 5 + (done / targets.length) * 90, label: `${n.useAI ? "AI: " : "규칙: "}코드 ${done}/${targets.length} 유닛 — ${u.id} ${u.name}` });
+      };
+      const CONC = n.useAI ? 3 : 20;
+      for (let i = 0; i < targets.length; i += CONC) await Promise.all(targets.slice(i, i + CONC).map(one));
+      setModel(n);
+      return `유닛 ${done}개의 ${AE.DD_TARGETS[S.target].label} 소스를 생성했습니다 (연산 본문 AI ${aiOk} · 규칙 ${done - aiOk}). 각 유닛의 [코드]에서 확인하고, MISRA 최종 판정은 ${S.tools.join("·")}로 하세요.`;
     });
   }
   function derive(level, only = null) {
@@ -9920,10 +9975,18 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               const S = AE.ddSettings(model); const TG = AE.DD_TARGETS[S.target] || AE.DD_TARGETS.CP;
               const missing = AE.ddMissingUnits(model); const have = model.units.SW.filter(u => u.dd?.classes?.length);
               const vu = ddView.unit ? model.units.SW.find(u => u.id === ddView.unit) : null;
+              const dlText = (name, text, mime = "text/plain") => { const blob = new Blob([text], { type: mime }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
+              const dlBytes = (name, bytes, mime) => { const blob = new Blob([bytes], { type: mime }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
+              const seed = form?.id || form?.name || "project";
+              const coded = have.filter(u => u.dd.code && u.dd.code.target === S.target);
               const dlSvg = (u, k) => { const svg = AE.ddSvg(k, u, model); const blob = new Blob([svg], { type: "image/svg+xml" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${u.id}_${k}.svg`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
               return (
               <AeSec title={`SWE.3 상세설계 — 다이어그램 7종 · 코드 생성 기준 (설계 ${have.length}/${model.units.SW.length} 유닛)`}
-                right={<div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                right={<div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {have.length > 0 && <button onClick={() => { try { dlText(`${String(form?.name || "project").replace(/[\\/:*?"<>|]/g, "_")}_SWE3_UML2.1.xml`, AE.buildXmi(model, form || {}, { seed }), "application/xml"); } catch (e) { setErr("XMI 생성 실패: " + e.message); } }} title="UML 2.x XMI 2.1 — Enterprise Architect 17.x: Publish › Model Exchange › Import › XMI File ('Import Diagrams' 체크)" style={small}>⬇ XMI 2.1 (EA 가져오기)</button>}
+                  {have.length > 0 && <button onClick={() => { try { dlBytes("MISRA_적용_체크리스트.xlsx", makeXlsx({ sheetName: "MISRA", rows: AE.misraChecklistRows(S) }), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); } catch (e) { setErr("체크리스트 생성 실패: " + e.message); } }} style={small}>⬇ MISRA 체크리스트</button>}
+                  {coded.length > 0 && <button onClick={() => { try { const fs = coded.flatMap(u => u.dd.code.files.map(f => ({ path: `${u.id}_${String(u.name).replace(/[\\/:*?"<>|]/g, "_")}/${f.name}`, content: f.text }))); dlBytes(`${String(form?.name || "project").replace(/[\\/:*?"<>|]/g, "_")}_src_${S.target}.zip`, zipBytes(fs), "application/zip"); } catch (e) { setErr("코드 ZIP 실패: " + e.message); } }} style={small}>⬇ 코드 ZIP ({coded.length})</button>}
+                  {have.length > 0 && <Btn variant={coded.length ? "outline" : undefined} onClick={() => genCode(coded.length < have.length ? have.filter(u => !coded.includes(u)).map(u => u.id) : null)} disabled={busy} title={coded.length < have.length ? "코드가 없는 유닛만 생성" : "모든 유닛의 코드를 다시 생성"} style={{ fontSize: 11, padding: "4px 10px" }}>{model.useAI ? "🤖" : "⚙"} 코드 생성{coded.length < have.length ? ` (${have.length - coded.length}개)` : " (전체 재생성)"}</Btn>}
                   {missing.length > 0 && have.length > 0 && <Btn onClick={() => genDD(missing.map(u => u.id))} disabled={busy} title="설계가 없는 유닛만 생성 — 기존 설계는 그대로" style={{ fontSize: 11, padding: "4px 10px" }}>{model.useAI ? "🤖" : "⚙"} 빠진 {missing.length}개만 설계</Btn>}
                   <Btn variant={have.length ? "outline" : undefined} onClick={() => { if (have.length && !window.confirm(`유닛 ${model.units.SW.length}개의 상세설계를 모두 다시 만듭니다. 기존 다이어그램·설계 내용은 교체됩니다.`)) return; genDD(); }} disabled={busy || !model.units.SW.length} style={{ fontSize: 11, padding: "4px 10px" }}>{model.useAI ? "🤖 AI 상세설계 생성 (전체)" : "⚙ 규칙 상세설계 생성 (전체)"}</Btn>
                 </div>}>
@@ -9932,19 +9995,33 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   {Object.entries(AE.DD_TARGETS).map(([k, t]) => <button key={k} onClick={() => set(n => { n.swDesign = { ...AE.ddSettings(n), target: k }; })} style={{ ...small, padding: "4px 10px", color: S.target === k ? "#fff" : T.muted, background: S.target === k ? T.accent : "transparent", borderColor: S.target === k ? T.accent : T.border }}>{t.label}</button>)}
                   <span style={{ color: T.muted }}>AUTOSAR {S.release} · {S.target === "CP" ? S.misraC : `${S.misraCpp} · ${S.cppGuide}`} · 정적분석 {S.tools.join("·")}</span>
                 </div>
-                <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>유닛마다 AI가 정적 구조(클래스·포트·Runnable·자료형·알고리즘)와 동적 동작(상태 머신·시퀀스·액티비티)을 근거 자료(할당 SW 요구·상위 시스템 요구·컴포넌트 인터페이스·운영 모드)로 설계하고, 모든 요소에 근거 요구 ID를 남깁니다. 다이어그램은 UML 2.5·SysML 표준 표기이며 XMI 2.1(EA 가져오기)·MISRA 준거 코드 생성은 이 설계를 입력으로 합니다.</div>
+                <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>유닛마다 AI가 정적 구조(클래스·포트·Runnable·자료형·알고리즘)와 동적 동작(상태 머신·시퀀스·액티비티)을 근거 자료(할당 SW 요구·상위 시스템 요구·컴포넌트 인터페이스·운영 모드)로 설계하고, 모든 요소에 근거 요구 ID를 남깁니다. 순서: 상세설계 생성 → 코드 생성(뼈대는 결정적, 연산 본문·guard 식은 AI) → XMI 2.1·MISRA 체크리스트 내려받기. 다이어그램·XMI·소스·체크리스트는 '전체 ZIP 다운로드'의 'SW4101_상세설계_모델' 폴더에도 들어갑니다.</div>
                 {!model.units.SW.length && <div style={{ fontSize: 11, color: T.amber }}>유닛이 없습니다 — 위 [규칙 골격 생성] 또는 [.h 헤더 가져오기]로 유닛을 먼저 만드세요.</div>}
                 <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                   {model.units.SW.map(u => { const d = u.dd; const on = ddView.unit === u.id; return (
-                    <div key={u.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr auto auto auto", gap: 8, alignItems: "center", fontSize: 11, padding: "5px 8px", border: `1px solid ${on ? T.accent : T.border}`, borderRadius: 7, background: on ? T.accent + "12" : T.bg }}>
+                    <div key={u.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr auto auto auto auto", gap: 8, alignItems: "center", fontSize: 11, padding: "5px 8px", border: `1px solid ${on ? T.accent : T.border}`, borderRadius: 7, background: on ? T.accent + "12" : T.bg }}>
                       <span style={{ fontFamily: "monospace", color: T.accent }}>{u.id}</span>
                       <span><b>{u.name}</b>{d ? <span style={{ color: T.muted }}> — 클래스 {d.classes.length} · 포트 {d.ports.length} · Runnable {d.runnables.length} · 상태 {d.states.states.length}/전이 {d.states.transitions.length} · 시퀀스 {d.sequences.length} · 액티비티 {d.activities.length}</span> : <span style={{ color: T.amber }}> — 설계 없음</span>}</span>
                       <span style={{ fontSize: 9.5, color: d ? (d.origin === "ai" ? T.green : T.muted) : T.muted }}>{d ? (d.origin === "ai" ? "AI 설계" : "규칙 설계") : ""}</span>
-                      {d ? <button onClick={() => setDdView(v => ({ unit: on ? null : u.id, kind: v.kind }))} style={{ ...small, padding: "2px 8px" }}>{on ? "접기" : "다이어그램"}</button> : <span />}
+                      {d ? <button onClick={() => setDdView(v => ({ ...v, unit: on && v.mode === "diagram" ? null : u.id, mode: "diagram" }))} style={{ ...small, padding: "2px 8px", ...(on && ddView.mode === "diagram" ? { background: T.accent, color: "#fff", borderColor: T.accent } : {}) }}>다이어그램</button> : <span />}
+                      {d?.code ? <button onClick={() => setDdView(v => ({ ...v, unit: on && v.mode === "code" ? null : u.id, mode: "code", file: 0 }))} title={`${d.code.files.length}개 파일 · ${AE.DD_TARGETS[d.code.target]?.lang} · ${d.code.origin === "ai" ? "본문 AI" : "본문 규칙"}`} style={{ ...small, padding: "2px 8px", ...(on && ddView.mode === "code" ? { background: T.accent, color: "#fff", borderColor: T.accent } : {}) }}>코드</button> : <span />}
                       <button onClick={() => genDD([u.id])} disabled={busy} style={{ ...small, padding: "2px 8px" }}>{d ? "재설계" : (model.useAI ? "🤖 설계" : "⚙ 설계")}</button>
                     </div>); })}
                 </div>
-                {vu && vu.dd && (
+                {vu && vu.dd && ddView.mode === "code" && vu.dd.code && (() => { const cf = vu.dd.code.files; const fi = Math.min(ddView.file || 0, cf.length - 1); const f = cf[fi]; return (
+                  <div style={{ marginTop: 10, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
+                    <div style={{ display: "flex", gap: 3, alignItems: "center", padding: "6px 8px", flexWrap: "wrap", background: T.bg }}>
+                      {cf.map((x, i) => <button key={x.name} onClick={() => setDdView(v => ({ ...v, file: i }))} style={{ ...small, padding: "3px 9px", fontFamily: "monospace", color: fi === i ? "#fff" : T.muted, background: fi === i ? T.accent : "transparent", borderColor: fi === i ? T.accent : T.border }}>{x.name}</button>)}
+                      <div style={{ flex: 1 }} />
+                      <span style={{ fontSize: 10, color: T.muted }}>{AE.DD_TARGETS[vu.dd.code.target]?.label} · {vu.dd.code.origin === "ai" ? "연산 본문 AI" : "연산 본문 규칙(주석 단계)"}{vu.dd.code.target !== S.target ? " · ⚠ 현재 대상 플랫폼과 다름 — 코드 재생성 필요" : ""}</span>
+                      <button onClick={() => dlText(f.name, f.text)} style={small}>⬇ 이 파일</button>
+                      <button onClick={() => dlBytes(`${vu.id}_src.zip`, zipBytes(cf.map(x => ({ path: x.name, content: x.text }))), "application/zip")} style={small}>⬇ 유닛 ZIP</button>
+                    </div>
+                    <pre style={{ margin: 0, padding: 10, maxHeight: 520, overflow: "auto", fontSize: 11, lineHeight: 1.45, background: "#0B0F1A", color: "#D6DEEB", fontFamily: "Consolas, 'D2Coding', monospace" }}>{f.text}</pre>
+                    {vu.dd.code.notes?.length > 0 && <div style={{ padding: "6px 10px", fontSize: 10.5, color: T.amber, borderTop: `1px solid ${T.border}` }}>MISRA 편차 검토 지점(AI): {vu.dd.code.notes.join(" · ")}</div>}
+                    {/TODO guard/.test(f.text) && <div style={{ padding: "6px 10px", fontSize: 10.5, color: T.amber, borderTop: `1px solid ${T.border}` }}>⚠ 'TODO guard'가 남은 전이는 AI가 조건식을 만들지 못한 것입니다 — 상태 머신의 guard를 수치 조건으로 고친 뒤 코드를 재생성하세요.</div>}
+                  </div>); })()}
+                {vu && vu.dd && ddView.mode === "diagram" && (
                   <div style={{ marginTop: 10, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
                     <div style={{ display: "flex", gap: 3, alignItems: "center", padding: "6px 8px", flexWrap: "wrap", background: T.bg }}>
                       {AE.DD_DIAGRAMS.map(([k, lab]) => <button key={k} onClick={() => setDdView(v => ({ ...v, kind: k }))} style={{ ...small, padding: "3px 9px", color: ddView.kind === k ? "#fff" : T.muted, background: ddView.kind === k ? T.accent : "transparent", borderColor: ddView.kind === k ? T.accent : T.border }}>{lab}</button>)}

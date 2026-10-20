@@ -2414,3 +2414,300 @@ export function ddSvg(kind, unit, model) {
   return "";
 }
 export const DD_DIAGRAMS = [["component", "컴포넌트"], ["class", "클래스"], ["sequence", "시퀀스"], ["state", "상태 머신"], ["activity", "액티비티"], ["bdd", "SysML BDD"], ["ibd", "SysML IBD"]];
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 13) SWE.3 → XMI 2.1 (UML 2.x) 내보내기 — Sparx Systems Enterprise Architect 17.x 'Import Package from XMI' 입력용
+//    표준 부분: uml:Model/Package/Component/Class/Interface/StateMachine/Interaction/Activity/Association/Dependency
+//    확장 부분(xmi:Extension extender="Enterprise Architect"): 요소 속성·커넥터·다이어그램 배치 — 상호운용을 위한 형식 호환이며
+//    Cadence/Sparx의 라이브러리·아이콘·프로파일 자산은 포함하지 않는다. SysML 블록은 표준 SysML 네임스페이스 + 스테레오타입 태그로 표기.
+//    xmi:id는 추적 모델의 영구 GUID(EAID_…)를 쓰므로 재내보내기·재반입 시 같은 요소로 매칭된다.
+// ═══════════════════════════════════════════════════════════════════════════
+export function buildXmi(model, meta, opts = {}) {
+  const m = normalizeModel(model);
+  const units = (m.units.SW || []).filter(u => u.dd?.classes?.length && (!opts.unitIds || opts.unitIds.includes(u.id)));
+  const seed = opts.seed || meta?.name || "project";
+  const G = s => xmiIdOf(guidFor(`${seed}|xmi|${s}`));
+  const PK = s => "EAPK_" + guidFor(`${seed}|pkg|${s}`).replace(/[{}]/g, "").replace(/-/g, "_");
+  const A = s => X(s);
+  let lid = 1; const localId = () => lid++;
+  const E = [];        // 확장: elements
+  const C = [];        // 확장: connectors
+  const D = [];        // 확장: diagrams
+  const STEREO = [];   // SysML 스테레오타입 적용(표준 네임스페이스)
+  const rootPk = PK("root");
+  const ext = (id, type, name, pkg, { sType, nType = 0, stereotype = "", doc = "", tags = [] } = {}) => {
+    E.push(`<element xmi:idref="${id}" xmi:type="${type}" name="${A(name)}" scope="public"><model package="${pkg}" tpos="0" ea_localid="${localId()}" ea_eleType="element"/><properties documentation="${A(doc)}" isSpecification="false" sType="${sType || type.replace("uml:", "")}" nType="${nType}" scope="public"${stereotype ? ` stereotype="${A(stereotype)}"` : ""}/><project author="${A(meta?.author || meta?.pm || "SPIDer QA Agent")}" version="1.0" phase="1.0" created="${new Date().toISOString().slice(0, 19)}" modified="${new Date().toISOString().slice(0, 19)}" complexity="1" status="Proposed"/>${tags.length ? `<tags>${tags.map(t => `<tag xmi:id="${G(id + ":tag:" + t[0])}" name="${A(t[0])}" value="${A(t[1])}" modelElement="${id}"/>`).join("")}</tags>` : ""}</element>`);
+  };
+  const conn = (id, type, src, dst, { name = "", eaType = type.replace("uml:", ""), srcAgg = 0, dstAgg = 0, seqno = 0, direction = "Source -> Destination", guard = "" } = {}) => {
+    C.push(`<connector xmi:idref="${id}"><source xmi:idref="${src}"><model type="Class"/><role visibility="Public" targetScope="instance"/><type aggregation="${srcAgg === 2 ? "composite" : srcAgg === 1 ? "shared" : "none"}" containment="Unspecified"/><modifiers isOrdered="false" changeable="none" isNavigable="false"/></source><target xmi:idref="${dst}"><model type="Class"/><role visibility="Public" targetScope="instance"/><type aggregation="${dstAgg === 2 ? "composite" : dstAgg === 1 ? "shared" : "none"}" containment="Unspecified"/><modifiers isOrdered="false" changeable="none" isNavigable="true"/></target><model ea_localid="${localId()}"/><properties ea_type="${eaType}" direction="${direction}"${seqno ? ` seqno="${seqno}"` : ""}/><labels${name ? ` mt="${A(name)}"` : ""}/>${guard ? `<extendedProperties guard="${A(guard)}"/>` : ""}</connector>`);
+  };
+  const dia = (id, name, type, pkg, placed, style = "") => {
+    D.push(`<diagram xmi:id="${id}"><model package="${pkg}" localID="${localId()}" owner="${pkg}"/><properties name="${A(name)}" type="${type}"/><project author="SPIDer QA Agent" version="1.0" created="${new Date().toISOString().slice(0, 19)}" modified="${new Date().toISOString().slice(0, 19)}"/><style1 value="ShowPrivate=1;ShowProtected=1;ShowPublic=1;HideRelationships=0;Locked=0;Border=1;HighlightForeign=1;PackageContents=1;SequenceNotes=0;ScalePrintImage=0;PPgs.cx=0;PPgs.cy=0;DocSize.cx=795;DocSize.cy=1138;ShowDetails=0;Orientation=P;Zoom=100;ShowTags=0;OpParams=1;VisibleAttributeDetail=0;ShowOpRetType=1;ShowIcons=1;CollabNums=0;HideProps=0;ShowReqs=0;ShowCons=0;PaperSize=9;HideParents=0;UseAlias=0;HideAtts=0;HideOps=0;HideStereo=0;HideElemStereo=0;ShowTests=0;ShowMaint=0;ConnectorNotation=UML 2.1;ExplicitNavigability=0;ShowShape=1;AdvancedElementProps=1;AdvancedFeatureProps=1;AdvancedConnectorProps=1;m_bElementClassifier=1;ShowNotes=0;SuppressBrackets=0;SuppConnectorLabels=0;PrintPageHeadFoot=0;ShowAsList=0;${style}"/><style2 value="SaveTag=;ExcludeRTF=0;DocAll=0;HideQuals=0;AttPkg=1;ShowTests=0;ShowMaint=0;SuppressFOC=1;MatrixActive=0;SwimlanesActive=1;KanbanActive=0;MatrixLineWidth=1;MatrixLineClr=0;MatrixLocked=0;TConnectorNotation=UML 2.1;TExplicitNavigability=0;AdvancedElementProps=1;AdvancedFeatureProps=1;AdvancedConnectorProps=1;m_bElementClassifier=1;ProfileData=;MDGDgm=${style.includes("MDGDgm") ? "" : ""};STBLDgm=;ShowNotes=0;VisibleAttributeDetail=0;ShowOpRetType=1;SuppressBrackets=0;SuppConnectorLabels=0;PrintPageHeadFoot=0;ShowAsList=0;SuppressedCompartments=;Theme=:119;"/><swimlanes value="locked=false;orientation=0;width=0;inbar=false;names=false;color=-1;bold=false;fcol=0;tcol=-1;ofCol=-1;ufCol=-1;hl=0;ufh=0;hh=0;cls=0;bw=0;hli=0;bro=0;SwimlaneFont=lfh:-13,lfw:0,lfi:0,lfu:0,lfs:0,lfface:Calibri,lfSize:10;"/><matrixitems value="locked=false;matrixactive=false;swimlanesactive=true;kanbanactive=false;width=1;clrLine=0;"/><extendedProperties/><elements>${placed.map((p, i) => `<element geometry="Left=${Math.round(p.x)};Top=${Math.round(p.y)};Right=${Math.round(p.x + p.w)};Bottom=${Math.round(p.y + p.h)};" subject="${p.id}" seqno="${i + 1}" style="DUID=${guidFor(id + p.id).slice(1, 9)};"/>`).join("")}</elements></diagram>`);
+  };
+
+  let body = `<packagedElement xmi:type="uml:Package" xmi:id="${rootPk}" name="${A((meta?.name || "Project") + " — SWE.3 상세설계")}">`;
+  ext(rootPk, "uml:Package", (meta?.name || "Project") + " — SWE.3 상세설계", "EAPK_ROOT", { sType: "Package" });
+  // 공용 자료형 패키지
+  const typePk = PK("types"), typeEls = [];
+  ext(typePk, "uml:Package", "DataTypes", rootPk, { sType: "Package" });
+  const typeIds = {};
+  const typeId = name => { const n = cid(name); if (!typeIds[n]) { typeIds[n] = G("type:" + n); typeEls.push(`<packagedElement xmi:type="uml:DataType" xmi:id="${typeIds[n]}" name="${A(n)}"/>`); ext(typeIds[n], "uml:DataType", n, typePk, { sType: "DataType" }); } return typeIds[n]; };
+  ["uint8", "uint16", "uint32", "sint8", "sint16", "sint32", "float32", "boolean", "Std_ReturnType", "void"].forEach(typeId);
+
+  units.forEach(u => {
+    const dd = u.dd, uPk = PK(u.id);
+    body += `<packagedElement xmi:type="uml:Package" xmi:id="${uPk}" name="${A(u.id + " " + u.name)}">`;
+    ext(uPk, "uml:Package", `${u.id} ${u.name}`, rootPk, { sType: "Package", doc: dd.summary, tags: [["reqs", (u.reqs || []).join(", ")]] });
+    dd.dataTypes.forEach(t => typeId(t.name));
+    // 클래스 / 컴포넌트(SWC) / 블록
+    const clsId = {};
+    dd.classes.forEach(c => {
+      const id = xmiIdOf(c.guid); clsId[c.name] = id;
+      const isSwc = c.stereotype === "SWC";
+      body += `<packagedElement xmi:type="${isSwc ? "uml:Component" : "uml:Class"}" xmi:id="${id}" name="${A(c.name)}">`;
+      c.attrs.forEach((a, i) => { const aid = G(`${c.guid}:attr:${a.name}`); body += `<ownedAttribute xmi:type="uml:Property" xmi:id="${aid}" name="${A(a.name)}" visibility="${a.vis === "+" ? "public" : a.vis === "#" ? "protected" : "private"}" isStatic="false" isReadOnly="false" isDerived="false" isOrdered="false" isUnique="true" isDerivedUnion="false" aggregation="none"><type xmi:idref="${typeId(a.type)}"/>${a.init ? `<defaultValue xmi:type="uml:LiteralString" xmi:id="${aid}_dv" value="${A(a.init)}"/>` : ""}</ownedAttribute>`; });
+      c.ops.forEach(o => { const oid = G(`${c.guid}:op:${o.name}`); body += `<ownedOperation xmi:id="${oid}" name="${A(o.name)}" visibility="${o.vis === "-" ? "private" : "public"}" concurrency="sequential">${o.params.map(p => `<ownedParameter xmi:id="${G(oid + ":p:" + p.name)}" name="${A(p.name)}" direction="${p.dir}"><type xmi:idref="${typeId(p.type)}"/></ownedParameter>`).join("")}<ownedParameter xmi:id="${oid}_ret" name="return" direction="return"><type xmi:idref="${typeId(o.ret)}"/></ownedParameter></ownedOperation>`; });
+      if (isSwc) dd.ports.forEach(p => { const pid = xmiIdOf(p.guid); body += `<ownedAttribute xmi:type="uml:Port" xmi:id="${pid}" name="${A(p.name)}" visibility="public" isService="${p.dir === "P"}" aggregation="composite"><type xmi:idref="${G("if:" + p.interface)}"/></ownedAttribute>`; ext(pid, "uml:Port", p.name, uPk, { sType: "Port", doc: `${p.dir === "R" ? "Required" : "Provided"} · ${p.kind} · ${p.elements.map(e => `${e.name}:${e.type}`).join(", ")}`, tags: [["direction", p.dir === "R" ? "required" : "provided"], ["interface", p.interface], ["reqs", (p.reqs || []).join(", ")]] }); });
+      body += `</packagedElement>`;
+      ext(id, isSwc ? "uml:Component" : "uml:Class", c.name, uPk, { sType: isSwc ? "Component" : "Class", stereotype: isSwc ? "SWC,block" : "block", doc: c.desc, tags: [["reqs", (c.reqs || []).join(", ")], ["algorithm", c.ops.map(o => `${o.name}: ${(o.algo || []).join(" → ")}`).join(" | ").slice(0, 2000)]] });
+      STEREO.push(`<sysml:Block xmi:id="${G("stereo:block:" + id)}" base_Class="${id}"/>`);
+    });
+    // 인터페이스(포트 타입)
+    const ifSeen = new Set();
+    dd.ports.forEach(p => { if (ifSeen.has(p.interface)) return; ifSeen.add(p.interface); const iid = G("if:" + p.interface);
+      body += `<packagedElement xmi:type="uml:Interface" xmi:id="${iid}" name="${A(p.interface)}">${p.elements.map(e => `<ownedAttribute xmi:type="uml:Property" xmi:id="${G(iid + ":el:" + e.name)}" name="${A(e.name)}" visibility="public"><type xmi:idref="${typeId(e.type)}"/></ownedAttribute>`).join("")}</packagedElement>`;
+      ext(iid, "uml:Interface", p.interface, uPk, { sType: "Interface", stereotype: p.kind === "C/S" ? "ClientServerInterface" : "SenderReceiverInterface", doc: `${p.kind} 인터페이스 · 출처 ${p.source || "-"}` }); });
+    // 관계
+    dd.assoc.forEach((a, i) => { const f = clsId[a.from], t = clsId[a.to]; if (!f || !t) return; const aid = G(`${u.id}:assoc:${i}:${a.from}-${a.to}`);
+      if (a.kind === "dep") { body += `<packagedElement xmi:type="uml:Dependency" xmi:id="${aid}" name="${A(a.label)}" client="${f}" supplier="${t}"/>`; conn(aid, "uml:Dependency", f, t, { name: a.label }); }
+      else if (a.kind === "gen") { body += `<packagedElement xmi:type="uml:Generalization" xmi:id="${aid}" general="${t}" specific="${f}"/>`; conn(aid, "uml:Generalization", f, t); }
+      else { body += `<packagedElement xmi:type="uml:Association" xmi:id="${aid}" name="${A(a.label)}" memberEnd="${aid}_s ${aid}_d"><ownedEnd xmi:type="uml:Property" xmi:id="${aid}_s" association="${aid}" aggregation="${a.kind === "comp" ? "composite" : a.kind === "agg" ? "shared" : "none"}"><type xmi:idref="${f}"/></ownedEnd><ownedEnd xmi:type="uml:Property" xmi:id="${aid}_d" association="${aid}" aggregation="none"><type xmi:idref="${t}"/></ownedEnd></packagedElement>`; conn(aid, "uml:Association", f, t, { name: a.label, srcAgg: a.kind === "comp" ? 2 : a.kind === "agg" ? 1 : 0, eaType: a.kind === "comp" || a.kind === "agg" ? "Aggregation" : "Association" }); } });
+    // 상태 머신
+    const smId = G(`${u.id}:sm`), rgId = smId + "_rg", stId = {};
+    if (dd.states.states.length) {
+      body += `<packagedElement xmi:type="uml:StateMachine" xmi:id="${smId}" name="${A(u.name + " StateMachine")}"><region xmi:type="uml:Region" xmi:id="${rgId}" name="Region">`;
+      ext(smId, "uml:StateMachine", `${u.name} StateMachine`, uPk, { sType: "StateMachine", doc: "운영 상태와 전이 — 근거 요구 ID는 각 전이의 reqs" });
+      const initId = G(`${u.id}:sm:init`); body += `<subvertex xmi:type="uml:Pseudostate" xmi:id="${initId}" name="Initial" kind="initial"/>`; ext(initId, "uml:Pseudostate", "Initial", smId, { sType: "StateNode", nType: 3 });
+      dd.states.states.forEach(s => { stId[s.name] = xmiIdOf(s.guid); body += `<subvertex xmi:type="uml:State" xmi:id="${stId[s.name]}" name="${A(s.name)}">${s.entry ? `<entry xmi:type="uml:OpaqueBehavior" xmi:id="${stId[s.name]}_en" name="entry" body="${A(s.entry)}"/>` : ""}${s.do ? `<doActivity xmi:type="uml:OpaqueBehavior" xmi:id="${stId[s.name]}_do" name="do" body="${A(s.do)}"/>` : ""}${s.exit ? `<exit xmi:type="uml:OpaqueBehavior" xmi:id="${stId[s.name]}_ex" name="exit" body="${A(s.exit)}"/>` : ""}</subvertex>`; ext(stId[s.name], "uml:State", s.name, smId, { sType: "State", doc: [s.entry && `entry / ${s.entry}`, s.do && `do / ${s.do}`, s.exit && `exit / ${s.exit}`, s.desc].filter(Boolean).join("\n"), tags: [["reqs", (s.reqs || []).join(", ")]] }); });
+      if (stId[dd.states.initial]) { const tid = G(`${u.id}:sm:t:init`); body += `<transition xmi:id="${tid}" source="${initId}" target="${stId[dd.states.initial]}"/>`; conn(tid, "uml:Transition", initId, stId[dd.states.initial], { eaType: "StateFlow" }); }
+      dd.states.transitions.forEach((t, i) => { const f = stId[t.from], g2 = stId[t.to]; if (!f || !g2) return; const tid = G(`${u.id}:sm:t:${i}`);
+        body += `<transition xmi:id="${tid}" source="${f}" target="${g2}" name="${A(t.trigger)}">${t.trigger ? `<trigger xmi:id="${tid}_tr" name="${A(t.trigger)}"/>` : ""}${t.guard ? `<guard xmi:type="uml:Constraint" xmi:id="${tid}_gd"><specification xmi:type="uml:OpaqueExpression" xmi:id="${tid}_gx" body="${A(t.guard)}"/></guard>` : ""}${t.effect ? `<effect xmi:type="uml:OpaqueBehavior" xmi:id="${tid}_ef" name="${A(t.effect)}" body="${A(t.effect)}"/>` : ""}</transition>`;
+        conn(tid, "uml:Transition", f, g2, { name: [t.trigger, t.guard ? `[${t.guard}]` : "", t.effect ? `/ ${t.effect}` : ""].filter(Boolean).join(" "), eaType: "StateFlow", guard: t.guard }); });
+      body += `</region></packagedElement>`;
+    }
+    // 시퀀스(Interaction)
+    const seqIds = [];
+    dd.sequences.forEach(sq => { const iid = xmiIdOf(sq.guid), colId = iid + "_col"; seqIds.push({ sq, iid });
+      body += `<packagedElement xmi:type="uml:Collaboration" xmi:id="${colId}" name="${A(sq.name)}"><ownedBehavior xmi:type="uml:Interaction" xmi:id="${iid}" name="${A(sq.name)}">`;
+      ext(colId, "uml:Collaboration", sq.name, uPk, { sType: "Collaboration" }); ext(iid, "uml:Interaction", sq.name, colId, { sType: "Interaction", doc: sq.desc, tags: [["reqs", (sq.reqs || []).join(", ")]] });
+      const llId = {}; sq.lifelines.forEach(l => { llId[l] = G(`${iid}:ll:${l}`); body += `<lifeline xmi:id="${llId[l]}" name="${A(l)}"${clsId[l] ? ` represents="${G(iid + ":part:" + l)}"` : ""}/>`; ext(llId[l], "uml:Lifeline", l, iid, { sType: "Sequence", doc: clsId[l] ? `instance of ${l}` : "" }); });
+      sq.steps.forEach((st, i) => { const a = llId[st.from], b2 = llId[st.to]; if (!a || !b2) return; const mid = G(`${iid}:msg:${i}`);
+        body += `<fragment xmi:type="uml:MessageOccurrenceSpecification" xmi:id="${mid}_s" covered="${a}" message="${mid}"/><fragment xmi:type="uml:MessageOccurrenceSpecification" xmi:id="${mid}_r" covered="${b2}" message="${mid}"/><message xmi:id="${mid}" name="${A(st.msg)}" messageSort="${st.kind === "async" ? "asynchCall" : "synchCall"}" sendEvent="${mid}_s" receiveEvent="${mid}_r"/>`;
+        conn(mid, "uml:Message", a, b2, { name: `${st.msg}(${st.args || ""})`, eaType: "Sequence", seqno: i + 1 }); });
+      body += `</ownedBehavior></packagedElement>`; });
+    // 액티비티
+    const actIds = [];
+    dd.activities.forEach(a => { const aid = xmiIdOf(a.guid); actIds.push({ a, aid });
+      body += `<packagedElement xmi:type="uml:Activity" xmi:id="${aid}" name="${A(a.name)}">`;
+      ext(aid, "uml:Activity", a.name, uPk, { sType: "Activity", doc: a.desc, tags: [["operation", a.op], ["reqs", (a.reqs || []).join(", ")]] });
+      const nId = {}; const kindMap = { start: ["uml:InitialNode", "StateNode", 100], end: ["uml:ActivityFinalNode", "StateNode", 101], action: ["uml:OpaqueAction", "Action", 0], decision: ["uml:DecisionNode", "Decision", 0], merge: ["uml:MergeNode", "MergeNode", 0], fork: ["uml:ForkNode", "Synchronization", 0], join: ["uml:JoinNode", "Synchronization", 0] };
+      a.nodes.forEach(n => { nId[n.id] = G(`${aid}:n:${n.id}`); const [ut, sT, nT] = kindMap[n.kind] || kindMap.action; body += `<node xmi:type="${ut}" xmi:id="${nId[n.id]}" name="${A(n.text || n.kind)}"/>`; ext(nId[n.id], ut, n.text || n.kind, aid, { sType: sT, nType: nT }); });
+      a.edges.forEach((e, i) => { const f = nId[e.from], t = nId[e.to]; if (!f || !t) return; const eid = G(`${aid}:e:${i}`); body += `<edge xmi:type="uml:ControlFlow" xmi:id="${eid}" source="${f}" target="${t}"${e.guard ? ` name="${A(e.guard)}"` : ""}>${e.guard ? `<guard xmi:type="uml:OpaqueExpression" xmi:id="${eid}_g" body="${A(e.guard)}"/>` : ""}</edge>`; conn(eid, "uml:ControlFlow", f, t, { name: e.guard ? `[${e.guard}]` : "", eaType: "ControlFlow", guard: e.guard }); });
+      body += `</packagedElement>`; });
+    body += `</packagedElement>`;
+
+    // ── 다이어그램 배치 (화면 SVG와 같은 레이아웃 규칙) ──
+    const uName = cid(u.name || u.id);
+    const classRects = []; { let x = 40, y = 40, rowH = 0; dd.classes.forEach((c, i) => { const w = 220, h = 50 + 16 * (c.attrs.length + c.ops.length); if (i && i % 3 === 0) { x = 40; y += rowH + 60; rowH = 0; } classRects.push({ id: clsId[c.name], x, y, w, h, name: c.name }); x += w + 80; rowH = Math.max(rowH, h); }); }
+    dia(G(`${u.id}:dg:class`), `${u.id} ${uName} — Class`, "Logical", uPk, classRects);
+    dia(G(`${u.id}:dg:bdd`), `${u.id} ${uName} — SysML BDD`, "Logical", uPk, classRects, "MDGDgm=SysML1.6::BlockDefinition;");
+    const swc = dd.classes.find(c => c.stereotype === "SWC") || dd.classes[0];
+    const compPlaced = [{ id: clsId[swc.name], x: 300, y: 80, w: 260, h: Math.max(100, 40 + dd.ports.length * 30) }]; [...ifSeen].forEach((ifn, i) => compPlaced.push({ id: G("if:" + ifn), x: i % 2 ? 640 : 40, y: 80 + Math.floor(i / 2) * 70, w: 180, h: 50 }));
+    dia(G(`${u.id}:dg:comp`), `${u.id} ${uName} — Component`, "Component", uPk, compPlaced);
+    dia(G(`${u.id}:dg:ibd`), `${u.id} ${uName} — SysML IBD`, "CompositeStructure", uPk, compPlaced, "MDGDgm=SysML1.6::InternalBlock;");
+    if (dd.states.states.length) { const n = dd.states.states.length, R = Math.max(150, n * 40), cx = R + 200, cy = R + 120; const pl = dd.states.states.map((s, i) => { const ang = -Math.PI / 2 + (2 * Math.PI * i) / n; return { id: stId[s.name], x: cx + Math.cos(ang) * R - 70, y: cy + Math.sin(ang) * R - 25, w: 140, h: 50 }; }); pl.unshift({ id: G(`${u.id}:sm:init`), x: cx - 10, y: 30, w: 20, h: 20 }); dia(G(`${u.id}:dg:sm`), `${u.id} ${uName} — StateMachine`, "Statechart", smId, pl); }
+    seqIds.forEach(({ sq, iid }) => dia(G(`${iid}:dg`), `${u.id} ${uName} — Sequence ${sq.name}`, "Sequence", iid, sq.lifelines.map((l, i) => ({ id: G(`${iid}:ll:${l}`), x: 60 + i * 180, y: 50, w: 100, h: 50 }))));
+    actIds.forEach(({ a, aid }) => { const pl = a.nodes.map((n, i) => ({ id: G(`${aid}:n:${n.id}`), x: 120 + (i % 2) * 220, y: 40 + i * 70, w: n.kind === "action" ? 160 : 30, h: n.kind === "action" ? 40 : 30 })); dia(G(`${aid}:dg`), `${u.id} ${uName} — Activity ${a.name}`, "Activity", aid, pl); });
+  });
+  // 자료형 패키지를 루트 패키지 맨 앞에 넣고 루트를 닫는다
+  const rootOpen = `<packagedElement xmi:type="uml:Package" xmi:id="${rootPk}" name="${A((meta?.name || "Project") + " — SWE.3 상세설계")}">`;
+  body = body.replace(rootOpen, rootOpen + `<packagedElement xmi:type="uml:Package" xmi:id="${typePk}" name="DataTypes">${typeEls.join("")}</packagedElement>`) + `</packagedElement>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<xmi:XMI xmi:version="2.1" xmlns:uml="http://schema.omg.org/spec/UML/2.1" xmlns:xmi="http://schema.omg.org/spec/XMI/2.1" xmlns:sysml="http://www.omg.org/spec/SysML/20161101/SysML">
+	<xmi:Documentation exporter="SPIDer QA Agent" exporterVersion="1.0" exporterID="SWE.3"/>
+	<uml:Model xmi:type="uml:Model" name="EA_Model" visibility="public">
+		${body}
+	</uml:Model>
+	${STEREO.join("\n\t")}
+	<xmi:Extension extender="Enterprise Architect" extenderID="6.5">
+		<elements>${E.join("")}</elements>
+		<connectors>${C.join("")}</connectors>
+		<primitivetypes><packagedElement xmi:type="uml:Package" xmi:id="EAPrimitiveTypesPackage" name="EA_PrimitiveTypes_Package" visibility="public"/></primitivetypes>
+		<profiles/>
+		<diagrams>${D.join("")}</diagrams>
+	</xmi:Extension>
+</xmi:XMI>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 14) SWE.3 → 소스코드 (MISRA 준거 지향). 뼈대(파일·헤더·RTE 호출·상태 머신·추적 주석)는 결정적으로, 연산 본문은 AI가 설계(algo)대로 작성.
+//    CP: C99 · Std_Types.h · Rte_<SWC>.h · Runnable → 연산 / AP: C++17 · ara::core::Result · 클래스 단위
+//    최종 MISRA 준수 판정은 정적분석 도구(Helix QAC · Polyspace) 결과로 한다 — 생성기는 결정 가능한 규칙을 구조적으로 회피한다.
+// ═══════════════════════════════════════════════════════════════════════════
+const C_TYPES = { uint8: "uint8", uint16: "uint16", uint32: "uint32", sint8: "sint8", sint16: "sint16", sint32: "sint32", float32: "float32", float64: "float64", boolean: "boolean", void: "void", Std_ReturnType: "Std_ReturnType", bool: "boolean", int: "sint32", "unsigned int": "uint32", char: "uint8", u8: "uint8", u16: "uint16", u32: "uint32", s8: "sint8", s16: "sint16", s32: "sint32" };
+const CPP_TYPES = { uint8: "std::uint8_t", uint16: "std::uint16_t", uint32: "std::uint32_t", sint8: "std::int8_t", sint16: "std::int16_t", sint32: "std::int32_t", float32: "float", float64: "double", boolean: "bool", void: "void", Std_ReturnType: "ara::core::Result<void>", bool: "bool" };
+const cT = (t, own) => C_TYPES[t] || (own.has(cid(t)) ? cid(t) : "uint16");
+const cppT = (t, own) => CPP_TYPES[t] || (own.has(cid(t)) ? cid(t) : "std::uint16_t");
+const BANNER = (file, unit, meta, S, lang) => `/*
+ * File     : ${file}
+ * Unit     : ${unit.id} ${unit.name}
+ * Project  : ${meta?.name || ""}
+ * Platform : ${DD_TARGETS[S.target].label} (AUTOSAR ${S.release})
+ * Standard : ${lang === "C" ? S.misraC : S.misraCpp + " / " + S.cppGuide}  — compliance to be confirmed with ${S.tools.join(", ")}
+ * Traces   : ${(unit.reqs || []).join(", ") || "-"}
+ * Generated: SPIDer QA Agent ${new Date().toISOString().slice(0, 10)} — generated from SWE.3 detailed design; review before release
+ */
+`;
+export function promptCode({ unit, model, settings, meta }) {
+  const S = { ...DD_DEFAULT, ...(settings || {}) }; const dd = unit.dd; const lang = S.target === "CP" ? "C" : "C++17";
+  const ctx = ddContext(unit, model, model.version);
+  const ops = dd.classes.flatMap(c => c.ops.map(o => ({ cls: c.name, name: o.name, ret: o.ret, params: o.params, algo: o.algo, desc: o.desc, pre: o.pre, post: o.post })));
+  return `역할: ${DD_TARGETS[S.target].label} 임베디드 SW 엔지니어. ${S.target === "CP" ? S.misraC : S.misraCpp + " · " + S.cppGuide} 준수를 목표로 아래 상세설계의 **연산 본문**과 **상태 전이 조건식**을 ${lang}로 작성하세요.
+
+${ctx}
+
+[자료형] ${dd.dataTypes.map(t => `${t.name}(${t.base}${t.range ? ": " + t.range : ""})`).join(", ") || "-"}
+[클래스 속성] ${dd.classes.map(c => `${c.name}{${c.attrs.map(a => `${a.type} ${a.name}${a.init ? "=" + a.init : ""}`).join("; ")}}`).join(" ")}
+[포트] ${dd.ports.map(p => `${p.dir}:${p.name}(${p.elements.map(e => `${e.type} ${e.name}`).join(", ")})`).join("; ")}
+[상태] ${dd.states.states.map(s => s.name).join(", ")} / 전이: ${dd.states.transitions.map((t, i) => `T${i}: ${t.from}→${t.to} when "${t.trigger}" [${t.guard}]`).join("; ")}
+[연산과 알고리즘(설계)]
+${ops.map(o => `- ${o.cls}::${o.name}(${o.params.map(p => `${p.dir} ${p.type} ${p.name}`).join(", ")}) -> ${o.ret}: ${o.desc}\n  algo: ${(o.algo || []).join(" / ")}`).join("\n")}
+
+규칙:
+- ${S.target === "CP"
+    ? "C99, AUTOSAR Platform Types(uint8·uint16·sint32·float32·boolean), Std_ReturnType(E_OK/E_NOT_OK). 포트 접근은 Rte_Read_<Port>_<Element>(&var) / Rte_Write_<Port>_<Element>(var)만 사용. 전역 변수는 static, 동적 메모리·재귀·goto·가변 인자 금지, 함수는 단일 반환점, 모든 if/else/switch(default 포함)에 중괄호, 정수 형변환은 명시적, 부동소수 등가 비교 금지, 매직 넘버 대신 설계의 상수 이름."
+    : "C++17, std::uint8_t 등 고정폭 정수, 예외 대신 ara::core::Result, new/delete·C 캐스트·goto 금지, 멤버는 private, const·noexcept 명시, switch에 default, 단일 반환점."}
+- 본문은 설계의 algo 단계를 그대로 구현하고, 각 단계 앞에 한 줄 주석(한국어 가능)과 끝에 관련 요구 ID 주석을 둔다. 외부 호출은 위 연산·포트 이름만 사용(새 함수 지어내지 않음). 외부 값이 필요하면 매개변수로 받는다.
+- 상태 전이 조건식(guards)은 클래스 속성·포트 값·상수로 쓴 불리언 식 1줄(${lang}).
+- 길이: 연산 1개당 10~40줄.
+
+JSON만 출력:
+{"ops":[{"name":"","body":"함수 본문만(선언·중괄호 제외, 줄바꿈 \\n)"}],"guards":[{"index":0,"expr":"불리언 식"}],"consts":[{"name":"","type":"","value":"","desc":""}],"notes":["MISRA 편차가 필요할 수 있는 지점"]}`;
+}
+// 들여쓰기·금지어 정리
+const indent = (s, n = 4) => String(s || "").split("\n").map(l => (l.trim() ? " ".repeat(n) + l.replace(/^\s+/, m => m.slice(0, Math.max(0, m.length - 0))) : "")).join("\n");
+const sanitizeBody = (s, lang) => String(s || "").replace(/```[a-z]*\n?/g, "").replace(/\bgoto\b[^;]*;/g, "/* goto removed (MISRA) */").replace(lang === "C" ? /\b(malloc|calloc|realloc|free)\s*\(/g : /\b(new|delete)\b/g, "/* dynamic memory removed (MISRA) */ (");
+function ruleBody(o, unit, lang) {
+  const steps = (o.algo || []).length ? o.algo : [o.desc || "처리"];
+  const retDecl = o.ret === "void" ? "" : lang === "C" ? (o.ret === "Std_ReturnType" ? "Std_ReturnType ret = E_OK;\n" : `${cT(o.ret, new Set())} ret = (${cT(o.ret, new Set())})0;\n`) : (o.ret === "void" ? "" : `auto ret = ${o.ret === "Std_ReturnType" ? "ara::core::Result<void>{}" : cppT(o.ret, new Set()) + "{}"};\n`);
+  return retDecl + steps.map((st, i) => `/* step ${i + 1}: ${st} */`).join("\n") + `\n/* traces: ${(o.reqs || unit.reqs || []).join(", ") || "-"} */` + (o.ret === "void" ? "" : "\nreturn ret;");
+}
+export function generateCode(unit, model, meta, settings, ai = null) {
+  const S = { ...DD_DEFAULT, ...(settings || {}) }; const dd = unit.dd; if (!dd) return null;
+  const m = normalizeModel(model); const u = cid(unit.name || unit.id); const own = new Set(dd.dataTypes.map(t => cid(t.name)));
+  const bodies = Object.fromEntries(((ai && ai.ops) || []).map(o => [cid(o.name), o.body]));
+  const guards = Object.fromEntries(((ai && ai.guards) || []).map(g => [Number(g.index), g.expr]));
+  const consts = ((ai && ai.consts) || []).map(c => ({ name: cid(c.name), type: str(c.type || "uint16", 30), value: str(c.value, 40), desc: str(c.desc, 120) }));
+  const notes = ((ai && ai.notes) || []).map(n => str(n, 200));
+  const files = [];
+  const stEnum = dd.states.states.length ? dd.states.states.map(s => `${u}_ST_${s.name}`.toUpperCase()) : [];
+  const swc = dd.classes.find(c => c.stereotype === "SWC") || dd.classes[0];
+  const allOps = dd.classes.flatMap(c => c.ops.map(o => ({ ...o, cls: c.name })));
+  const traceCmt = o => `/* Traces: ${(o.reqs || []).join(", ") || (unit.reqs || []).join(", ") || "-"} */`;
+  const runnableNames = new Set(dd.runnables.map(r => cid(r.name)));
+  if (S.target === "CP") {
+    const lang = "C";
+    const typesH = `${u}_Types.h`, rteH = `Rte_${u}.h`, cfgH = `${u}_Cfg.h`, hdr = `${u}.h`, src = `${u}.c`;
+    const guard = f => f.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    // Types
+    files.push({ name: typesH, text: BANNER(typesH, unit, meta, S, lang) + `#ifndef ${guard(typesH)}\n#define ${guard(typesH)}\n\n#include "Std_Types.h"\n\n#ifdef __cplusplus\nextern "C" {\n#endif\n\n` +
+      (stEnum.length ? `/* Operating states of ${u} (state machine, SWE.3) */\ntypedef enum {\n${stEnum.map((e, i) => `    ${e} = ${i}u${i < stEnum.length - 1 ? "," : ""}`).join("\n")}\n} ${u}_StateType;\n\n` : "") +
+      dd.dataTypes.filter(t => cid(t.name) !== `${u}_StateType`).map(t => t.base === "enum" ? `/* ${t.desc} */\ntypedef enum {\n${String(t.range || "VALUE_0").split(/[,;]/).map(x => x.trim()).filter(Boolean).map((x, i, a) => `    ${cid(t.name).toUpperCase()}_${cid(x).toUpperCase()} = ${i}u${i < a.length - 1 ? "," : ""}`).join("\n")}\n} ${cid(t.name)};\n` : t.base === "struct" ? `/* ${t.desc} */\ntypedef struct {\n${String(t.range || "uint16 value").split(/[,;]/).map(x => x.trim()).filter(Boolean).map(x => { const p = x.split(/\s+/); return `    ${cT(p[0], own)} ${cid(p[1] || p[0])};`; }).join("\n")}\n} ${cid(t.name)};\n` : `/* ${t.desc}${t.range ? " — range " + t.range : ""} */\ntypedef ${cT(t.base, own)} ${cid(t.name)};\n`).join("\n") +
+      dd.classes.filter(c => c.attrs.length).map(c => `\n/* Internal data of ${c.name} */\ntypedef struct {\n${c.attrs.map(a => `    ${cT(a.type, own)} ${a.name};${a.desc ? ` /* ${a.desc} */` : ""}`).join("\n")}\n} ${c.name}_DataType;\n`).join("") +
+      `\n#ifdef __cplusplus\n}\n#endif\n\n#endif /* ${guard(typesH)} */\n` });
+    // Cfg (constants)
+    const macros = [...(unit.macros || []).map(x => ({ name: cid(x.name), type: "", value: x.value, desc: "from header" })), ...consts];
+    files.push({ name: cfgH, text: BANNER(cfgH, unit, meta, S, lang) + `#ifndef ${guard(cfgH)}\n#define ${guard(cfgH)}\n\n#include "Std_Types.h"\n\n/* Design constants (no magic numbers in ${src}) */\n` +
+      dd.runnables.filter(r => r.periodMs).map(r => `#define ${u.toUpperCase()}_${cid(r.name).toUpperCase()}_PERIOD_MS   (${r.periodMs}u)\n`).join("") +
+      macros.map(c => `#define ${c.name.toUpperCase().replace(/\(.*$/, "")}   (${/^[\d.]+$/.test(c.value) ? c.value + (c.value.includes(".") ? "f" : "u") : c.value || "0u"})${c.desc ? `   /* ${c.desc} */` : ""}\n`).join("") +
+      `\n#endif /* ${guard(cfgH)} */\n` });
+    // Rte stub (placeholder — real one from RTE generator)
+    files.push({ name: rteH, text: BANNER(rteH, unit, meta, S, lang) + `/* PLACEHOLDER for the RTE generator output (DaVinci / EB tresos / ISOLAR). Replace with the generated Rte_${u}.h.\n * Port API derived from SWE.3 ports — same names must appear in the SWC description (ARXML). */\n#ifndef ${guard(rteH)}\n#define ${guard(rteH)}\n\n#include "Std_Types.h"\n#include "${typesH}"\n\n` +
+      dd.ports.flatMap(p => p.elements.map(e => p.dir === "R" ? `Std_ReturnType Rte_Read_${p.name}_${e.name}(${cT(e.type, own)} *data);   /* ${p.interface} */` : `Std_ReturnType Rte_Write_${p.name}_${e.name}(${cT(e.type, own)} data);   /* ${p.interface} */`)).join("\n") +
+      `\n\n${dd.runnables.map(r => `#define RTE_RUNNABLE_${cid(r.name)}\nvoid ${cid(r.name)}(void);   /* ${r.trigger}${r.periodMs ? " " + r.periodMs + "ms" : ""} */`).join("\n")}\n\n#endif /* ${guard(rteH)} */\n` });
+    // Header
+    files.push({ name: hdr, text: BANNER(hdr, unit, meta, S, lang) + `#ifndef ${guard(hdr)}\n#define ${guard(hdr)}\n\n#include "Std_Types.h"\n#include "${typesH}"\n\n#ifdef __cplusplus\nextern "C" {\n#endif\n\n/* Runnable entities (called by RTE) */\n${dd.runnables.map(r => `void ${cid(r.name)}(void);`).join("\n")}\n\n/* Unit operations (SWE.3) */\n${allOps.filter(o => o.vis !== "-" && !runnableNames.has(o.name)).map(o => `${traceCmt(o)}\n${cT(o.ret, own)} ${o.name}(${o.params.length ? o.params.map(p => `${p.dir === "in" ? "const " : ""}${cT(p.type, own)}${p.dir === "in" ? "" : " *"} ${p.name}`).join(", ") : "void"});`).join("\n")}\n\n#ifdef __cplusplus\n}\n#endif\n\n#endif /* ${guard(hdr)} */\n` });
+    // Source
+    const opDef = o => { const sig = `${cT(o.ret, own)} ${o.name}(${o.params.length ? o.params.map(p => `${p.dir === "in" ? "const " : ""}${cT(p.type, own)}${p.dir === "in" ? "" : " *"} ${p.name}`).join(", ") : "void"})`;
+      const body = sanitizeBody(bodies[cid(o.name)] || ruleBody(o, unit, lang), lang);
+      return `/*------------------------------------------------------------------\n * ${o.name} — ${o.desc || ""}\n${o.pre ? ` * Pre : ${o.pre}\n` : ""}${o.post ? ` * Post: ${o.post}\n` : ""} * ${traceCmt(o).replace(/\/\*|\*\//g, "").trim()}\n *----------------------------------------------------------------*/\n${o.vis === "-" ? "static " : ""}${sig}\n{\n${indent(body)}\n}\n`; };
+    const smFunc = stEnum.length ? `/* State machine step — transitions from SWE.3 state machine */\nstatic void ${u}_StateMachine(void)\n{\n    switch (${u}_State)\n    {\n${dd.states.states.map(s => { const outs = dd.states.transitions.map((t, i) => ({ t, i })).filter(x => x.t.from === s.name); return `        case ${`${u}_ST_${s.name}`.toUpperCase()}:\n        {\n${outs.map(({ t, i }) => `            /* ${t.trigger}${t.guard ? ` [${t.guard}]` : ""} — traces: ${(t.reqs || []).join(", ") || "-"} */\n            if (${guards[i] || "FALSE /* TODO guard: " + (t.guard || t.trigger) + " */"})\n            {\n${t.effect ? `                /* effect: ${t.effect} */\n` : ""}                ${u}_State = ${`${u}_ST_${t.to}`.toUpperCase()};\n            }\n`).join("            else\n")}            break;\n        }\n`; }).join("")}        default:\n        {\n            ${u}_State = ${stEnum[0]};   /* defensive: unknown state → re-init (MISRA switch default) */\n            break;\n        }\n    }\n}\n` : "";
+    files.push({ name: src, text: BANNER(src, unit, meta, S, lang) + `#include "${hdr}"\n#include "${cfgH}"\n#include "${rteH}"\n\n/*==================================================================\n * Internal data (static — no external linkage, MISRA C:2023 Rule 8.7/8.9)\n *================================================================*/\n${stEnum.length ? `static ${u}_StateType ${u}_State = ${stEnum[0]};\n` : ""}${dd.classes.filter(c => c.attrs.length).map(c => `static ${c.name}_DataType ${c.name}_Data;`).join("\n")}\n\n/* Port buffers */\n${dd.ports.flatMap(p => p.elements.map(e => `static ${cT(e.type, own)} ${p.name}_${e.name};`)).join("\n")}\n\n/* Private operations */\n${allOps.filter(o => o.vis === "-").map(o => `static ${cT(o.ret, own)} ${o.name}(${o.params.length ? o.params.map(p => `${p.dir === "in" ? "const " : ""}${cT(p.type, own)}${p.dir === "in" ? "" : " *"} ${p.name}`).join(", ") : "void"});`).join("\n")}\n${stEnum.length ? `static void ${u}_StateMachine(void);\n` : ""}\n/*==================================================================\n * Runnable entities\n *================================================================*/\n` +
+      dd.runnables.map(r => `/* ${r.name} — ${r.desc || ""} (${r.trigger}${r.periodMs ? `, ${r.periodMs}ms` : ""}) traces: ${(r.reqs || []).join(", ") || "-"} */\nvoid ${cid(r.name)}(void)\n{\n${r.trigger === "init" ? `    ${stEnum.length ? `${u}_State = ${stEnum[0]};\n` : ""}${dd.classes.filter(c => c.attrs.length).map(c => c.attrs.map(a => `    ${c.name}_Data.${a.name} = (${cT(a.type, own)})${/^[\d.]+$/.test(a.init) ? a.init : "0"};`).join("\n")).join("\n")}\n` : ""}${r.reads.flatMap(pn => (dd.ports.find(p => p.name === pn)?.elements || []).map(e => `    (void)Rte_Read_${pn}_${e.name}(&${pn}_${e.name});`)).join("\n")}\n${(() => { const self = allOps.find(o => o.name === cid(r.name)); return self ? indent(sanitizeBody(bodies[cid(self.name)] || ruleBody({ ...self, ret: "void" }, unit, lang), lang)) + "\n" : ""; })()}${r.calls.filter(c => allOps.some(o => o.name === c) && !runnableNames.has(c)).map(c => { const o = allOps.find(x => x.name === c); return `    ${o.ret === "void" ? "" : "(void)"}${c}(${o.params.map(p => p.dir === "in" ? `${p.name}` : `&${p.name}`).join(", ")});   /* ${o.desc || ""} */`; }).join("\n")}\n${stEnum.length && r.trigger !== "init" ? `    ${u}_StateMachine();\n` : ""}${r.writes.flatMap(pn => (dd.ports.find(p => p.name === pn)?.elements || []).map(e => `    (void)Rte_Write_${pn}_${e.name}(${pn}_${e.name});`)).join("\n")}\n}\n`).join("\n") +
+      `\n/*==================================================================\n * Unit operations\n *================================================================*/\n` + allOps.filter(o => !runnableNames.has(o.name)).map(opDef).join("\n") + "\n" + smFunc });
+    return { target: "CP", lang, files, notes, generatedAt: new Date().toISOString(), origin: ai ? "ai" : "rule" };
+  }
+  // ── AP: C++17 ──
+  const lang = "C++";
+  const hpp = `${u}.hpp`, cpp = `${u}.cpp`, cfg = `${u}_config.hpp`;
+  const ns = `app::${u.toLowerCase()}`;
+  const guardM = f => f.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+  const stEnumCpp = dd.states.states.map(s => s.name.toUpperCase());
+  files.push({ name: cfg, text: BANNER(cfg, unit, meta, S, lang) + `#ifndef ${guardM(cfg)}\n#define ${guardM(cfg)}\n\n#include <cstdint>\n#include <chrono>\n\nnamespace ${ns} {\nnamespace config {\n${dd.runnables.filter(r => r.periodMs).map(r => `constexpr std::chrono::milliseconds k${cid(r.name)}Period{${r.periodMs}};`).join("\n")}\n${consts.map(c => `constexpr ${cppT(c.type, own)} k${c.name.replace(/^k/, "")}{${c.value || "0"}};${c.desc ? ` // ${c.desc}` : ""}`).join("\n")}\n}  // namespace config\n}  // namespace ${ns}\n\n#endif  // ${guardM(cfg)}\n` });
+  files.push({ name: hpp, text: BANNER(hpp, unit, meta, S, lang) + `#ifndef ${guardM(hpp)}\n#define ${guardM(hpp)}\n\n#include <cstdint>\n#include "ara/core/result.h"\n#include "ara/core/error_code.h"\n#include "${cfg}"\n// Service proxies/skeletons are generated by the ara::com generator from the service interface description:\n${dd.ports.map(p => `// #include "${p.interface.toLowerCase()}_${p.dir === "R" ? "proxy" : "skeleton"}.h"   // ${p.dir === "R" ? "required" : "provided"} ${p.kind}`).join("\n")}\n\nnamespace ${ns} {\n\n${dd.dataTypes.map(t => t.base === "enum" ? `enum class ${cid(t.name)} : std::uint8_t { ${String(t.range || "Value0").split(/[,;]/).map(x => cid(x.trim())).filter(Boolean).join(", ")} };  // ${t.desc}` : t.base === "struct" ? `struct ${cid(t.name)} {\n${String(t.range || "uint16 value").split(/[,;]/).map(x => x.trim()).filter(Boolean).map(x => { const p = x.split(/\s+/); return `  ${cppT(p[0], own)} ${cid(p[1] || p[0])}{};`; }).join("\n")}\n};  // ${t.desc}` : `using ${cid(t.name)} = ${cppT(t.base, own)};  // ${t.desc}${t.range ? " range " + t.range : ""}`).join("\n")}\n${stEnumCpp.length ? `\nenum class State : std::uint8_t { ${stEnumCpp.join(", ")} };\n` : ""}\n` +
+    dd.classes.map(c => `/// ${c.desc || c.name}\n/// Traces: ${(c.reqs || []).join(", ") || "-"}\nclass ${c.name} final {\n public:\n  ${c.name}() noexcept = default;\n  ~${c.name}() noexcept = default;\n  ${c.name}(const ${c.name}&) = delete;\n  ${c.name}& operator=(const ${c.name}&) = delete;\n  ${c.name}(${c.name}&&) = delete;\n  ${c.name}& operator=(${c.name}&&) = delete;\n\n${c.ops.filter(o => o.vis !== "-").map(o => `  /// ${o.desc || ""}\n  /// Traces: ${(o.reqs || []).join(", ") || "-"}\n  ${cppT(o.ret, own)} ${o.name}(${o.params.map(p => `${p.dir === "in" ? "const " : ""}${cppT(p.type, own)}${p.dir === "in" ? "" : "&"} ${p.name}`).join(", ")}) noexcept;`).join("\n")}\n${c.stereotype === "SWC" ? `\n  /// Runnables (scheduled by the application main / ara::exec)\n${dd.runnables.map(r => `  void ${cid(r.name)}() noexcept;  // ${r.trigger}${r.periodMs ? " " + r.periodMs + "ms" : ""}`).join("\n")}\n` : ""}\n private:\n${c.ops.filter(o => o.vis === "-").map(o => `  ${cppT(o.ret, own)} ${o.name}(${o.params.map(p => `${p.dir === "in" ? "const " : ""}${cppT(p.type, own)}${p.dir === "in" ? "" : "&"} ${p.name}`).join(", ")}) noexcept;`).join("\n")}${c.stereotype === "SWC" && stEnumCpp.length ? `\n  void StepStateMachine() noexcept;\n  State state_{State::${stEnumCpp[0]}};` : ""}\n${c.attrs.map(a => `  ${cppT(a.type, own)} ${a.name}_{${/^[\d.]+$/.test(a.init) ? a.init : ""}};${a.desc ? `  // ${a.desc}` : ""}`).join("\n")}\n${c.stereotype === "SWC" ? dd.ports.flatMap(p => p.elements.map(e => `  ${cppT(e.type, own)} ${p.name}_${e.name}_{};  // ${p.dir === "R" ? "last received" : "to publish"} via ${p.interface}`)).join("\n") : ""}\n};\n`).join("\n") +
+    `\n}  // namespace ${ns}\n\n#endif  // ${guardM(hpp)}\n` });
+  const opDefCpp = (c, o) => { const body = sanitizeBody(bodies[cid(o.name)] || ruleBody(o, unit, "C++"), "C++").replace(/\b(\w+)_Data\.(\w+)/g, "$2_"); return `// ${o.desc || ""}\n// Traces: ${(o.reqs || []).join(", ") || "-"}\n${cppT(o.ret, own)} ${c.name}::${o.name}(${o.params.map(p => `${p.dir === "in" ? "const " : ""}${cppT(p.type, own)}${p.dir === "in" ? "" : "&"} ${p.name}`).join(", ")}) noexcept {\n${indent(body, 2)}\n}\n`; };
+  files.push({ name: cpp, text: BANNER(cpp, unit, meta, S, lang) + `#include "${hpp}"\n\nnamespace ${ns} {\n\n` +
+    dd.classes.map(c => c.ops.filter(o => !(c.stereotype === "SWC" && dd.runnables.some(r => cid(r.name) === o.name))).map(o => opDefCpp(c, o)).join("\n") + (c.stereotype === "SWC" ? dd.runnables.map(r => `// ${r.desc || r.name} (${r.trigger}${r.periodMs ? `, ${r.periodMs}ms` : ""}) Traces: ${(r.reqs || []).join(", ") || "-"}\nvoid ${c.name}::${cid(r.name)}() noexcept {\n${r.reads.map(pn => `  // receive: ${pn} (ara::com proxy GetNewSamples / field Get)`).join("\n")}\n${(() => { const self = c.ops.find(o => o.name === cid(r.name)); return self ? indent(sanitizeBody(bodies[cid(self.name)] || ruleBody({ ...self, ret: "void" }, unit, "C++"), "C++").replace(/\b(\w+)_Data\.(\w+)/g, "$2_"), 2) + "\n" : ""; })()}${r.calls.filter(x => x !== cid(r.name) && !dd.runnables.some(rr => cid(rr.name) === x) && c.ops.some(o => o.name === x)).map(x => { const o = c.ops.find(y => y.name === x); return `  ${o.ret === "void" ? "" : "static_cast<void>("}${x}(${o.params.map(p => p.name + "_").join(", ")})${o.ret === "void" ? "" : ")"};`; }).join("\n")}\n${stEnumCpp.length && r.trigger !== "init" ? "  StepStateMachine();\n" : ""}${r.writes.map(pn => `  // publish: ${pn} (ara::com skeleton event Send / field Update)`).join("\n")}\n}\n`).join("\n") + (stEnumCpp.length ? `\nvoid ${c.name}::StepStateMachine() noexcept {\n  switch (state_) {\n${dd.states.states.map(s => `    case State::${s.name.toUpperCase()}: {\n${dd.states.transitions.map((t, i) => ({ t, i })).filter(x => x.t.from === s.name).map(({ t, i }) => `      // ${t.trigger}${t.guard ? ` [${t.guard}]` : ""} — traces: ${(t.reqs || []).join(", ") || "-"}\n      if (${(guards[i] || "false /* TODO guard: " + (t.guard || t.trigger) + " */").replace(/\b(\w+)_Data\.(\w+)/g, "$2_")}) {\n${t.effect ? `        // effect: ${t.effect}\n` : ""}        state_ = State::${t.to.toUpperCase()};\n      }`).join(" else\n")}\n      break;\n    }\n`).join("")}    default: {\n      state_ = State::${stEnumCpp[0]};  // defensive\n      break;\n    }\n  }\n}\n` : "") : "")).join("\n") +
+    `\n}  // namespace ${ns}\n` });
+  return { target: "AP", lang, files, notes, generatedAt: new Date().toISOString(), origin: ai ? "ai" : "rule" };
+}
+
+// ═══ MISRA 적용 체크리스트 — 규칙 '번호'만 참조(원문은 MISRA 저작물). 생성기가 구조적으로 보장하는 항목 / 도구 확인 항목 구분 ═══
+export const MISRA_C_ROWS = [
+  ["Dir 4.6", "필수", "고정폭 정수형 사용", "AUTOSAR Platform Types(uint8·uint16…)만 사용", "생성기 보장"],
+  ["Dir 4.12", "필수", "동적 메모리 미사용", "malloc/free 생성 금지(본문 필터)", "생성기 보장"],
+  ["Rule 1.3", "필수", "미정의 동작 없음", "—", "도구 확인"],
+  ["Rule 2.2", "필수", "불필요 코드 없음", "미사용 변수 검사", "도구 확인"],
+  ["Rule 8.4", "필수", "외부 연결 객체·함수의 선언 가시", "모든 외부 함수는 .h에 원형 선언", "생성기 보장"],
+  ["Rule 8.7", "권고", "단일 번역 단위 참조 객체는 내부 연결", "파일 내부 데이터·함수 static", "생성기 보장"],
+  ["Rule 10.1~10.8", "필수", "필수 형 모델(암묵 변환 제한)", "명시적 캐스트, 상수 접미사 u/f", "도구 확인"],
+  ["Rule 11.x", "필수", "포인터 변환 제한", "void* 미사용", "생성기 보장"],
+  ["Rule 13.x", "필수", "부수 효과 순서", "—", "도구 확인"],
+  ["Rule 14.4", "필수", "제어식은 불리언", "guard 식 불리언 검토", "도구 확인"],
+  ["Rule 15.1", "권고", "goto 미사용", "goto 제거 필터", "생성기 보장"],
+  ["Rule 15.5", "권고", "함수 단일 반환점", "ret 변수 후 단일 return", "생성기 보장(AI 본문은 도구 확인)"],
+  ["Rule 15.6/15.7", "필수", "제어문 중괄호·else 종결", "모든 분기 중괄호", "생성기 보장(AI 본문은 도구 확인)"],
+  ["Rule 16.1~16.4", "필수", "switch 구조·default", "상태 머신 switch에 default", "생성기 보장"],
+  ["Rule 17.2", "필수", "재귀 금지", "—", "도구 확인"],
+  ["Rule 17.7", "필수", "반환값 사용", "Rte_* 반환값 (void) 캐스트 또는 처리", "생성기 보장"],
+  ["Rule 21.3", "필수", "stdlib 메모리 함수 금지", "미사용", "생성기 보장"],
+  ["Rule 21.6", "필수", "stdio 금지", "미사용", "생성기 보장"],
+  ["Rule 21.x/22.x", "필수", "표준 라이브러리 제한·자원", "—", "도구 확인"],
+];
+export const MISRA_CPP_ROWS = [
+  ["Rule 0.1.x / 0.2.x", "필수", "도달 불가·불필요 코드 없음", "—", "도구 확인"],
+  ["Rule 4.1.3", "필수", "미정의 동작 없음", "—", "도구 확인"],
+  ["Rule 6.x", "필수", "선언·초기화·정적 저장", "멤버 기본값 초기화, static 미사용", "생성기 보장"],
+  ["Rule 7.0.x", "필수", "표준 변환 제한", "static_cast만, C 캐스트 금지", "생성기 보장(AI 본문은 도구 확인)"],
+  ["Rule 8.2.x", "필수", "캐스트 제한", "reinterpret_cast 금지", "도구 확인"],
+  ["Rule 9.3.1 / 9.4.x", "필수", "제어문 중괄호·switch default", "switch default", "생성기 보장"],
+  ["Rule 9.6.x", "필수", "goto 금지", "goto 제거 필터", "생성기 보장"],
+  ["Rule 15.x", "필수", "특수 멤버 함수", "복사/이동 삭제·noexcept 소멸자", "생성기 보장"],
+  ["Rule 18.x", "필수", "예외 처리 제한", "예외 대신 ara::core::Result", "생성기 보장"],
+  ["Rule 21.6.x", "필수", "동적 메모리 제한", "new/delete 금지", "생성기 보장"],
+  ["AUTOSAR C++14 A2-10-x", "필수", "식별자 숨김 금지", "—", "도구 확인"],
+  ["AUTOSAR C++14 A5-1-1", "필수", "매직 넘버 금지", "constexpr 상수(config)", "생성기 보장(AI 본문은 도구 확인)"],
+  ["AUTOSAR C++14 A8-4-x", "필수", "매개변수 전달 방식", "const& / 값", "생성기 보장"],
+  ["AUTOSAR C++14 A12-x", "필수", "클래스 특수 멤버", "final, delete 복사/이동", "생성기 보장"],
+];
+export function misraChecklistRows(settings) {
+  const S = { ...DD_DEFAULT, ...(settings || {}) };
+  const rows = S.target === "CP" ? MISRA_C_ROWS : MISRA_CPP_ROWS;
+  const std = S.target === "CP" ? S.misraC : `${S.misraCpp} · ${S.cppGuide}`;
+  return [[`MISRA 적용 체크리스트 — ${std}`], [`대상 플랫폼: ${DD_TARGETS[S.target].label}`, `정적분석: ${S.tools.join(" · ")}`, "규칙 원문은 MISRA 라이선스 문서를 참조(본 표는 번호와 적용 조치만 기재)"], [],
+    ["규칙 번호", "분류", "주제(요약)", "생성 코드의 조치", "보장 수준", `${S.tools[0]} 점검`, `${S.tools[1]} 점검`, "편차 번호", "비고"],
+    ...rows.map(r => [...r, `${std} 룰셋`, `${std} 체커`, "", r[4].includes("도구") ? "도구 결과로 판정" : "구조적 회피, 도구 결과로 재확인"])];
+}
