@@ -7690,6 +7690,71 @@ function makeAspiceUnitDesignDocx(meta, ctx, doc) {
   body += docxP(`${++sec}. 설계 근거`, { bold: true, size: 26, spacingAfter: 120 }) + docxP(model.rationale.SW || "설계 근거 미작성 (TBD)", { size: 20 });
   return docxPackage(front + body, pkgOpts);
 }
+// ── HWE.2 HW 상세설계서 (04-53 + 13-51 일관성 증거 + 13-52 의사소통 증거) ──
+function makeHwDetailedDesignDocx(meta, ctx, doc) {
+  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const kind = "HW_DD"; const title = doc?.name || AE.ASPICE_DOCS[kind].title;
+  const { front, pkgOpts } = docxStdParts({ title, docCode: projectDocNo(meta, doc?.code || AE.ASPICE_DOCS[kind].code), phase: "HWE.2", meta });
+  const S = AE.hdSettings(model);
+  const comps = model.comps.HW, req = Object.fromEntries(model.reqs.HW.map(r => [r.id, r]));
+  const designed = comps.filter(c => c.hd?.parts?.length);
+  let body = aspiceFrontBody({ kind, model, meta, doc, title, extraRows: [["HW 블록", `${comps.length}개 (회로 설계 ${designed.length})`], ["부품 수", String(designed.reduce((n, c) => n + c.hd.parts.length, 0))], ["EDA 호환", `${S.eda} — 회로도 ${S.schematicFmt} · 레이아웃 ${S.layoutFmt} · 생산 ${S.fabFmt}`]] });
+  let sec = 0;
+  body += docxP(`${++sec}. 개요 및 작성 원칙`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxP(`본 문서는 HW 아키텍처(04-52)의 각 회로 블록에 대해 부품·넷·연결·외부 인터페이스를 회로 수준으로 정의하고(04-53), HW 요구사항 ↔ 블록 ↔ 부품의 추적과 일관성 증거(13-51), 설계 검토·합의 기록(13-52)을 포함한다. 부품 제조사 부품번호는 AI가 제안한 '후보'이며 구매·수명·2nd source 검토 후 확정한다. 회로도(04-54, ${S.schematicFmt})·레이아웃 입력(04-55, ${S.layoutFmt})·생산 데이터(03-54, ${S.fabFmt})·BOM(14-54)·특별 특성(17-57)·분석 결과(15-51)는 별도 산출물로 생성되며 본 문서와 같은 설계 모델에서 나온다.`, { size: 20, spacingAfter: 120 });
+  body += docxP(`${++sec}. 블록 구성 및 설계 요약`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxTable([["블록 ID", "블록명", "구분", "부품", "넷", "할당 HW 요구", "설계 상태"], ...comps.map(c => [c.id, c.name, c.kind || "", c.hd?.parts?.length ? String(c.hd.parts.length) : "-", c.hd?.nets?.length ? String(c.hd.nets.length) : "-", Object.entries(model.alloc.HW).filter(([, v]) => (v || []).includes(c.id)).map(([k]) => k).join(", ") || "-", c.hd?.parts?.length ? (c.hd.origin === "ai" ? "AI 설계" : "규칙 설계") : "미설계"])], -1);
+  body += docxP(`${++sec}. 블록별 회로 상세설계 (04-53)`, { bold: true, size: 26, spacingAfter: 120 });
+  comps.forEach(c => {
+    const hd = c.hd;
+    body += docxP(`${c.id} · ${c.name}`, { bold: true, size: 22, spacingAfter: 80 });
+    if (!hd?.parts?.length) { body += docxP("회로 설계 미생성 — V-모델 HWE.2 탭의 [AI 회로 설계 생성]으로 작성", { size: 20, spacingAfter: 120 }); return; }
+    body += docxP(hd.summary || "", { size: 20, spacingAfter: 80 });
+    body += docxP("부품 (RefDes · 종류 · 값 · 패키지 · 제조사/PN 후보 · 정격 · 근거 요구)", { bold: true, size: 20, spacingAfter: 60 }) +
+      docxTable([["RefDes", "종류", "값", "패키지", "제조사 / PN(후보)", "정격 · 등급", "용도", "근거 요구"], ...hd.parts.map(p => [p.ref, p.kind, p.value, p.pkg, `${p.mfr || ""} / ${p.mpn || "-"}`, [p.rating, p.grade].filter(Boolean).join(" · "), p.desc, (p.reqs || []).join(", ") || "-"])], -1);
+    body += docxP("넷 목록", { bold: true, size: 20, spacingAfter: 60 }) +
+      docxTable([["넷", "종류", "전압", "연결 핀", "설명"], ...hd.nets.map(n => [n.name, n.kind, n.voltage || "-", hd.conns.filter(x => x.net === n.name).map(x => `${x.ref}.${x.pin}`).join(", ") || "-", n.desc || ""])], -1);
+    if (hd.ifs.length) body += docxP("외부 인터페이스", { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["이름", "방향", "넷", "커넥터", "사양", "출처", "근거 요구"], ...hd.ifs.map(i => [i.name, i.dir, i.net, i.connector || "-", i.spec || "-", i.source || "-", (i.reqs || []).join(", ") || "-"])], -1);
+    body += docxP("설계 근거", { bold: true, size: 20, spacingAfter: 60 }) + docxP(hd.rationale || "-", { size: 20, spacingAfter: 120 });
+    body += docxP(`회로도: 산출물 ZIP 'HW4101_HW설계_모델/schematics/${c.id}_schematic.svg' (${S.schematicFmt} 내보내기는 같은 폴더)`, { size: 18, spacingAfter: 120 });
+  });
+  body += docxP(`${++sec}. 일관성·추적성 증거 (13-51)`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxTable([["HW 요구 ID", "요구사항명", "할당 블록", "구현 부품(RefDes)", "특별 특성", "판정"], ...model.reqs.HW.map(r => { const bl = comps.filter(c => (model.alloc.HW[r.id] || []).includes(c.id)); const parts = bl.flatMap(c => (c.hd?.parts || []).filter(p => (p.reqs || []).includes(r.id)).map(p => `${c.id}:${p.ref}`)); const sc = bl.flatMap(c => (c.hd?.specials || []).filter(x => (x.reqs || []).includes(r.id)).map(x => x.id)); return [r.id, r.title || "", bl.map(c => c.name).join(", ") || "-", parts.join(", ") || "-", sc.join(", ") || "-", !bl.length ? "미할당" : !parts.length ? "부품 추적 없음" : "일관"]; })], -1);
+  body += docxP(`${++sec}. 설계 검토·합의 기록 (13-52)`, { bold: true, size: 26, spacingAfter: 120 }) +
+    docxP("본 설계의 검토는 V-모델 '점검·QA › QA 교차검토'의 판정 기록(검토 AI 의견 → QA 담당자 유효/무효 판정)과 추적 매트릭스의 '변경 영향·판정 이력' 시트를 증거로 한다. 고객·관련 부서와의 합의는 아래 표에 기록한다.", { size: 20, spacingAfter: 80 }) +
+    docxTable([["일자", "회의·채널", "참석자(부서)", "합의 내용", "관련 블록·요구", "증거(회의록·메일)"], ["", "", "", "", "", ""], ["", "", "", "", "", ""]], 1);
+  return docxPackage(front + body, pkgOpts);
+}
+// ── HWE.2 xlsx: BOM(14-54) · 특별 특성(17-57) · 설계 분석 결과(15-51) ──
+function makeHwDesignXlsx(kind, meta, ctx, doc) {
+  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const D = AE.ASPICE_DOCS[kind]; const title = doc?.name || D.title;
+  const std = xlsxStdParts({ title, docCode: projectDocNo(meta, doc?.code || D.code), phase: "HWE.2", meta, infoRows: [["적용 기준", `Automotive SPICE ${AE.ASPICE_VERSIONS.find(v => v.id === model.version)?.label || model.version}`], ["정보항목(WP)", AE.wpLabel(kind, model.version)]] });
+  const head = [[title], [`프로젝트: ${meta.name || ""}`, `문서번호: ${projectDocNo(meta, doc?.code || D.code)}`, `프로세스: ${AE.procLabel("HWE.2", model.version)}`, `정보항목: ${AE.wpLabel(kind, model.version)}`], []];
+  const comps = model.comps.HW.filter(c => c.hd?.parts?.length);
+  if (kind === "HW_BOM") {
+    const rows = [...head, ["No", "블록", "RefDes", "종류", "값", "패키지", "제조사", "제조사 PN (후보)", "정격", "등급", "수량", "특별 특성", "용도", "근거 요구", "확정 PN", "2nd Source", "비고"]];
+    let i = 0; comps.forEach(c => c.hd.parts.forEach(p => rows.push([String(++i), `${c.id} ${c.name}`, p.ref, p.kind, p.value, p.pkg, p.mfr, p.mpn, p.rating, p.grade, String(p.qty || 1), p.special ? "●" : "", p.desc, (p.reqs || []).join(", "), "", "", "PN은 AI 후보 — 구매 확정 필요"])));
+    // 집계(동일 PN)
+    const agg = {}; comps.forEach(c => c.hd.parts.forEach(p => { const k = `${p.mfr}|${p.mpn}|${p.value}|${p.pkg}`; agg[k] = agg[k] || { mfr: p.mfr, mpn: p.mpn, value: p.value, pkg: p.pkg, kind: p.kind, qty: 0, refs: [] }; agg[k].qty += p.qty || 1; agg[k].refs.push(p.ref); }));
+    const sum = [["집계 BOM (동일 PN 합산)"], [], ["No", "종류", "값", "패키지", "제조사", "제조사 PN (후보)", "총 수량", "RefDes"], ...Object.values(agg).map((a, k) => [String(k + 1), a.kind, a.value, a.pkg, a.mfr, a.mpn, String(a.qty), a.refs.join(", ")])];
+    return makeXlsxBook([std.cover, { name: "BOM", rows, widths: [5, 18, 8, 10, 16, 10, 16, 26, 22, 12, 6, 8, 28, 18, 16, 16, 24], headerRows: [3], titleRows: [0], freezeRow: 4 }, { name: "집계 BOM", rows: sum, widths: [5, 10, 16, 10, 16, 26, 8, 30], headerRows: [2], titleRows: [0] }], std.opts);
+  }
+  if (kind === "HW_SC") {
+    const rows = [...head, ["No", "블록", "특성 ID", "특별 특성", "분류", "대상(부품·넷)", "관리 값·공차", "관리 방법", "검증 방법(HWE.3/4)", "근거 요구", "담당", "상태"]];
+    let i = 0; comps.forEach(c => c.hd.specials.forEach(x => rows.push([String(++i), `${c.id} ${c.name}`, `${c.id}-${x.id}`, x.char, x.type, x.target, x.value, x.control, x.verify, (x.reqs || []).join(", "), "", "제안(검토 필요)"])));
+    rows.push([], ["※ 4.0 17-57 특별 특성: 안전·법규·주요 기능에 영향을 주어 생산·공급망에서 특별 관리가 필요한 특성. 고객 지정 특성(CC/SC)과 대조하여 확정한다."]);
+    return makeXlsxBook([std.cover, { name: "특별 특성", rows, widths: [5, 18, 12, 40, 8, 14, 18, 30, 26, 18, 10, 14], headerRows: [3], titleRows: [0], freezeRow: 4 }], std.opts);
+  }
+  // HW_AN — 분석 결과 4종
+  const der = [...head, ["블록", "RefDes", "파라미터", "정격", "적용 조건", "비율", "기준", "판정", "비고"]];
+  const th = [["열 해석"], [], ["블록", "RefDes", "소비 전력(mW)", "θJA(°C/W)", "Ta(°C)", "Tj(°C)", "한계(°C)", "판정", "비고"]];
+  const tm = [["타이밍 분석"], [], ["블록", "항목", "요구", "계산", "마진", "판정", "비고"]];
+  const wc = [["최악 조건 분석"], [], ["블록", "항목", "공칭", "최소", "최대", "한계", "방법(EVA/RSS/MC)", "판정", "비고"]];
+  comps.forEach(c => { const a = c.hd.analysis; a.derating.forEach(x => der.push([c.name, x.ref, x.param, x.rated, x.applied, x.ratio, x.limit, x.ok ? "OK" : "NG", x.note])); a.thermal.forEach(x => th.push([c.name, x.ref, x.pd_mW, x.theta, x.ta, x.tj, x.limit, x.ok ? "OK" : "NG", x.note])); a.timing.forEach(x => tm.push([c.name, x.item, x.req, x.calc, x.margin, x.ok ? "OK" : "NG", x.note])); a.worstCase.forEach(x => wc.push([c.name, x.item, x.nominal, x.min, x.max, x.limit, x.method, x.ok ? "OK" : "NG", x.note])); });
+  const summary = [["분석 결과 요약"], [], ["분석", "항목 수", "NG"], ["Derating", String(der.length - 4), String(der.slice(4).filter(r => r[7] === "NG").length)], ["열", String(th.length - 3), String(th.slice(3).filter(r => r[7] === "NG").length)], ["타이밍", String(tm.length - 3), String(tm.slice(3).filter(r => r[5] === "NG").length)], ["최악 조건", String(wc.length - 3), String(wc.slice(3).filter(r => r[7] === "NG").length)], [], ["※ 4.0 15-51 분석 결과: 설계가 요구를 만족함을 보이는 분석(정격/Derating·열·타이밍·최악조건). 가정값은 '(가정)'으로 표시되었으며 회로 확정 후 실측·시뮬레이션으로 갱신한다."]];
+  return makeXlsxBook([std.cover, { name: "요약", rows: summary, widths: [16, 10, 8], headerRows: [2], titleRows: [0] }, { name: "Derating", rows: der, widths: [16, 8, 14, 16, 18, 8, 8, 6, 40], headerRows: [3], titleRows: [0], freezeRow: 4 }, { name: "열", rows: th, widths: [16, 8, 12, 12, 8, 8, 8, 6, 40], headerRows: [2], titleRows: [0] }, { name: "타이밍", rows: tm, widths: [16, 24, 18, 24, 12, 6, 30], headerRows: [2], titleRows: [0] }, { name: "최악조건", rows: wc, widths: [16, 24, 12, 14, 16, 20, 14, 6, 30], headerRows: [2], titleRows: [0] }], std.opts);
+}
 // 양방향 추적 매트릭스 (3.1 13-22 / 4.0 13-51) + 일관성 점검 결과
 function makeAspiceRtmXlsx(meta, ctx, doc) {
   const fullModel = AE.normalizeModel(ctx?.requirements?.aspice);
@@ -7822,6 +7887,7 @@ function aspiceCanBuild(kind, ctx0) {
   const raw = ctx?.requirements?.aspice;
   if (!kind || !raw) return false;
   const m = AE.normalizeModel(raw);
+  if (AE.HW_DESIGN_KINDS.includes(kind)) return !!m.scope.HW && (m.comps.HW || []).some(c => c.hd?.parts?.length);   // HWE.2 회로 설계가 있어야 내용이 채워짐
   if (AE.HW_DOC_KINDS.includes(kind)) return !!m.scope.HW;
   const has = { SYS_AD: m.comps.SYS.length > 0, SW_RS: m.scope.SW && m.reqs.SW.length > 0, HW_RS: m.scope.HW && m.reqs.HW.length > 0,
     SW_AD: m.scope.SW && m.comps.SW.length > 0, HW_AD: m.scope.HW && m.comps.HW.length > 0, RTM: m.reqs.SYS.length > 0,
@@ -7838,10 +7904,12 @@ function buildAspiceDoc(kind, meta, ctx0, doc) {
   if (kind === "RTM") return { ext: "xlsx", bytes: makeAspiceRtmXlsx(meta, ctx, doc) };
   if (kind === "STK_LIST") return { ext: "xlsx", bytes: makeAspiceStkXlsx(meta, ctx, doc) };
   if (kind === "SW_DD") return { ext: "docx", bytes: makeAspiceUnitDesignDocx(meta, ctx, doc) };
+  if (kind === "HW_DD") return { ext: "docx", bytes: makeHwDetailedDesignDocx(meta, ctx, doc) };
+  if (kind === "HW_BOM" || kind === "HW_SC" || kind === "HW_AN") return { ext: "xlsx", bytes: makeHwDesignXlsx(kind, meta, ctx, doc) };
   return { ext: "xlsx", bytes: makeAspiceVerifXlsx(kind, meta, ctx, doc) };
 }
 // ASPICE V-모델 산출물 패키지 ZIP — 범위 내 생성 가능한 문서 전부 + 일관성 점검 보고
-const ASPICE_PKG_ORDER = ["STK_LIST", "SYS_RS", "SYS_AD", "SW_RS", "SW_AD", "SW_DD", "HW_RS", "HW_AD", "V_SYS5", "V_SYS4", "V_SWE6", "V_SWE5", "V_SWE4", "V_HWE4", "V_HWE3", "R_SYS5", "R_SYS4", "R_SWE6", "R_SWE5", "R_SWE4", "R_HWE4", "R_HWE3", "RTM"];
+const ASPICE_PKG_ORDER = ["STK_LIST", "SYS_RS", "SYS_AD", "SW_RS", "SW_AD", "SW_DD", "HW_RS", "HW_AD", "HW_DD", "HW_BOM", "HW_SC", "HW_AN", "V_SYS5", "V_SYS4", "V_SWE6", "V_SWE5", "V_SWE4", "V_HWE4", "V_HWE3", "R_SYS5", "R_SYS4", "R_SWE6", "R_SWE5", "R_SWE4", "R_HWE4", "R_HWE3", "RTM"];
 // V-모델 문서 1건 생성 (생성할 내용이 없으면 null)
 // SYS.2 시스템 요구사항 명세서: 확정 요구(items)를 산출물 단계와 같은 경로로 생성
 // — OSSP 등록 템플릿(SY2102)에 채움 → 템플릿이 없거나 채움 실패 시 자체 생성(문서명·코드는 ASPICE 기준)
@@ -7881,6 +7949,17 @@ function swe3ModelFiles(meta, ctx, folder = "SW4101_상세설계_모델") {
   files.push({ path: `${folder}/README.txt`, content: [`SWE.3 상세설계 모델 — ${meta.name || ""}`, ``, `xmi/      : UML 2.x XMI 2.1 — Sparx Systems Enterprise Architect 17.x에서 Publish › Model Exchange › Import › XMI File('Import Diagrams' 체크)로 가져오기`, `diagrams/ : 유닛별 다이어그램 7종(SVG) — 컴포넌트·클래스·시퀀스·상태 머신·액티비티·SysML BDD·IBD`, `src_${S.target}/ : ${AE.DD_TARGETS[S.target].label} 소스 (AUTOSAR ${S.release}) — ${S.target === "CP" ? "Rte_<Unit>.h는 RTE 생성기 출력으로 교체" : "ara::com proxy/skeleton은 생성기 출력 사용"}`, `MISRA_적용_체크리스트.xlsx : 규칙 번호별 조치·보장 수준 — 최종 준수 판정은 ${S.tools.join(" · ")} 결과로`, ``, `모든 요소·파일에 근거 SW 요구 ID가 기록되어 있습니다. 생성 결과는 QA 교차검토 후 확정하세요.`].join("\n") });
   return files;
 }
+function hw2ModelFiles(meta, ctx, folder = "HW4101_HW설계_모델") {
+  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  const comps = (model.comps.HW || []).filter(c => c.hd?.parts?.length);
+  if (!comps.length) return [];
+  const files = [];
+  try { files.push({ path: `${folder}/block/HW_architecture_block.svg`, content: AE.hdSvg("block", null, model) }); } catch (_) {}
+  comps.forEach(c => { try { files.push({ path: `${folder}/schematics/${c.id}_schematic.svg`, content: AE.hdSvg("schematic", c, model) }); } catch (_) {} });
+  const S = AE.hdSettings(model);
+  files.push({ path: `${folder}/README.txt`, content: [`HWE.2 HW 설계 모델 — ${meta.name || ""}`, ``, `block/      : HW 아키텍처 블록도(04-52) SVG`, `schematics/ : 블록별 회로도(04-54) SVG — 넷 라벨 방식`, `EDA 교환 파일(${S.schematicFmt} 회로도 · ${S.layoutFmt} · ${S.fabFmt})은 다음 생성 단계에서 같은 폴더에 추가됩니다.`, `부품 PN은 AI 후보(BOM 14-54 참조). 모든 부품·넷·특성에 근거 HW 요구 ID가 기록됩니다.`].join("\n") });
+  return files;
+}
 async function downloadAspicePackage(meta, ctx) {
   const sanitize = s => String(s || "").replace(/[\\/:*?"<>|]/g, "_").trim();
   const order = ASPICE_PKG_ORDER;
@@ -7892,6 +7971,7 @@ async function downloadAspicePackage(meta, ctx) {
     files.push({ path: `${String(i + 1).padStart(2, "0")}_${D.code}_${sanitize(D.title)}.${of.ext}`, content: of.bytes });
   }
   try { swe3ModelFiles(meta, ctx, `${String(order.length + 1).padStart(2, "0")}_SW4101_상세설계_모델`).forEach(f => files.push(f)); } catch (_) {}
+  try { hw2ModelFiles(meta, ctx, `${String(order.length + 2).padStart(2, "0")}_HW4101_HW설계_모델`).forEach(f => files.push(f)); } catch (_) {}
   if (!files.length) throw new Error("생성할 수 있는 ASPICE 산출물이 없습니다. 시스템 요소·하위 요구·검증 수단을 먼저 작성하세요.");
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
   const url = URL.createObjectURL(blob);
@@ -8111,6 +8191,7 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
     }
   }
   // SWE.3 상세설계 모델(XMI·다이어그램·코드·MISRA) — 상세설계가 있을 때만
+  try { const hf = hw2ModelFiles(meta, ctx); if (hf.length) { hf.forEach(f => files.push(f)); manifest.push([hf[0].path.split("/")[0], "-", "HW4101", docCodeWithPrefix("HW4101", meta) || "-", "HWE.2 HW 설계 모델(블록도·회로도)", "폴더", "V-모델", `파일 ${hf.length}개`]); total += 1; } } catch (_) {}
   try { const mf = swe3ModelFiles(meta, ctx); if (mf.length) { report(93, `SWE.3 상세설계 모델 ${mf.length}개 파일 추가 중…`); mf.forEach(f => files.push(f)); manifest.push([mf[0].path.split("/")[0], "-", "SW4101", docCodeWithPrefix("SW4101", meta) || "-", "SWE.3 상세설계 모델(XMI·다이어그램·소스·MISRA)", "폴더", "V-모델", `파일 ${mf.length}개 — EA 17.x XMI 가져오기 · ${AE.ddSettings(AE.normalizeModel(ctx?.requirements?.aspice)).target} 소스`]); total += 1; } } catch (_) {}
   report(94, "산출물 목록 작성·ZIP 압축 중…");
   files.unshift({ path: "00_산출물목록.xlsx", content: makeXlsx({ sheetName: "산출물목록", rows: [
@@ -8877,7 +8958,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [dbc, setDbc] = useState(null);        // { fileName, parsed, own }
   const [tplGroup, setTplGroup] = useState("SYS_RS");
   const [vFilter, setVFilter] = useState("SYS5");
-  const [ddView, setDdView] = useState({ unit: null, kind: "component", mode: "diagram", file: 0 });   // mode: diagram | code   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
+  const [ddView, setDdView] = useState({ unit: null, kind: "component", mode: "diagram", file: 0 });
+  const [hdView, setHdView] = useState({ comp: null, kind: "schematic" });   // HWE.2 회로 설계 보기   // mode: diagram | code   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
   // 커버리지 "빠짐 N건" → 해당 탭으로 이동해 미연결 항목만 표시 ({ tab, level?, ids:Set, q })
   const [focus, setFocus] = useState(null);
   const focusOn = tab === focus?.tab ? focus : null;
@@ -9223,6 +9305,37 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       for (let i = 0; i < targets.length; i += CONC) await Promise.all(targets.slice(i, i + CONC).map(one));
       setModel(n);
       return `유닛 ${done}개의 ${AE.DD_TARGETS[S.target].label} 소스를 생성했습니다 (연산 본문 AI ${aiOk} · 규칙 ${done - aiOk}). 각 유닛의 [코드]에서 확인하고, MISRA 최종 판정은 ${S.tools.join("·")}로 하세요.`;
+    });
+  }
+  // ── HWE.2 HW 회로 설계(HD): 블록별 A 회로(부품·넷·연결) → B 특별 특성·분석·근거, 실패·AI 미사용 시 규칙 생성 ──
+  function genHD(compIds = null) {
+    const targets = (model.comps.HW || []).filter(c => !compIds || compIds.includes(c.id));
+    return run(compIds ? `HW 회로 설계 생성 (${targets.length}개 블록)` : "HW 회로 설계 생성 (전체 블록)", async () => {
+      if (!targets.length) throw new Error("HW 컴포넌트(회로 블록)가 없습니다. 먼저 HWE.2 HW 설계에서 블록을 만드세요.");
+      const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
+      const seed = form?.id || form?.name || "project";
+      let done = 0, aiOk = 0;
+      const one = async (c) => {
+        const idx = n.comps.HW.findIndex(x => x.id === c.id); if (idx < 0) return;
+        let hd = null;
+        if (n.useAI) {
+          try {
+            const a = await callClaudeJson(AE.promptHDCircuit({ comp: c, model: n }), 5000);
+            const circuit = AE.normalizeHD(a, c, n, seed);
+            let b = {}; try { b = await callClaudeJson(AE.promptHDAnalysis({ comp: c, model: n, circuit }), 5000); } catch (_) { b = {}; }
+            hd = AE.normalizeHD({ ...(a || {}), ...(b || {}) }, c, n, seed); aiOk++;
+          } catch (_) { hd = null; }
+        }
+        if (!hd) hd = AE.ruleHD(c, n, seed);
+        n.comps.HW[idx] = { ...n.comps.HW[idx], hd };
+        done++;
+        setProg({ percent: 5 + (done / targets.length) * 90, label: `${n.useAI ? "AI: " : "규칙: "}회로 설계 ${done}/${targets.length} 블록 — ${c.id} ${c.name}` });
+      };
+      const CONC = n.useAI ? 3 : 20;
+      for (let i = 0; i < targets.length; i += CONC) await Promise.all(targets.slice(i, i + CONC).map(one));
+      setModel(n);
+      if (targets.length === 1) setHdView({ comp: targets[0].id, kind: "schematic" });
+      return `HW 블록 ${done}개 회로 설계 완료 (AI ${aiOk} · 규칙 ${done - aiOk}) — 부품 PN은 후보입니다. 회로도·BOM·특별 특성·분석 결과는 ZIP의 HW 상세설계서(04-53)·BOM(14-54)·특별 특성(17-57)·분석 결과(15-51)로 생성됩니다.`;
     });
   }
   function derive(level, only = null) {
@@ -9666,6 +9779,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     AE_PROCS.forEach(p => {
       if (p.tab === "verif") { const n = model.tests.filter(t => t.level === p.sub).length; out[p.id] = !n ? "todo" : AE.missingTestTargets(model, [p.sub]) > 0 ? "partial" : "done"; return; }
       const base = aeProg.steps.find(x => x.id === p.tab)?.state || "todo";
+      if (p.id === "HWE.2") {   // HWE.2: 블록 + 회로 설계(hd)까지 있어야 완료
+        const cs = model.comps.HW, hd = cs.filter(c => c.hd?.parts?.length).length;
+        out[p.id] = !cs.length ? "todo" : hd === cs.length && base === "done" ? "done" : "partial"; return;
+      }
       if (p.sub === "unit") {   // SWE.3: 유닛 분해 + 상세설계(dd)까지 있어야 완료
         const us = model.units.SW, dd = us.filter(u => u.dd?.classes?.length).length;
         out[p.id] = !us.length ? "todo" : dd === us.length && base === "done" ? "done" : "partial"; return;
@@ -10033,6 +10150,44 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     <div style={{ padding: "6px 10px", fontSize: 10.5, color: T.muted, borderTop: `1px solid ${T.border}` }}>
                       {vu.dd.summary}
                       {(() => { const rs = new Set([...vu.dd.classes.flatMap(c => [...(c.reqs || []), ...c.ops.flatMap(o => o.reqs || [])]), ...vu.dd.states.transitions.flatMap(t => t.reqs || []), ...vu.dd.sequences.flatMap(x => x.reqs || []), ...vu.dd.activities.flatMap(x => x.reqs || [])]); return rs.size ? ` · 근거 요구: ${[...rs].join(", ")}` : " · 근거 요구 ID 없음(요구 할당을 확인하세요)"; })()}
+                    </div>
+                  </div>)}
+              </AeSec>); })()}
+            {lv === "HW" && (!sub || sub === "arch") && (() => {
+              const S = AE.hdSettings(model); const missing = AE.hdMissingComps(model); const have = model.comps.HW.filter(c => c.hd?.parts?.length);
+              const vc = hdView.comp ? model.comps.HW.find(c => c.id === hdView.comp) : null;
+              const dlSvgH = (c, k) => { const svg = AE.hdSvg(k, c, model); const blob = new Blob([svg], { type: "image/svg+xml" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${c ? c.id : "HW"}_${k}.svg`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
+              return (
+              <AeSec title={`HWE.2 회로 설계 — 회로도·BOM·특별 특성·분석 (설계 ${have.length}/${model.comps.HW.length} 블록)`}
+                right={<div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {missing.length > 0 && have.length > 0 && <Btn onClick={() => genHD(missing.map(c => c.id))} disabled={busy} style={{ fontSize: 11, padding: "4px 10px" }}>{model.useAI ? "🤖" : "⚙"} 빠진 {missing.length}개만 설계</Btn>}
+                  <Btn variant={have.length ? "outline" : undefined} onClick={() => { if (have.length && !window.confirm(`HW 블록 ${model.comps.HW.length}개의 회로 설계를 모두 다시 만듭니다. 기존 부품·넷·분석은 교체됩니다.`)) return; genHD(); }} disabled={busy || !model.comps.HW.length} style={{ fontSize: 11, padding: "4px 10px" }}>{model.useAI ? "🤖 AI 회로 설계 생성 (전체)" : "⚙ 규칙 회로 설계 생성 (전체)"}</Btn>
+                </div>}>
+                <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>블록(HW 컴포넌트)마다 AI가 부품(RefDes·값·패키지·제조사 PN <b>후보</b>·정격·AEC-Q 등급)·넷·핀 연결·외부 인터페이스와 특별 특성(17-57)·설계 분석(15-51: Derating·열·타이밍·최악조건)·설계 근거를 할당 HW 요구·상위 시스템 요구·HW 인터페이스를 근거로 작성하고 요구 ID를 남깁니다. EDA 호환: {S.eda} — 회로도 {S.schematicFmt} · 레이아웃 {S.layoutFmt} · 생산 {S.fabFmt} (교환 파일 생성은 다음 단계).</div>
+                {!model.comps.HW.length && <div style={{ fontSize: 11, color: T.amber }}>HW 컴포넌트가 없습니다 — 위 [AI 컴포넌트 설계·할당] 또는 [＋ HW 컴포넌트]로 블록을 먼저 만드세요.</div>}
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {model.comps.HW.map(c => { const h = c.hd; const on = hdView.comp === c.id; return (
+                    <div key={c.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr auto auto auto", gap: 8, alignItems: "center", fontSize: 11, padding: "5px 8px", border: `1px solid ${on ? T.accent : T.border}`, borderRadius: 7, background: on ? T.accent + "12" : T.bg }}>
+                      <span style={{ fontFamily: "monospace", color: T.accent }}>{c.id}</span>
+                      <span><b>{c.name}</b>{h?.parts?.length ? <span style={{ color: T.muted }}> — 부품 {h.parts.length} · 넷 {h.nets.length} · 연결 {h.conns.length} · 특별특성 {h.specials.length} · 분석 {h.analysis.derating.length + h.analysis.thermal.length + h.analysis.timing.length + h.analysis.worstCase.length}{h.analysis.derating.concat(h.analysis.thermal, h.analysis.worstCase).some(x => x.ok === false) ? <span style={{ color: T.red }}> · NG 있음</span> : null}</span> : <span style={{ color: T.amber }}> — 회로 설계 없음</span>}</span>
+                      <span style={{ fontSize: 9.5, color: h ? (h.origin === "ai" ? T.green : T.muted) : T.muted }}>{h ? (h.origin === "ai" ? "AI 설계" : "규칙 설계") : ""}</span>
+                      {h?.parts?.length ? <button onClick={() => setHdView(v => ({ comp: on ? null : c.id, kind: v.kind }))} style={{ ...small, padding: "2px 8px" }}>{on ? "접기" : "회로도"}</button> : <span />}
+                      <button onClick={() => genHD([c.id])} disabled={busy} style={{ ...small, padding: "2px 8px" }}>{h?.parts?.length ? "재설계" : (model.useAI ? "🤖 설계" : "⚙ 설계")}</button>
+                    </div>); })}
+                </div>
+                {vc && vc.hd && (
+                  <div style={{ marginTop: 10, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
+                    <div style={{ display: "flex", gap: 3, alignItems: "center", padding: "6px 8px", flexWrap: "wrap", background: T.bg }}>
+                      {AE.HD_DIAGRAMS.map(([k, lab]) => <button key={k} onClick={() => setHdView(v => ({ ...v, kind: k }))} style={{ ...small, padding: "3px 9px", color: hdView.kind === k ? "#fff" : T.muted, background: hdView.kind === k ? T.accent : "transparent", borderColor: hdView.kind === k ? T.accent : T.border }}>{lab}</button>)}
+                      <div style={{ flex: 1 }} />
+                      <button onClick={() => dlSvgH(hdView.kind === "block" ? null : vc, hdView.kind)} style={small}>⬇ SVG</button>
+                    </div>
+                    <div style={{ background: "#fff", overflow: "auto", maxHeight: 520, padding: 6 }} dangerouslySetInnerHTML={{ __html: AE.hdSvg(hdView.kind, hdView.kind === "block" ? vc : vc, model) }} />
+                    <div style={{ padding: "6px 10px", fontSize: 10.5, color: T.muted, borderTop: `1px solid ${T.border}`, maxHeight: 180, overflow: "auto" }}>
+                      <div>{vc.hd.summary}</div>
+                      <div style={{ marginTop: 4 }}><b>부품(PN 후보):</b> {vc.hd.parts.map(p => `${p.ref} ${p.value}${p.mpn ? " [" + p.mpn + "]" : ""}`).join(" · ")}</div>
+                      {vc.hd.specials.length > 0 && <div style={{ marginTop: 4 }}><b>특별 특성:</b> {vc.hd.specials.map(x => `${x.id} ${x.char} (${x.type})`).join(" · ")}</div>}
+                      <div style={{ marginTop: 4 }}><b>설계 근거:</b> {vc.hd.rationale}</div>
                     </div>
                   </div>)}
               </AeSec>); })()}

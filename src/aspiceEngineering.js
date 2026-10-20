@@ -75,7 +75,11 @@ export const ASPICE_DOCS = {
   SW_RS:  { title: "SW 요구사항 명세서", proc: "SWE.1", wp: { "3.1": "17-11, 17-08, 17-50", "4.0": "17-00, 17-54, 15-51" }, code: "SW3101" },
   SW_AD:  { title: "SW 아키텍처 설계서", proc: "SWE.2", wp: { "3.1": "04-04, 17-08", "4.0": "04-04, 15-51" }, code: "SW3102" },
   HW_RS:  { title: "HW 요구사항 명세서", proc: "HWE.1", wp: { "3.1": "PAM 확장(4.0 HWE.1 준용)", "4.0": "17-00, 17-54, 15-51" }, code: "HW3101" },
-  HW_AD:  { title: "HW 아키텍처 설계서", proc: "HWE.2", wp: { "3.1": "PAM 확장(4.0 HWE.2 준용)", "4.0": "04-52, 04-53, 15-51" }, code: "HW3102" },
+  HW_AD:  { title: "HW 아키텍처 설계서", proc: "HWE.2", wp: { "3.1": "PAM 확장(4.0 HWE.2 준용)", "4.0": "04-52, 15-51" }, code: "HW3102" },
+  HW_DD:  { title: "HW 상세설계서", proc: "HWE.2", wp: { "3.1": "PAM 확장(4.0 HWE.2 준용)", "4.0": "04-53, 13-51, 13-52" }, code: "HW4101" },
+  HW_BOM: { title: "HW 부품 목록(BOM)", proc: "HWE.2", wp: { "3.1": "PAM 확장(4.0 HWE.2 준용)", "4.0": "14-54" }, code: "HW4102" },
+  HW_SC:  { title: "HW 특별 특성 목록", proc: "HWE.2", wp: { "3.1": "PAM 확장(4.0 HWE.2 준용)", "4.0": "17-57" }, code: "HW4103" },
+  HW_AN:  { title: "HW 설계 분석 결과서", proc: "HWE.2", wp: { "3.1": "PAM 확장(4.0 HWE.2 준용)", "4.0": "15-51" }, code: "HW4104" },
   V_SYS5: { title: "시스템 검증 명세서", proc: "SYS.5", test: "SYS5", wp: { "3.1": "08-50, 08-52", "4.0": "08-60, 08-58" }, code: "SY2106" },
   V_SYS4: { title: "시스템 통합 검증 명세서", proc: "SYS.4", test: "SYS4", wp: { "3.1": "08-50, 08-52", "4.0": "08-60, 08-58, 06-50" }, code: "SY2107" },
   V_SWE6: { title: "SW 검증 명세서", proc: "SWE.6", test: "SWE6", wp: { "3.1": "08-50, 08-52", "4.0": "08-60, 08-58" }, code: "SW3104" },
@@ -95,7 +99,8 @@ export const ASPICE_DOCS = {
   RTM:    { title: "요구사항 추적 매트릭스", proc: "SYS.2~SWE.6", wp: { "3.1": "13-22", "4.0": "13-51" }, code: "SY2105" },
 };
 // HW 레벨 문서 종류 — OSSP 라이브러리에 HW 템플릿이 없어도 V-모델 추적 모델에서 구조화된 문서(근거 없는 칸은 TBD)를 만든다
-export const HW_DOC_KINDS = ["HW_RS", "HW_AD", "V_HWE3", "V_HWE4", "R_HWE3", "R_HWE4"];
+export const HW_DOC_KINDS = ["HW_RS", "HW_AD", "HW_DD", "HW_BOM", "HW_SC", "HW_AN", "V_HWE3", "V_HWE4", "R_HWE3", "R_HWE4"];
+export const HW_DESIGN_KINDS = ["HW_DD", "HW_BOM", "HW_SC", "HW_AN"];   // HWE.2 회로 설계(hd)가 있어야 내용이 채워지는 문서
 export function wpLabel(docKind, version) {
   const d = ASPICE_DOCS[docKind]; if (!d) return "";
   return versionsOf(version).map(v => `${v}: ${d.wp[v]}`).join(" / ");
@@ -130,10 +135,14 @@ export function aspiceDocKind(name) {
     if (n.includes("검증") || n.includes("적격성")) return isResult ? "R_SWE6" : isSpec ? "V_SWE6" : null;
     return null;
   }
+  if (n.includes("BOM") || n.includes("부품목록") || n.includes("자재명세")) return "HW_BOM";
+  if (n.includes("특별특성")) return "HW_SC";
   if (n.startsWith("HW")) {
     if (n.includes("요구사항검증")) return isResult ? "R_HWE4" : isSpec ? "V_HWE4" : null;
     if (n.includes("설계검증")) return isResult ? "R_HWE3" : isSpec ? "V_HWE3" : null;
     if (n.includes("요구사항명세")) return "HW_RS";
+    if (n.includes("분석결과") || n.includes("설계분석")) return "HW_AN";
+    if (n.includes("상세설계")) return "HW_DD";
     if (n.includes("아키텍처") || n.includes("설계서")) return "HW_AD";
   }
   return null;
@@ -2710,4 +2719,205 @@ export function misraChecklistRows(settings) {
   return [[`MISRA 적용 체크리스트 — ${std}`], [`대상 플랫폼: ${DD_TARGETS[S.target].label}`, `정적분석: ${S.tools.join(" · ")}`, "규칙 원문은 MISRA 라이선스 문서를 참조(본 표는 번호와 적용 조치만 기재)"], [],
     ["규칙 번호", "분류", "주제(요약)", "생성 코드의 조치", "보장 수준", `${S.tools[0]} 점검`, `${S.tools[1]} 점검`, "편차 번호", "비고"],
     ...rows.map(r => [...r, `${std} 룰셋`, `${std} 체커`, "", r[4].includes("도구") ? "도구 결과로 판정" : "구조적 회피, 도구 결과로 재확인"])];
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 15) HWE.2 HW 설계(HD) — HW 컴포넌트(회로 블록)별 회로·부품·넷·특별 특성·설계 분석을 AI가 전부 작성, 모든 요소에 HW 요구 ID 추적
+//    comp.hd = { guid, summary, parts[], nets[], conns[], ifs[], specials[], analysis{derating,thermal,timing,worstCase}, rationale, origin, generatedAt }
+//    model.hwDesign = EDA 호환 기준 (OrCAD Capture EDIF 2.0.0 / Allegro 넷리스트·배치·IPC-2581 / Gerber) — 다음 묶음의 EDA 파일 생성 기준
+//    부품 제조사 PN은 AI '후보'이며 BOM에 그대로 표시한다(구매 PN은 확정 단계에서).
+// ═══════════════════════════════════════════════════════════════════════════
+export const HD_DEFAULT = {
+  eda: "OrCAD X Capture · Allegro X PCB (23.1 계열, 17.4 하위 호환)",
+  schematicFmt: "EDIF 2.0.0", layoutFmt: "Allegro 넷리스트·배치 텍스트 · IPC-2581", fabFmt: "Gerber RS-274X · Excellon · Pick&Place",
+  layers: 4, env: "차량 탑재 전장(-40~+85°C, ISO 16750 전원 조건)",
+};
+export const hdSettings = m => ({ ...HD_DEFAULT, ...((m && m.hwDesign) || {}) });
+export const PART_KINDS = ["IC", "MCU", "트랜지스터", "다이오드", "저항", "커패시터", "인덕터", "커넥터", "크리스탈", "퓨즈", "TVS", "릴레이", "기타"];
+const REF_PREFIX = { IC: "U", MCU: "U", 트랜지스터: "Q", 다이오드: "D", TVS: "D", 저항: "R", 커패시터: "C", 인덕터: "L", 커넥터: "J", 크리스탈: "Y", 퓨즈: "F", 릴레이: "K", 기타: "X" };
+export function emptyHD() {
+  return { guid: "", summary: "", parts: [], nets: [], conns: [], ifs: [], specials: [], analysis: { derating: [], thermal: [], timing: [], worstCase: [] }, rationale: "", origin: "", generatedAt: "" };
+}
+const netName = s => String(s || "").trim().replace(/[^A-Za-z0-9_+\-.]/g, "_").slice(0, 40) || "NC";
+export function normalizeHD(raw, comp, model, seedKey) {
+  const r = raw && typeof raw === "object" ? raw : {};
+  const m = normalizeModel(model);
+  const okReq = new Set([...(m.reqs.HW || []).map(x => x.id), ...(m.reqs.SYS || []).map(x => x.id)]);
+  const rq = x => ids(x).filter(i => okReq.has(i));
+  const g = name => guidFor(`${seedKey}|${comp?.id}|${name}`);
+  const hd = emptyHD(); hd.guid = g("comp"); hd.summary = str(r.summary, 600);
+  const refSeen = new Set();
+  hd.parts = arr(r.parts).slice(0, 120).map((p, i) => { const kind = PART_KINDS.includes(p.kind) ? p.kind : "기타"; let ref = cid(p.ref || `${REF_PREFIX[kind]}${i + 1}`).toUpperCase(); while (refSeen.has(ref)) ref += "A"; refSeen.add(ref);
+    return { guid: g(`part:${ref}`), ref, kind, value: str(p.value, 40), pkg: str(p.pkg, 30), mfr: str(p.mfr, 40), mpn: str(p.mpn, 50), rating: str(p.rating, 80), desc: str(p.desc, 200), qty: Number(p.qty) > 0 ? Number(p.qty) : 1, special: !!p.special, grade: str(p.grade || "AEC-Q", 30), reqs: rq(p.reqs),
+      pins: arr(p.pins).slice(0, 64).map((x, k) => ({ num: str(x.num || k + 1, 8), name: cid(x.name || `P${k + 1}`), type: ["in", "out", "io", "pwr", "gnd", "passive"].includes(x.type) ? x.type : "passive" })) }; });
+  const refs = new Set(hd.parts.map(p => p.ref));
+  hd.nets = arr(r.nets).slice(0, 200).map(n => ({ name: netName(n.name), kind: ["power", "gnd", "signal", "bus", "analog"].includes(n.kind) ? n.kind : (/GND|VSS/i.test(n.name) ? "gnd" : /^V|VCC|VDD|\+\d/i.test(n.name) ? "power" : "signal"), voltage: str(n.voltage, 20), desc: str(n.desc, 120), reqs: rq(n.reqs) }));
+  const netSet = new Set(hd.nets.map(n => n.name));
+  hd.conns = arr(r.conns).slice(0, 600).map(c => ({ ref: cid(c.ref).toUpperCase(), pin: str(c.pin, 8), net: netName(c.net) })).filter(c => refs.has(c.ref) && c.net);
+  hd.conns.forEach(c => { if (!netSet.has(c.net)) { netSet.add(c.net); hd.nets.push({ name: c.net, kind: /GND/i.test(c.net) ? "gnd" : /^V|VCC|VDD|\+\d/i.test(c.net) ? "power" : "signal", voltage: "", desc: "", reqs: [] }); } });
+  hd.ifs = arr(r.ifs).slice(0, 40).map(x => ({ name: str(x.name, 40), dir: /in/i.test(x.dir) ? "in" : /out/i.test(x.dir) ? "out" : "io", net: netName(x.net), connector: str(x.connector, 30), spec: str(x.spec, 120), source: str(x.source, 40), reqs: rq(x.reqs) }));
+  hd.specials = arr(r.specials).slice(0, 40).map((x, i) => ({ id: cid(x.id || `SC-${String(i + 1).padStart(2, "0")}`).toUpperCase(), char: str(x.char, 120), type: ["안전", "법규", "기능", "품질"].includes(x.type) ? x.type : "기능", target: str(x.target, 60), value: str(x.value, 60), control: str(x.control, 160), verify: str(x.verify, 120), reqs: rq(x.reqs) }));
+  const an = r.analysis && typeof r.analysis === "object" ? r.analysis : {};
+  hd.analysis = {
+    derating: arr(an.derating).slice(0, 80).map(x => ({ ref: cid(x.ref).toUpperCase(), param: str(x.param, 40), rated: str(x.rated, 30), applied: str(x.applied, 30), ratio: str(x.ratio, 12), limit: str(x.limit || "80%", 12), ok: x.ok === false ? false : true, note: str(x.note, 120) })),
+    thermal: arr(an.thermal).slice(0, 40).map(x => ({ ref: cid(x.ref).toUpperCase(), pd_mW: str(x.pd_mW, 12), theta: str(x.theta, 20), ta: str(x.ta || "85", 8), tj: str(x.tj, 12), limit: str(x.limit, 12), ok: x.ok === false ? false : true, note: str(x.note, 120) })),
+    timing: arr(an.timing).slice(0, 40).map(x => ({ item: str(x.item, 60), req: str(x.req, 40), calc: str(x.calc, 60), margin: str(x.margin, 30), ok: x.ok === false ? false : true, note: str(x.note, 120) })),
+    worstCase: arr(an.worstCase).slice(0, 60).map(x => ({ item: str(x.item, 60), nominal: str(x.nominal, 30), min: str(x.min, 30), max: str(x.max, 30), limit: str(x.limit, 40), ok: x.ok === false ? false : true, method: str(x.method, 60), note: str(x.note, 120) })),
+  };
+  hd.rationale = str(r.rationale, 1500);
+  hd.origin = "ai"; hd.generatedAt = new Date().toISOString();
+  return fillHDGaps(hd, comp, model, seedKey);
+}
+// 규칙 보강 — 컴포넌트 종류(전원·MCU·통신·커넥터)에 맞는 기본 회로 뼈대와 분석 표
+export function fillHDGaps(hd0, comp, model, seedKey) {
+  const m = normalizeModel(model); const hd = hd0 || emptyHD();
+  const g = name => guidFor(`${seedKey}|${comp?.id}|${name}`); if (!hd.guid) hd.guid = g("comp");
+  const name = String(comp?.name || ""), kind = String(comp?.kind || "");
+  const reqs = (m.reqs.HW || []).filter(r => (m.alloc.HW[r.id] || []).includes(comp?.id));
+  const reqIds = reqs.map(r => r.id);
+  const addP = (ref, kind, value, pkg, mfr, mpn, rating, desc, pins) => hd.parts.push({ guid: g(`part:${ref}`), ref, kind, value, pkg, mfr, mpn, rating, desc, qty: 1, special: false, grade: "AEC-Q", reqs: reqIds, pins: pins.map((x, k) => ({ num: String(k + 1), name: x[0], type: x[1] })) });
+  const addN = (n, kind, v = "") => { if (!hd.nets.some(x => x.name === n)) hd.nets.push({ name: n, kind, voltage: v, desc: "", reqs: [] }); };
+  const con = (ref, pin, net) => hd.conns.push({ ref, pin, net });
+  if (!hd.parts.length) {
+    if (/전원|POWER|PMIC|LDO|DCDC|레귤/i.test(name + kind)) {
+      addN("VBAT", "power", "12V"); addN("VBAT_F", "power", "12V"); addN("3V3", "power", "3.3V"); addN("GND", "gnd");
+      addP("F1", "퓨즈", "2A", "1206", "Littelfuse", "0466002.NR (후보)", "32V 2A", "입력 보호 퓨즈", [["1", "passive"], ["2", "passive"]]);
+      addP("D1", "TVS", "SMBJ33A", "SMB", "Littelfuse", "SMBJ33A (후보)", "33V 600W", "ISO 7637 서지 보호", [["K", "passive"], ["A", "passive"]]);
+      addP("D2", "다이오드", "SS34", "SMA", "onsemi", "SS34 (후보)", "40V 3A", "역접속 보호", [["A", "passive"], ["K", "passive"]]);
+      addP("U1", "IC", "LDO 3.3V 500mA", "HTSSOP-16", "Texas Instruments", "TPS7B6933QDGNRQ1 (후보)", "Vin 4~40V, Iout 0.5A, AEC-Q100", "메인 3.3V 레귤레이터", [["IN", "pwr"], ["EN", "in"], ["OUT", "out"], ["GND", "gnd"]]);
+      addP("C1", "커패시터", "10uF/50V", "1210", "Murata", "GCM32ER71H106KA03 (후보)", "X7R 50V AEC-Q200", "입력 벌크", [["1", "passive"], ["2", "passive"]]);
+      addP("C2", "커패시터", "4.7uF/16V", "0805", "Murata", "GCM21BR71C475KA73 (후보)", "X7R 16V AEC-Q200", "출력 커패시터", [["1", "passive"], ["2", "passive"]]);
+      con("F1", "1", "VBAT"); con("F1", "2", "VBAT_F"); con("D1", "K", "VBAT_F"); con("D1", "A", "GND"); con("D2", "A", "VBAT_F"); con("D2", "K", "VIN_P"); addN("VIN_P", "power", "12V");
+      con("U1", "IN", "VIN_P"); con("U1", "EN", "VIN_P"); con("U1", "OUT", "3V3"); con("U1", "GND", "GND"); con("C1", "1", "VIN_P"); con("C1", "2", "GND"); con("C2", "1", "3V3"); con("C2", "2", "GND");
+    } else if (/MCU|제어|프로세서|컨트롤/i.test(name + kind)) {
+      addN("3V3", "power", "3.3V"); addN("GND", "gnd"); addN("MCU_RESET_N", "signal"); addN("SWDIO", "signal"); addN("SWCLK", "signal"); addN("CAN1_TX", "signal"); addN("CAN1_RX", "signal");
+      addP("U2", "MCU", "32bit Automotive MCU", "LQFP-100", "Infineon", "TC375TP (후보)", "AEC-Q100 Grade 1, ASIL-D capable", "메인 MCU", [["VDD", "pwr"], ["VSS", "gnd"], ["PORST", "in"], ["TMS", "io"], ["TCK", "in"], ["CAN1_TXD", "out"], ["CAN1_RXD", "in"], ["XTAL1", "in"], ["XTAL2", "out"]]);
+      addP("Y1", "크리스탈", "20MHz", "3225", "NDK", "NX3225GD-20MHz (후보)", "±20ppm AEC-Q200", "메인 클럭", [["1", "passive"], ["2", "passive"]]);
+      addP("C10", "커패시터", "100nF/16V", "0402", "Murata", "GCM155R71C104KA55 (후보)", "X7R AEC-Q200", "디커플링", [["1", "passive"], ["2", "passive"]]);
+      addP("R1", "저항", "10k", "0402", "Yageo", "AC0402FR-0710KL (후보)", "1% AEC-Q200", "리셋 풀업", [["1", "passive"], ["2", "passive"]]);
+      addN("XTAL1", "signal"); addN("XTAL2", "signal");
+      con("U2", "VDD", "3V3"); con("U2", "VSS", "GND"); con("U2", "PORST", "MCU_RESET_N"); con("U2", "TMS", "SWDIO"); con("U2", "TCK", "SWCLK"); con("U2", "CAN1_TXD", "CAN1_TX"); con("U2", "CAN1_RXD", "CAN1_RX"); con("U2", "XTAL1", "XTAL1"); con("U2", "XTAL2", "XTAL2");
+      con("Y1", "1", "XTAL1"); con("Y1", "2", "XTAL2"); con("C10", "1", "3V3"); con("C10", "2", "GND"); con("R1", "1", "3V3"); con("R1", "2", "MCU_RESET_N");
+    } else if (/CAN|LIN|통신|이더넷|ETH/i.test(name + kind)) {
+      addN("5V", "power", "5V"); addN("GND", "gnd"); addN("CAN1_TX", "signal"); addN("CAN1_RX", "signal"); addN("CANH", "bus"); addN("CANL", "bus"); addN("CAN_STB", "signal");
+      addP("U3", "IC", "CAN FD 트랜시버", "SOIC-8", "NXP", "TJA1051T/3 (후보)", "5Mbit/s, AEC-Q100", "CAN FD 트랜시버", [["TXD", "in"], ["GND", "gnd"], ["VCC", "pwr"], ["RXD", "out"], ["VIO", "pwr"], ["CANL", "io"], ["CANH", "io"], ["S", "in"]]);
+      addP("L1", "인덕터", "100uH CMC", "1210", "TDK", "ACT45B-101-2P-TL003 (후보)", "AEC-Q200", "CAN 공통모드 초크", [["1", "passive"], ["2", "passive"], ["3", "passive"], ["4", "passive"]]);
+      addP("D3", "TVS", "CAN ESD", "SOT-23", "Nexperia", "PESD2CANFD24V-T (후보)", "24V bidirectional", "CAN 버스 ESD 보호", [["1", "passive"], ["2", "passive"], ["3", "passive"]]);
+      addP("R2", "저항", "60.4", "0603", "Vishay", "CRCW060360R4FKEA (후보)", "1% AEC-Q200", "종단 저항(분할)", [["1", "passive"], ["2", "passive"]]);
+      addP("R3", "저항", "60.4", "0603", "Vishay", "CRCW060360R4FKEA (후보)", "1% AEC-Q200", "종단 저항(분할)", [["1", "passive"], ["2", "passive"]]);
+      addP("C20", "커패시터", "4.7nF/50V", "0603", "Murata", "GCM188R71H472KA37 (후보)", "X7R AEC-Q200", "스플릿 종단 커패시터", [["1", "passive"], ["2", "passive"]]);
+      addP("J1", "커넥터", "CAN 커넥터", "2pin", "TE Connectivity", "1-1718644-1 (후보)", "자동차용", "외부 CAN", [["CANH", "io"], ["CANL", "io"]]);
+      addN("CANH_O", "bus"); addN("CANL_O", "bus"); addN("CAN_SPLIT", "signal");
+      con("U3", "TXD", "CAN1_TX"); con("U3", "RXD", "CAN1_RX"); con("U3", "VCC", "5V"); con("U3", "VIO", "5V"); con("U3", "GND", "GND"); con("U3", "CANH", "CANH"); con("U3", "CANL", "CANL"); con("U3", "S", "CAN_STB");
+      con("L1", "1", "CANH"); con("L1", "2", "CANH_O"); con("L1", "3", "CANL"); con("L1", "4", "CANL_O"); con("D3", "1", "CANH_O"); con("D3", "2", "CANL_O"); con("D3", "3", "GND");
+      con("R2", "1", "CANH_O"); con("R2", "2", "CAN_SPLIT"); con("R3", "1", "CAN_SPLIT"); con("R3", "2", "CANL_O"); con("C20", "1", "CAN_SPLIT"); con("C20", "2", "GND"); con("J1", "CANH", "CANH_O"); con("J1", "CANL", "CANL_O");
+    } else {
+      addN("3V3", "power", "3.3V"); addN("GND", "gnd"); addN(`${cid(name).toUpperCase().slice(0, 12)}_SIG`, "signal");
+      addP("U9", "IC", `${name} 주 기능 IC`, "TBD", "TBD", "(후보 미정)", "AEC-Q100", `${name} 기능 블록 — 요구 ${reqIds.join(", ") || "-"} 기준으로 부품 확정`, [["VDD", "pwr"], ["GND", "gnd"], ["IN", "in"], ["OUT", "out"]]);
+      addP("C30", "커패시터", "100nF/16V", "0402", "Murata", "GCM155R71C104KA55 (후보)", "X7R AEC-Q200", "디커플링", [["1", "passive"], ["2", "passive"]]);
+      con("U9", "VDD", "3V3"); con("U9", "GND", "GND"); con("U9", "OUT", `${cid(name).toUpperCase().slice(0, 12)}_SIG`); con("C30", "1", "3V3"); con("C30", "2", "GND");
+    }
+  }
+  if (!hd.ifs.length) {
+    (m.interfaces.HW || []).filter(i => i.from === comp?.id || i.to === comp?.id).forEach(i => hd.ifs.push({ name: i.kind || i.id, dir: i.to === comp.id ? "in" : "out", net: netName((i.signals || i.kind || i.id).split(/[,;]/)[0]), connector: "", spec: [i.signals, i.periodMs ? `${i.periodMs}ms` : ""].filter(Boolean).join(" · "), source: i.id, reqs: [] }));
+  }
+  if (!hd.specials.length) {
+    const cand = hd.parts.filter(p => /TVS|퓨즈|레귤|트랜시버|MCU/i.test(p.kind + p.desc)).slice(0, 4);
+    cand.forEach((p, i) => hd.specials.push({ id: `SC-${String(i + 1).padStart(2, "0")}`, char: `${p.ref} ${p.desc} — ${p.rating}`, type: /TVS|퓨즈/.test(p.kind + p.desc) ? "안전" : "기능", target: p.ref, value: p.value, control: "수입검사(인증서) · 공정 중 실장 검사 · 배치 추적", verify: "HWE.3 설계 검증(전기 특성 측정)", reqs: p.reqs }));
+  }
+  if (!hd.analysis.derating.length) hd.parts.filter(p => p.rating).slice(0, 12).forEach(p => hd.analysis.derating.push({ ref: p.ref, param: /커패/.test(p.kind) ? "정격 전압" : /저항/.test(p.kind) ? "정격 전력" : "정격 전압/전류", rated: p.rating.split(/[,·]/)[0], applied: "(가정) 동작 조건", ratio: "≤ 80%", limit: "80%", ok: true, note: "설계 가정값 — 회로 확정 후 실측·시뮬레이션으로 갱신" }));
+  if (!hd.analysis.thermal.length) hd.parts.filter(p => /IC|MCU|트랜지스터/.test(p.kind)).slice(0, 6).forEach(p => hd.analysis.thermal.push({ ref: p.ref, pd_mW: "(계산)", theta: "데이터시트 θJA", ta: "85", tj: "(계산)", limit: "125", ok: true, note: "Tj = Ta + Pd × θJA — 데이터시트 값으로 계산" }));
+  if (!hd.analysis.worstCase.length) hd.analysis.worstCase.push({ item: "입력 전압 범위", nominal: "13.5V", min: "6V (크랭킹)", max: "16V (ISO 16750-2) / 18V 점프", limit: "레귤레이터 Vin 4~40V", ok: true, method: "ISO 16750-2 조건 대입", note: "" }, { item: "동작 온도", nominal: "25°C", min: "-40°C", max: "+85°C(실내) / +105°C(엔진룸)", limit: "AEC-Q100 Grade 1", ok: true, method: "부품 등급 확인", note: "" });
+  if (!hd.rationale) hd.rationale = `${name}: ${kind} 블록. 할당 HW 요구 ${reqIds.join(", ") || "없음"}을 근거로 부품·넷을 구성하고, 전원·EMC 보호(퓨즈·TVS·역접속)와 디커플링을 기본 포함. 부품 PN은 후보이며 구매·수명·2nd source 검토 후 확정.`;
+  if (!hd.summary) hd.summary = `${name}: 부품 ${hd.parts.length}·넷 ${hd.nets.length}·특별특성 ${hd.specials.length}`;
+  if (!hd.origin) hd.origin = "rule"; if (!hd.generatedAt) hd.generatedAt = new Date().toISOString();
+  return hd;
+}
+export const ruleHD = (comp, model, seedKey) => fillHDGaps(emptyHD(), comp, model, seedKey);
+export const hdMissingComps = m => (normalizeModel(m).comps.HW || []).filter(c => !c.hd?.parts?.length);
+
+function hdContext(comp, model) {
+  const m = normalizeModel(model);
+  const hwReqs = (m.reqs.HW || []).filter(r => (m.alloc.HW[r.id] || []).includes(comp.id));
+  const sysIds = new Set(hwReqs.flatMap(r => r.parents || [])); const sysReqs = (m.reqs.SYS || []).filter(r => sysIds.has(r.id));
+  const cn = Object.fromEntries((m.comps.HW || []).map(c => [c.id, c.name]));
+  const ifs = (m.interfaces.HW || []).filter(i => i.from === comp.id || i.to === comp.id);
+  const S = hdSettings(m);
+  return [`[HW 컴포넌트(회로 블록)] ${comp.id} ${comp.name} (${comp.kind || ""}) ${comp.desc || ""}${comp.behavior ? " / 동작: " + comp.behavior : ""}`,
+    `[다른 HW 블록] ${(m.comps.HW || []).filter(c => c.id !== comp.id).map(c => `${c.id} ${c.name}`).join(", ") || "-"}`,
+    `[할당 HW 요구 — 모든 요소의 reqs에 이 ID]\n${hwReqs.map(r => `- ${r.id} [${r.type}] ${r.title}: ${r.text}${r.verifCriteria ? " / 검증 기준: " + r.verifCriteria : ""}`).join("\n") || "- (없음)"}`,
+    sysReqs.length ? `[상위 시스템 요구]\n${sysReqs.map(r => `- ${r.id} ${r.title}: ${String(r.text || "").slice(0, 200)}`).join("\n")}` : "",
+    ifs.length ? `[HW 인터페이스]\n${ifs.map(i => `- ${i.id} ${cn[i.from] || i.from} → ${cn[i.to] || i.to}: ${i.kind || ""} ${i.signals || ""} ${i.desc || ""}`).join("\n")}` : "",
+    `[환경·기준] ${S.env} · 부품 등급 AEC-Q100/Q200 · EDA ${S.eda}`].filter(Boolean).join("\n");
+}
+export function promptHDCircuit({ comp, model }) {
+  return `역할: 자동차 전장 ECU 수석 HW 설계자(ASPICE HWE.2 담당). 아래 근거 자료로 회로 블록 1개의 **회로 설계**(부품·핀·넷·연결·외부 인터페이스)를 완전하게 작성하세요. 제조사 부품번호(mpn)는 실제 유통되는 자동차용(AEC-Q) 부품을 **후보**로 적되 값 끝에 " (후보)"를 붙이세요. 추측한 값은 desc에 "(가정)".
+
+${hdContext(comp, model)}
+
+규칙:
+- parts: 기능에 필요한 모든 부품(IC·수동소자·보호소자·커넥터). ref는 R1·C1·U1·D1·J1 규칙, pins에 핀 번호·이름·type(in|out|io|pwr|gnd|passive). value·pkg(0402·SOIC-8 등)·mfr·mpn·rating(정격)·grade(AEC-Q100/Q200)·special(특별 특성 후보면 true)·reqs.
+- nets: 이름(영문 대문자, 예 VBAT·3V3·GND·CANH)·kind(power|gnd|signal|bus|analog)·voltage.
+- conns: 모든 부품의 모든 핀을 넷에 연결(미연결 핀은 넷 "NC"). 보호(퓨즈·TVS·역접속)·디커플링·풀업/다운·종단을 빠뜨리지 말 것.
+- ifs: 블록 밖으로 나가는 신호·전원(name·dir·net·connector·spec·source 인터페이스 ID·reqs).
+- 수치(전압·전류·주파수·저항값)는 요구 문장의 값을 그대로 쓰고, 계산이 필요하면 desc에 식을 적는다.
+
+JSON만 출력:
+{"summary":"블록 역할 2~3문장","parts":[{"ref":"U1","kind":"IC|MCU|트랜지스터|다이오드|저항|커패시터|인덕터|커넥터|크리스탈|퓨즈|TVS|릴레이|기타","value":"","pkg":"","mfr":"","mpn":"xxx (후보)","rating":"","grade":"AEC-Q100","desc":"","special":false,"reqs":[],"pins":[{"num":"1","name":"VIN","type":"pwr"}]}],
+"nets":[{"name":"","kind":"power|gnd|signal|bus|analog","voltage":"","desc":"","reqs":[]}],"conns":[{"ref":"U1","pin":"1","net":"VBAT"}],
+"ifs":[{"name":"","dir":"in|out|io","net":"","connector":"J1.1","spec":"","source":"HWIF-001","reqs":[]}]}`;
+}
+export function promptHDAnalysis({ comp, model, circuit }) {
+  const c = circuit || emptyHD();
+  return `역할: 자동차 전장 ECU 수석 HW 설계자(ASPICE HWE.2). 아래 회로 블록에 대해 **특별 특성(17-57)**과 **설계 분석 결과(15-51: Derating·열·타이밍·최악조건)**, **설계 근거**를 작성하세요. 수치는 부품 정격(rating)과 요구 값을 대입해 계산식과 함께 적으세요(가정값은 "(가정)").
+
+${hdContext(comp, model)}
+
+[회로 — 부품] ${c.parts.map(p => `${p.ref} ${p.kind} ${p.value} ${p.pkg} ${p.mpn} 정격:${p.rating}`).join("; ")}
+[넷] ${c.nets.map(n => `${n.name}(${n.kind}${n.voltage ? " " + n.voltage : ""})`).join(", ")}
+
+JSON만 출력:
+{"specials":[{"id":"SC-01","char":"특성 설명","type":"안전|법규|기능|품질","target":"부품 ref 또는 넷","value":"관리 값·공차","control":"관리 방법(수입검사·공정검사·추적)","verify":"검증 방법(HWE.3/4)","reqs":[]}],
+"analysis":{"derating":[{"ref":"","param":"정격 전압|전력|전류|온도","rated":"","applied":"","ratio":"%","limit":"80%","ok":true,"note":"계산식"}],
+"thermal":[{"ref":"","pd_mW":"","theta":"θJA °C/W","ta":"85","tj":"","limit":"125","ok":true,"note":"Tj=Ta+Pd×θJA"}],
+"timing":[{"item":"","req":"","calc":"","margin":"","ok":true,"note":""}],
+"worstCase":[{"item":"","nominal":"","min":"","max":"","limit":"","ok":true,"method":"EVA|RSS|MC","note":""}]},
+"rationale":"설계 대안 비교와 선택 이유(전원 토폴로지·트랜시버 선정·보호 수준 등) 5~10문장"}`;
+}
+
+// ── HW 다이어그램 SVG: block(아키텍처 블록도, 04-52) · schematic(회로도 — 넷 라벨 방식) ──
+export const HD_DIAGRAMS = [["schematic", "회로도"], ["block", "블록도"]];
+export function hdSvg(kind, comp, model) {
+  const m = normalizeModel(model);
+  if (kind === "block") {
+    const comps = m.comps.HW || []; const cn = Object.fromEntries(comps.map(c => [c.id, c.name]));
+    const { rects, W, H } = gridLayout(comps, c => Math.max(150, tw(c.name) + 40), () => 64, 3, 50, 50, 30);
+    const by = Object.fromEntries(rects.map(r => [r.it.id, r]));
+    let b = rects.map(r => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="4" fill="${r.it.id === comp?.id ? "#E8F0FE" : "#F7F7F7"}" stroke="#222" stroke-width="${r.it.id === comp?.id ? 2 : 1}"/><text x="${r.x + r.w / 2}" y="${r.y + 24}" text-anchor="middle" font-weight="700">${X(r.it.name)}</text><text x="${r.x + r.w / 2}" y="${r.y + 42}" text-anchor="middle" font-size="9.5" fill="#555">${X(r.it.kind || "")}${r.it.hd?.parts?.length ? ` · 부품 ${r.it.hd.parts.length}` : ""}</text>`).join("");
+    (m.interfaces.HW || []).forEach(i => { const f = by[i.from], t = by[i.to]; if (!f || !t) return; const p1 = edgePoint(f, { x: t.x + t.w / 2, y: t.y + t.h / 2 }), p2 = edgePoint(t, { x: f.x + f.w / 2, y: f.y + f.h / 2 }); b += arrowPath(p1, p2, "ar", "", `${i.kind || ""} ${i.signals || ""}`.trim().slice(0, 28)); });
+    return svgWrap(W, H, b, `HW 아키텍처 블록도 (04-52)${comp ? ` — ${comp.name} 강조` : ""}`);
+  }
+  const hd = comp?.hd; if (!hd) return "";
+  // 회로도: 부품 심볼(사각 + 핀)을 격자 배치, 각 핀 끝에 넷 라벨. 전원/GND 넷은 심볼 표기.
+  const parts = hd.parts; const perRow = 4, colW = 290, rowGap = 44, top = 44, left = 70;
+  const netOf = {}; hd.conns.forEach(c => { netOf[`${c.ref}.${c.pin}`] = c.net; });
+  let x = left, y = top, rowH = 0, W = 400; let b = "";
+  parts.forEach((p, i) => {
+    const L = p.pins.filter(pn => pn.type === "in" || pn.type === "pwr" || pn.type === "passive" && p.pins.indexOf(pn) % 2 === 0), Rr = p.pins.filter(pn => !L.includes(pn));
+    const h = Math.max(54, 24 + Math.max(L.length, Rr.length) * 16), w = 110;
+    if (i && i % perRow === 0) { x = left; y += rowH + rowGap; rowH = 0; }
+    const bx = x + 55, by0 = y;
+    b += `<rect x="${bx}" y="${by0}" width="${w}" height="${h}" fill="#FFFDF2" stroke="#222"/><text x="${bx + w / 2}" y="${by0 - 6}" text-anchor="middle" font-weight="700" font-size="10.5">${X(p.ref)}</text><text x="${bx + w / 2}" y="${by0 + h + 11}" text-anchor="middle" font-size="9">${X(p.value)}${p.pkg ? ` · ${X(p.pkg)}` : ""}</text>`;
+    const pinRow = (pn, k, side) => { const py = by0 + 16 + k * 16; const net = netOf[`${p.ref}.${pn.num}`] || netOf[`${p.ref}.${pn.name}`] || "NC"; const isGnd = /GND|VSS/i.test(net), isPwr = /^(V|VCC|VDD|\+?\d+V|3V3|5V)/i.test(net) && !isGnd;
+      if (side === "L") { b += `<line x1="${bx - 24}" y1="${py}" x2="${bx}" y2="${py}" stroke="#222"/><text x="${bx + 4}" y="${py + 3.5}" font-size="8.5">${X(pn.name)}</text>`;
+        b += isGnd ? `<line x1="${bx - 24}" y1="${py}" x2="${bx - 24}" y2="${py + 10}" stroke="#222"/><line x1="${bx - 31}" y1="${py + 10}" x2="${bx - 17}" y2="${py + 10}" stroke="#222"/><line x1="${bx - 28}" y1="${py + 13}" x2="${bx - 20}" y2="${py + 13}" stroke="#222"/>` : `<text x="${bx - 27}" y="${py + 3.5}" text-anchor="end" font-size="8" fill="${isPwr ? "#B00020" : "#1A4D8F"}" ${isPwr ? 'font-weight="700"' : ""}>${X(net)}</text>`; }
+      else { b += `<line x1="${bx + w}" y1="${py}" x2="${bx + w + 24}" y2="${py}" stroke="#222"/><text x="${bx + w - 4}" y="${py + 3.5}" text-anchor="end" font-size="8.5">${X(pn.name)}</text>`;
+        b += isGnd ? `<line x1="${bx + w + 24}" y1="${py}" x2="${bx + w + 24}" y2="${py + 10}" stroke="#222"/><line x1="${bx + w + 17}" y1="${py + 10}" x2="${bx + w + 31}" y2="${py + 10}" stroke="#222"/><line x1="${bx + w + 20}" y1="${py + 13}" x2="${bx + w + 28}" y2="${py + 13}" stroke="#222"/>` : `<text x="${bx + w + 27}" y="${py + 3.5}" font-size="8" fill="${isPwr ? "#B00020" : "#1A4D8F"}" ${isPwr ? 'font-weight="700"' : ""}>${X(net)}</text>`; } };
+    L.forEach((pn, k) => pinRow(pn, k, "L")); Rr.forEach((pn, k) => pinRow(pn, k, "R"));
+    rowH = Math.max(rowH, h + 24); x += colW; W = Math.max(W, x + 40);
+  });
+  const H = y + rowH + 60;
+  b += `<text x="${left}" y="${H - 30}" font-size="9" fill="#555">넷 라벨 방식 회로도 — 같은 이름의 라벨은 서로 연결됨(빨강: 전원 넷, 파랑: 신호 넷, 기호: GND). 부품 PN은 후보(BOM 참조). 넷 ${hd.nets.length}개 · 부품 ${parts.length}개 · 연결 ${hd.conns.length}</text>`;
+  return svgWrap(W, H, b, `${comp.id} ${comp.name} — 회로도 (04-54, ${hdSettings(m).schematicFmt} 내보내기 기준)`);
 }
