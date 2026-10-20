@@ -2089,6 +2089,9 @@ export function emptyDD() {
   return { guid: "", summary: "", dataTypes: [], classes: [], ports: [], runnables: [], assoc: [], states: { initial: "", states: [], transitions: [] }, sequences: [], activities: [], origin: "", generatedAt: "" };
 }
 const cid = s => String(s || "").trim().replace(/[^A-Za-z0-9_]/g, "_").replace(/^(\d)/, "_$1").slice(0, 60) || "Unnamed";
+// 한글 이름 → 코드·파일명용 ASCII 식별자. 영문이 없으면 fallback(유닛 ID 기반)으로 — "____.c" 같은 파일명 방지
+export const asciiName = (s, fallback) => { const c = cid(String(s || "").replace(/\s+/g, "_")); return /^[_]*$/.test(c) || c === "Unnamed" ? cid(fallback || "Unit") : c; };
+const unitIdent = u => asciiName(u?.name, `Unit_${String(u?.id || "").replace(/[^A-Za-z0-9]/g, "_")}`);
 const arr = x => (Array.isArray(x) ? x : []);
 const str = (x, n = 400) => String(x == null ? "" : x).slice(0, n);
 const ids = x => arr(x).map(v => String(v || "").trim()).filter(Boolean);
@@ -2106,7 +2109,7 @@ export function normalizeDD(raw, unit, model, seedKey) {
   dd.summary = str(r.summary, 600);
   dd.dataTypes = arr(r.dataTypes).slice(0, 30).map(t => ({ name: cid(t.name), base: str(t.base || "uint8", 40), desc: str(t.desc, 200), range: str(t.range, 80), reqs: rq(t.reqs) }));
   dd.classes = arr(r.classes).slice(0, 12).map(c => ({
-    guid: g(`class:${cid(c.name)}`), name: cid(c.name), stereotype: str(c.stereotype || (c.name === unit?.name ? "SWC" : ""), 30), desc: str(c.desc, 300), reqs: rq(c.reqs).length ? rq(c.reqs) : unitReqs,
+    guid: g(`class:${asciiName(c.name, unitIdent(unit))}`), name: asciiName(c.name, unitIdent(unit)), stereotype: str(c.stereotype || (c.name === unit?.name ? "SWC" : ""), 30), desc: str(c.desc, 300), reqs: rq(c.reqs).length ? rq(c.reqs) : unitReqs,
     attrs: arr(c.attrs).slice(0, 30).map(a => ({ name: cid(a.name), type: str(a.type || "uint8", 40), init: str(a.init, 40), desc: str(a.desc, 160), vis: /^[+#-]$/.test(a.vis) ? a.vis : "-" })),
     ops: arr(c.ops).slice(0, 30).map(o => ({ name: cid(o.name), ret: str(o.ret || "void", 40), vis: /^[+#-]$/.test(o.vis) ? o.vis : "+",
       params: arr(o.params).slice(0, 10).map(p => ({ name: cid(p.name), type: str(p.type || "uint8", 40), dir: ["in", "out", "inout"].includes(p.dir) ? p.dir : "in" })),
@@ -2144,7 +2147,7 @@ export function fillDDGaps(dd0, unit, model, seedKey) {
   const dd = dd0 || emptyDD();
   const g = name => guidFor(`${seedKey}|${unit?.id}|${name}`);
   if (!dd.guid) dd.guid = g("unit");
-  const uName = cid(unit?.name || unit?.id || "Unit");
+  const uName = unitIdent(unit);
   const reqs = (m.reqs.SW || []).filter(r => ids(unit?.reqs).includes(r.id));
   const comp = (m.comps.SW || []).find(c => c.id === unit?.comp);
   const ifs = (m.interfaces.SW || []).filter(i => comp && (i.from === comp.id || i.to === comp.id));
@@ -2288,9 +2291,10 @@ function svgWrap(w, h, body, title) {
 ${body}</svg>`;
 }
 const boxText = (x, y, lines, opt = {}) => lines.map((l, i) => `<text x="${x}" y="${y + i * (opt.lh || 14)}" ${opt.anchor ? `text-anchor="${opt.anchor}"` : ""} ${opt.bold && i === 0 ? 'font-weight="700"' : ""} ${opt.italic ? 'font-style="italic"' : ""} fill="#222">${X(l)}</text>`).join("");
-function arrowPath(a, b, marker = "ar", dash = "", label = "") {
-  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-  return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#222" stroke-width="1.2" ${dash ? `stroke-dasharray="${dash}"` : ""} marker-end="url(#${marker})"/>${label ? `<text x="${mx}" y="${my - 4}" text-anchor="middle" font-size="10" fill="#333">${X(label)}</text>` : ""}`;
+function arrowPath(a, b, marker = "ar", dash = "", label = "", opt = {}) {
+  const t = opt.t ?? 0.5, mx = a.x + (b.x - a.x) * t, my = a.y + (b.y - a.y) * t;
+  const lw = tw(label, 10) + 8;
+  return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#222" stroke-width="1.2" ${dash ? `stroke-dasharray="${dash}"` : ""} marker-end="url(#${marker})"/>${label ? `${opt.bg ? `<rect x="${mx - lw / 2}" y="${my - 13}" width="${lw}" height="13" fill="#fff" fill-opacity="0.9"/>` : ""}<text x="${mx}" y="${my - 3}" text-anchor="middle" font-size="10" fill="#333">${X(label)}</text>` : ""}`;
 }
 // 사각형 경계와 중심 연결선의 교점
 function edgePoint(r, toward) {
@@ -2313,7 +2317,7 @@ function gridLayout(items, estW, estH, perRow = 3, pad = 24, top = 36, left = 20
 export function ddSvg(kind, unit, model) {
   const dd = unit?.dd; if (!dd) return "";
   const m = normalizeModel(model);
-  const uName = cid(unit.name || unit.id);
+  const uName = (dd.classes.find(c => c.stereotype === "SWC") || dd.classes[0])?.name || unitIdent(unit);
   const comp = (m.comps.SW || []).find(c => c.id === unit.comp);
   const title = `${unit.id} ${unit.name} — ${({ component: "컴포넌트 다이어그램", class: "클래스 다이어그램", state: "상태 머신 다이어그램", sequence: "시퀀스 다이어그램", activity: "액티비티 다이어그램", bdd: "SysML 블록 정의 다이어그램(BDD)", ibd: "SysML 내부 블록 다이어그램(IBD)" })[kind] || kind}`;
   if (kind === "class") {
@@ -2527,7 +2531,7 @@ export function buildXmi(model, meta, opts = {}) {
     body += `</packagedElement>`;
 
     // ── 다이어그램 배치 (화면 SVG와 같은 레이아웃 규칙) ──
-    const uName = cid(u.name || u.id);
+    const uName = (dd.classes.find(c => c.stereotype === "SWC") || dd.classes[0])?.name || unitIdent(u);
     const classRects = []; { let x = 40, y = 40, rowH = 0; dd.classes.forEach((c, i) => { const w = 220, h = 50 + 16 * (c.attrs.length + c.ops.length); if (i && i % 3 === 0) { x = 40; y += rowH + 60; rowH = 0; } classRects.push({ id: clsId[c.name], x, y, w, h, name: c.name }); x += w + 80; rowH = Math.max(rowH, h); }); }
     dia(G(`${u.id}:dg:class`), `${u.id} ${uName} — Class`, "Logical", uPk, classRects);
     dia(G(`${u.id}:dg:bdd`), `${u.id} ${uName} — SysML BDD`, "Logical", uPk, classRects, "MDGDgm=SysML1.6::BlockDefinition;");
@@ -2614,7 +2618,7 @@ function ruleBody(o, unit, lang) {
 }
 export function generateCode(unit, model, meta, settings, ai = null) {
   const S = { ...DD_DEFAULT, ...(settings || {}) }; const dd = unit.dd; if (!dd) return null;
-  const m = normalizeModel(model); const u = cid(unit.name || unit.id); const own = new Set(dd.dataTypes.map(t => cid(t.name)));
+  const m = normalizeModel(model); const u = (dd.classes.find(c => c.stereotype === "SWC") || dd.classes[0])?.name || unitIdent(unit); const own = new Set(dd.dataTypes.map(t => cid(t.name)));
   const bodies = Object.fromEntries(((ai && ai.ops) || []).map(o => [cid(o.name), o.body]));
   const guards = Object.fromEntries(((ai && ai.guards) || []).map(g => [Number(g.index), g.expr]));
   const consts = ((ai && ai.consts) || []).map(c => ({ name: cid(c.name), type: str(c.type || "uint16", 30), value: str(c.value, 40), desc: str(c.desc, 120) }));
@@ -2891,12 +2895,30 @@ export const HD_DIAGRAMS = [["schematic", "회로도"], ["block", "블록도"]];
 export function hdSvg(kind, comp, model) {
   const m = normalizeModel(model);
   if (kind === "block") {
-    const comps = m.comps.HW || []; const cn = Object.fromEntries(comps.map(c => [c.id, c.name]));
-    const { rects, W, H } = gridLayout(comps, c => Math.max(150, tw(c.name) + 40), () => 64, 3, 50, 50, 30);
+    // 허브(연결이 가장 많은 블록)를 가운데, 나머지는 원형 배치 → 허브-블록 간선이 다른 블록을 가로지르지 않는다. 선에는 ID만, 내용은 하단 범례.
+    const comps = m.comps.HW || []; const cn = Object.fromEntries(comps.map(c => [c.id, c.name])); const ifsAll = m.interfaces.HW || [];
+    const deg = {}; ifsAll.forEach(i => { deg[i.from] = (deg[i.from] || 0) + 1; deg[i.to] = (deg[i.to] || 0) + 1; });
+    const hub = comps.length > 3 && ifsAll.length ? comps.reduce((a, c) => (deg[c.id] || 0) > (deg[a.id] || 0) ? c : a, comps[0]) : null;
+    const bw = c => Math.max(170, tw(c.name) + 40), bh = 64;
+    let rects;
+    if (hub) {
+      const ring = comps.filter(c => c !== hub); const n = ring.length; const R = Math.max(230, n * 48); const cx = R + 160, cy = R + 90;
+      rects = [{ it: hub, x: cx - bw(hub) / 2, y: cy - bh / 2, w: bw(hub), h: bh }, ...ring.map((c, i) => { const ang = -Math.PI / 2 + (2 * Math.PI * i) / n; return { it: c, x: cx + Math.cos(ang) * R - bw(c) / 2, y: cy + Math.sin(ang) * R - bh / 2, w: bw(c), h: bh }; })];
+    } else rects = gridLayout(comps, bw, () => bh, 3, 130, 50, 40).rects;
+    const W = Math.max(...rects.map(r => r.x + r.w), 700) + 40, H = Math.max(...rects.map(r => r.y + r.h)) + 30;
     const by = Object.fromEntries(rects.map(r => [r.it.id, r]));
-    let b = rects.map(r => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="4" fill="${r.it.id === comp?.id ? "#E8F0FE" : "#F7F7F7"}" stroke="#222" stroke-width="${r.it.id === comp?.id ? 2 : 1}"/><text x="${r.x + r.w / 2}" y="${r.y + 24}" text-anchor="middle" font-weight="700">${X(r.it.name)}</text><text x="${r.x + r.w / 2}" y="${r.y + 42}" text-anchor="middle" font-size="9.5" fill="#555">${X(r.it.kind || "")}${r.it.hd?.parts?.length ? ` · 부품 ${r.it.hd.parts.length}` : ""}</text>`).join("");
-    (m.interfaces.HW || []).forEach(i => { const f = by[i.from], t = by[i.to]; if (!f || !t) return; const p1 = edgePoint(f, { x: t.x + t.w / 2, y: t.y + t.h / 2 }), p2 = edgePoint(t, { x: f.x + f.w / 2, y: f.y + f.h / 2 }); b += arrowPath(p1, p2, "ar", "", `${i.kind || ""} ${i.signals || ""}`.trim().slice(0, 28)); });
-    return svgWrap(W, H, b, `HW 아키텍처 블록도 (04-52)${comp ? ` — ${comp.name} 강조` : ""}`);
+    let b = rects.map(r => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="4" fill="${r.it.id === comp?.id ? "#E8F0FE" : r.it === hub ? "#FFF8E1" : "#F7F7F7"}" stroke="#222" stroke-width="${r.it.id === comp?.id ? 2 : 1}"/><text x="${r.x + r.w / 2}" y="${r.y + 24}" text-anchor="middle" font-weight="700">${X(r.it.name)}</text><text x="${r.x + r.w / 2}" y="${r.y + 42}" text-anchor="middle" font-size="9.5" fill="#555">${X(r.it.kind || "")}${r.it.hd?.parts?.length ? ` · 부품 ${r.it.hd.parts.length}` : ""}</text>`).join("");
+    const pairN = {}; const legend = [];
+    ifsAll.forEach(i => { const f = by[i.from], t = by[i.to]; if (!f || !t) return; const key = [i.from, i.to].sort().join("|"); const n = (pairN[key] = (pairN[key] || 0) + 1);
+      const fc = { x: f.x + f.w / 2, y: f.y + f.h / 2 }, tc = { x: t.x + t.w / 2, y: t.y + t.h / 2 };
+      // 같은 쌍의 여러 간선은 수직 방향으로 조금씩 비켜 그린다
+      const dx = tc.x - fc.x, dy = tc.y - fc.y, L = Math.hypot(dx, dy) || 1, off = (n - 1 - (n > 1 ? 1 : 0)) * 14 * (n % 2 ? 1 : -1), ox = -dy / L * off, oy = dx / L * off;
+      const p1 = edgePoint(f, { x: tc.x + ox, y: tc.y + oy }), p2 = edgePoint(t, { x: fc.x + ox, y: fc.y + oy });
+      b += arrowPath({ x: p1.x + ox, y: p1.y + oy }, { x: p2.x + ox, y: p2.y + oy }, "ar", "", i.id, { t: 0.5, bg: true });
+      legend.push([i.id, `${cn[i.from] || i.from} → ${cn[i.to] || i.to}`, `${i.kind || ""} ${i.signals || ""}${i.periodMs ? ` (${i.periodMs}ms)` : ""}`.trim()]); });
+    let ly = H + 10; const legendRows = legend.slice(0, 60);
+    if (legendRows.length) { b += `<text x="30" y="${ly}" font-weight="700">인터페이스 범례</text>`; ly += 8; legendRows.forEach(([id, ft, d]) => { ly += 14; b += `<text x="30" y="${ly}" font-size="9.5" fill="#333"><tspan font-family="monospace">${X(id)}</tspan>  ${X(ft)} — ${X(d.slice(0, 100))}</text>`; }); ly += 16; }
+    return svgWrap(W, legendRows.length ? ly : H, b, `HW 아키텍처 블록도 (04-52)${comp ? ` — ${comp.name} 강조` : ""}`);
   }
   const hd = comp?.hd; if (!hd) return "";
   // 회로도: 부품 심볼(사각 + 핀)을 격자 배치, 각 핀 끝에 넷 라벨. 전원/GND 넷은 심볼 표기.

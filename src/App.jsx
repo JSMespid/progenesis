@@ -8863,6 +8863,7 @@ const AE_PROCS = [
   { id: "HWE.4", grp: "HWE", short: "요구 검증", tab: "verif", sub: "HWE4", pair: "HWE.1" },
   { id: "TRACE", grp: "QA", short: "빠진 곳 점검", tab: "trace", sub: null, code: "추적성·WP 충족도" },
   { id: "SUP.1", grp: "QA", short: "QA 교차검토", tab: "review", sub: null },
+  { id: "ARTIFACTS", grp: "QA", short: "산출물 보기", tab: "artifacts", sub: null, code: "생성 산출물 전체 열람" },
 ];
 // 내부 탭으로 이동할 때 기본으로 보여줄 프로세스(섹션) — 아직 비어 있는 첫 단계
 function aeInitSub(t, m) {
@@ -8959,7 +8960,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [tplGroup, setTplGroup] = useState("SYS_RS");
   const [vFilter, setVFilter] = useState("SYS5");
   const [ddView, setDdView] = useState({ unit: null, kind: "component", mode: "diagram", file: 0 });
-  const [hdView, setHdView] = useState({ comp: null, kind: "schematic" });   // HWE.2 회로 설계 보기   // mode: diagram | code   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
+  const [hdView, setHdView] = useState({ comp: null, kind: "schematic" });   // HWE.2 회로 설계 보기
+  const [artSel, setArtSel] = useState(null);   // 산출물 보기: 선택 항목 { type: doc|svg|code|text|table, ... }
+  const [artQ, setArtQ] = useState("");         // 산출물 보기 필터
+  const zipAllBusy = useRef(false);   // mode: diagram | code   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
   // 커버리지 "빠짐 N건" → 해당 탭으로 이동해 미연결 항목만 표시 ({ tab, level?, ids:Set, q })
   const [focus, setFocus] = useState(null);
   const focusOn = tab === focus?.tab ? focus : null;
@@ -9779,6 +9783,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     AE_PROCS.forEach(p => {
       if (p.tab === "verif") { const n = model.tests.filter(t => t.level === p.sub).length; out[p.id] = !n ? "todo" : AE.missingTestTargets(model, [p.sub]) > 0 ? "partial" : "done"; return; }
       const base = aeProg.steps.find(x => x.id === p.tab)?.state || "todo";
+      if (p.id === "ARTIFACTS") { out[p.id] = (model.units.SW.some(u => u.dd) || model.comps.HW.some(c => c.hd) || model.reqs.SYS.length) ? "done" : "todo"; return; }
       if (p.id === "HWE.2") {   // HWE.2: 블록 + 회로 설계(hd)까지 있어야 완료
         const cs = model.comps.HW, hd = cs.filter(c => c.hd?.parts?.length).length;
         out[p.id] = !cs.length ? "todo" : hd === cs.length && base === "done" ? "done" : "partial"; return;
@@ -9838,10 +9843,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           {activeGrp && (
             <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "wrap" }}>
               {procVisible.filter(p => p.grp === activeGrp).map(p => { const on = activeProc?.id === p.id; const st = procStates[p.id]; return (
-                <button key={p.id} onClick={() => goProc(p.id)} title={`${p.id === "TRACE" ? p.code : AE.procLabel(p.id, V)}${p.pair ? ` — ${p.pair} 검증` : ""} · ${st === "done" ? "완료" : st === "partial" ? "진행 중" : "아직"}`}
+                <button key={p.id} onClick={() => goProc(p.id)} title={`${p.id === "TRACE" || p.id === "ARTIFACTS" ? p.code : AE.procLabel(p.id, V)}${p.pair ? ` — ${p.pair} 검증` : ""} · ${st === "done" ? "완료" : st === "partial" ? "진행 중" : "아직"}`}
                   style={{ padding: "4px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: on ? 700 : 400, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${on ? T.accent : T.border}`, background: on ? T.accent + "22" : "transparent", color: T.text }}>
                   <span style={{ color: procColor(st), marginRight: 4 }}>{procMark(st)}</span>
-                  {p.id !== "TRACE" && <b style={{ fontFamily: "monospace", marginRight: 4 }}>{p.id}</b>}{p.short}
+                  {p.id !== "TRACE" && p.id !== "ARTIFACTS" && <b style={{ fontFamily: "monospace", marginRight: 4 }}>{p.id}</b>}{p.short}
                   {p.pair && <span style={{ fontSize: 9.5, color: T.muted, marginLeft: 4 }}>↔{p.pair}</span>}
                   {p.id === "TRACE" && errCount ? <span style={{ color: T.red, marginLeft: 3 }}>({errCount})</span> : null}
                   {p.id === "SUP.1" && rvOpen ? <span style={{ color: T.amber, marginLeft: 3 }}>({rvOpen})</span> : null}
@@ -9866,7 +9871,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             : <div style={{ border: `1px solid ${T.accent}44`, borderLeft: `3px solid ${T.accent}`, borderRadius: 9, padding: "10px 12px", marginBottom: 12, background: T.accent + "08", fontSize: 11.5, lineHeight: 1.65 }}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, marginBottom: 2 }}>{activeProc ? `${activeProc.id === "TRACE" ? "" : activeProc.id + " "}${activeProc.short}` : AE_TABS.find(t => t[0] === tab)?.[1]} — 이 단계에서 할 일</div>
+                    <div style={{ fontWeight: 700, marginBottom: 2 }}>{activeProc ? `${activeProc.id === "TRACE" || activeProc.id === "ARTIFACTS" ? "" : activeProc.id + " "}${activeProc.short}` : AE_TABS.find(t => t[0] === tab)?.[1]} — 이 단계에서 할 일</div>
                     <div style={{ color: T.muted, marginBottom: 6 }}>{AE_GUIDE[tab].why}</div>
                     <ol style={{ margin: "0 0 6px 18px", padding: 0 }}>{AE_GUIDE[tab].todo.map((t, i) => <li key={i} style={{ marginBottom: 2 }}>{t}</li>)}</ol>
                     <div style={{ color: T.green, fontSize: 11 }}>✓ 끝났다고 보는 기준: {AE_GUIDE[tab].done}</div>
@@ -9877,7 +9882,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   </div>
                 </div>
               </div>)}
-          {activeProc && activeProc.id !== "TRACE" && (() => {
+          {activeProc && activeProc.id !== "TRACE" && activeProc.id !== "ARTIFACTS" && (() => {
             const docs = Object.values(AE.ASPICE_DOCS).filter(d => d.proc === activeProc.id); const vs = AE.versionsOf(V);
             const pair = activeProc.pair ? AE_PROCS.find(x => x.id === activeProc.pair) : null;
             return (
@@ -10643,6 +10648,88 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   </div>)}
               </AeSec>
             </>);
+          })()}
+
+          {tab === "artifacts" && (() => {
+            // ── 생성 산출물 전체 열람: 문서(docx·xlsx 내려받기) · SW 유닛 다이어그램·코드 · HW 회로도·블록도 · XMI · MISRA ──
+            const artCtx = { ossp, tailoring, requirements: { ...(requirements || {}), items, aspice: model } };
+            const metaF = form || {};
+            const S = AE.ddSettings(model), HS = AE.hdSettings(model);
+            const dl = (name, data, mime) => { const blob = new Blob([data], { type: mime || "application/octet-stream" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
+            const sanitize = x => String(x || "").replace(/[\\/:*?"<>|]/g, "_");
+            const groups = [];
+            // 1) 문서
+            const docItems = ASPICE_PKG_ORDER.filter(k => k === "SYS_RS" ? items.length > 0 : aspiceCanBuild(k, artCtx)).map(k => { const D = AE.ASPICE_DOCS[k]; const isX = /^(V_|R_)|RTM|STK_LIST|HW_BOM|HW_SC|HW_AN/.test(k); return { type: "doc", key: `doc:${k}`, kind: k, label: `${D.code} ${D.title}`, sub: `${D.proc} · ${isX ? "xlsx" : "docx"} · ${AE.wpLabel(k, V)}` }; });
+            groups.push({ name: `문서 (${docItems.length})`, items: docItems });
+            // 2) SW 유닛
+            const swUnits = model.units.SW.filter(u => u.dd?.classes?.length);
+            if (swUnits.length) {
+              groups.push({ name: `SWE.3 모델 공통`, items: [{ type: "text", key: "xmi", label: "UML XMI 2.1 (EA 가져오기)", sub: `유닛 ${swUnits.length}개 · xml`, get: () => AE.buildXmi(model, metaF, { seed: metaF.id || metaF.name || "project" }), file: `${sanitize(metaF.name) || "project"}_SWE3_UML2.1.xml`, mime: "application/xml" },
+                { type: "table", key: "misra", label: `MISRA 적용 체크리스트 (${S.target})`, sub: `${S.target === "CP" ? S.misraC : S.misraCpp} · xlsx`, rows: () => AE.misraChecklistRows(S), file: "MISRA_적용_체크리스트.xlsx", xlsx: () => makeXlsx({ sheetName: "MISRA", rows: AE.misraChecklistRows(S) }) }] });
+              swUnits.forEach(u => groups.push({ name: `${u.id} ${u.name}`, items: [
+                ...AE.DD_DIAGRAMS.map(([k, lab]) => ({ type: "svg", key: `dd:${u.id}:${k}`, label: `${lab} 다이어그램`, sub: "svg", get: () => AE.ddSvg(k, u, model), file: `${u.id}_${k}.svg` })),
+                ...((u.dd.code?.files || []).map((f, i) => ({ type: "code", key: `code:${u.id}:${i}`, label: f.name, sub: `${AE.DD_TARGETS[u.dd.code.target]?.lang} · ${u.dd.code.origin === "ai" ? "본문 AI" : "본문 규칙"}`, get: () => f.text, file: f.name }))),
+              ] }));
+            }
+            // 3) HW 블록
+            const hwComps = model.comps.HW.filter(c => c.hd?.parts?.length);
+            if (hwComps.length) {
+              groups.push({ name: "HWE.2 모델 공통", items: [{ type: "svg", key: "hw:block", label: "HW 아키텍처 블록도 (04-52)", sub: "svg", get: () => AE.hdSvg("block", null, model), file: "HW_architecture_block.svg" },
+                { type: "table", key: "hw:bom", label: "BOM 미리보기 (14-54)", sub: "부품 PN 후보", rows: () => [["블록", "RefDes", "종류", "값", "패키지", "제조사", "PN(후보)", "정격", "근거 요구"], ...hwComps.flatMap(c => c.hd.parts.map(p => [c.name, p.ref, p.kind, p.value, p.pkg, p.mfr, p.mpn, p.rating, (p.reqs || []).join(", ")]))] },
+                { type: "table", key: "hw:sc", label: "특별 특성 미리보기 (17-57)", sub: "", rows: () => [["블록", "ID", "특성", "분류", "대상", "값", "관리", "검증", "근거"], ...hwComps.flatMap(c => c.hd.specials.map(x => [c.name, x.id, x.char, x.type, x.target, x.value, x.control, x.verify, (x.reqs || []).join(", ")]))] },
+                { type: "table", key: "hw:an", label: "설계 분석 미리보기 (15-51)", sub: "Derating·열·최악조건", rows: () => [["블록", "분석", "항목", "정격/공칭", "적용/최소~최대", "기준/한계", "판정", "비고"], ...hwComps.flatMap(c => [...c.hd.analysis.derating.map(x => [c.name, "Derating", `${x.ref} ${x.param}`, x.rated, x.applied, `${x.ratio} / ${x.limit}`, x.ok ? "OK" : "NG", x.note]), ...c.hd.analysis.thermal.map(x => [c.name, "열", x.ref, `Pd ${x.pd_mW}mW`, `Ta ${x.ta} → Tj ${x.tj}`, x.limit, x.ok ? "OK" : "NG", x.note]), ...c.hd.analysis.worstCase.map(x => [c.name, "최악조건", x.item, x.nominal, `${x.min} ~ ${x.max}`, x.limit, x.ok ? "OK" : "NG", `${x.method} ${x.note}`])])] }] });
+              hwComps.forEach(c => groups.push({ name: `${c.id} ${c.name}`, items: [{ type: "svg", key: `hd:${c.id}`, label: "회로도 (04-54)", sub: `부품 ${c.hd.parts.length} · 넷 ${c.hd.nets.length} · svg`, get: () => AE.hdSvg("schematic", c, model), file: `${c.id}_schematic.svg` },
+                { type: "table", key: `hdp:${c.id}`, label: "부품·넷 표", sub: "", rows: () => [["RefDes", "종류", "값", "패키지", "제조사 / PN(후보)", "정격", "용도", "핀→넷"], ...c.hd.parts.map(p => [p.ref, p.kind, p.value, p.pkg, `${p.mfr} / ${p.mpn}`, p.rating, p.desc, c.hd.conns.filter(x => x.ref === p.ref).map(x => `${x.pin}:${x.net}`).join(" ")])] }] }));
+            }
+            const q = artQ.trim().toLowerCase();
+            const vis = groups.map(g => ({ ...g, items: g.items.filter(it => !q || `${g.name} ${it.label} ${it.sub || ""}`.toLowerCase().includes(q)) })).filter(g => g.items.length);
+            const total = groups.reduce((n, g) => n + g.items.length, 0);
+            const sel = artSel && groups.flatMap(g => g.items).find(it => it.key === artSel) || null;
+            const dlDoc = async (it) => { try { setNote(`${it.label} 생성 중…`); const of = await buildVmodelDoc(it.kind, metaF, artCtx); if (!of) { setErr("생성할 내용이 없습니다."); return; } dl(`${AE.ASPICE_DOCS[it.kind].code}_${sanitize(AE.ASPICE_DOCS[it.kind].title)}.${of.ext}`, of.bytes, of.ext === "xlsx" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"); setNote(`${it.label} 내려받음`); } catch (e) { setErr(`${it.label} 생성 실패: ${e.message}`); } };
+            const dlAll = () => { if (busy || zipAllBusy.current) return; zipAllBusy.current = true; setNote("전체 산출물 ZIP 생성 중… (V-모델 산출물 ZIP과 동일)"); downloadAspicePackage(metaF, artCtx).then(() => setNote("전체 산출물 ZIP 내려받음")).catch(e => setErr("ZIP 실패: " + e.message)).finally(() => { zipAllBusy.current = false; }); };
+            return (
+              <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 10, minHeight: 420 }}>
+                <div style={{ border: `1px solid ${T.border}`, borderRadius: 9, background: T.bg, display: "flex", flexDirection: "column", maxHeight: 640 }}>
+                  <div style={{ padding: "8px 10px", borderBottom: `1px solid ${T.border}`, display: "flex", gap: 6, alignItems: "center" }}>
+                    <input value={artQ} onChange={e => setArtQ(e.target.value)} placeholder={`검색 (${total}개 산출물)`} style={{ ...inp, flex: 1 }} />
+                    <button onClick={dlAll} title="문서·다이어그램·코드·회로도를 모두 담은 ZIP (V-모델 산출물 ZIP)" style={small}>⬇ 전체</button>
+                  </div>
+                  <div style={{ overflowY: "auto", flex: 1, padding: 6 }}>
+                    {vis.map(g => (
+                      <div key={g.name} style={{ marginBottom: 6 }}>
+                        <div style={{ fontSize: 10.5, fontWeight: 700, color: T.muted, padding: "4px 6px" }}>{g.name}</div>
+                        {g.items.map(it => <button key={it.key} onClick={() => setArtSel(it.key)} style={{ display: "block", width: "100%", textAlign: "left", background: artSel === it.key ? T.accent + "22" : "none", border: `1px solid ${artSel === it.key ? T.accent : "transparent"}`, borderRadius: 6, padding: "4px 8px", cursor: "pointer", color: T.text, fontFamily: "inherit" }}>
+                          <div style={{ fontSize: 11.5 }}>{it.type === "doc" ? "📄" : it.type === "svg" ? "🖼" : it.type === "code" ? "💻" : it.type === "table" ? "📊" : "📑"} {it.label}</div>
+                          {it.sub ? <div style={{ fontSize: 9.5, color: T.muted }}>{it.sub}</div> : null}
+                        </button>)}
+                      </div>))}
+                    {!vis.length && <div style={{ fontSize: 11, color: T.muted, padding: 10 }}>{total ? "검색 결과 없음" : "아직 생성된 산출물이 없습니다. SYS.2 확정 → SYS.3 → SWE.3 상세설계·코드 / HWE.2 회로 설계를 진행하세요."}</div>}
+                  </div>
+                </div>
+                <div style={{ border: `1px solid ${T.border}`, borderRadius: 9, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: 640 }}>
+                  {!sel && <div style={{ padding: 16, fontSize: 11.5, color: T.muted }}>왼쪽에서 산출물을 고르세요. 다이어그램·회로도·코드·표는 여기서 바로 보이고, Word·Excel 문서는 내려받기로 확인합니다. 모든 항목은 '전체 ZIP 다운로드'에도 같은 내용으로 들어갑니다.</div>}
+                  {sel && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.bg, borderBottom: `1px solid ${T.border}` }}>
+                      <b style={{ fontSize: 12 }}>{sel.label}</b><span style={{ fontSize: 10, color: T.muted }}>{sel.sub}</span><div style={{ flex: 1 }} />
+                      {sel.type === "doc" && <button onClick={() => dlDoc(sel)} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>⬇ 문서 내려받기</button>}
+                      {(sel.type === "svg" || sel.type === "code" || sel.type === "text") && <button onClick={() => dl(sel.file, sel.get(), sel.type === "svg" ? "image/svg+xml" : sel.mime || "text/plain")} style={small}>⬇ {sel.file}</button>}
+                      {sel.type === "table" && sel.xlsx && <button onClick={() => dl(sel.file, sel.xlsx(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")} style={small}>⬇ xlsx</button>}
+                    </div>)}
+                  {sel?.type === "doc" && (() => { const D = AE.ASPICE_DOCS[sel.kind]; return (
+                    <div style={{ padding: 14, fontSize: 11.5, lineHeight: 1.7 }}>
+                      <div><b>{D.code} {D.title}</b> — {AE.procLabel(D.proc.split("~")[0], V)}</div>
+                      <div style={{ color: T.muted }}>정보항목: {AE.wpLabel(sel.kind, V)}</div>
+                      <div style={{ marginTop: 8 }}>현재 추적 모델에서 바로 생성됩니다(저장 여부와 무관). 내용은 {sel.kind === "HW_DD" ? "블록별 부품표·넷·인터페이스·설계 근거, 요구↔블록↔부품 일관성 증거(13-51), 설계 검토·합의 기록(13-52)" : sel.kind === "SW_DD" ? "유닛 분해·요구 추적, 유닛별 클래스·연산·알고리즘·포트·Runnable·상태·시퀀스·액티비티 표" : sel.kind === "RTM" ? "순방향·역방향 추적, 변경 영향·판정 이력, 일관성 점검 결과" : /^V_/.test(sel.kind) ? "검증 전략·대상·시험 항목(절차·기대 결과·합격 기준)" : /^R_/.test(sel.kind) ? "시험 결과 기록 틀(Pass/Fail/Not executed)" : "해당 프로세스의 요구·설계 내용"}입니다.</div>
+                      <div style={{ marginTop: 8, color: T.muted }}>미리보기 대신 내려받아 Word/Excel에서 확인하세요. 표 형식 산출물(BOM·특별 특성·분석·MISRA)은 왼쪽 '미리보기' 항목에서 바로 볼 수 있습니다.</div>
+                    </div>); })()}
+                  {sel?.type === "svg" && <div style={{ background: "#fff", overflow: "auto", flex: 1, padding: 6 }} dangerouslySetInnerHTML={{ __html: sel.get() }} />}
+                  {(sel?.type === "code" || sel?.type === "text") && <pre style={{ margin: 0, padding: 10, overflow: "auto", flex: 1, fontSize: 11, lineHeight: 1.45, background: "#0B0F1A", color: "#D6DEEB", fontFamily: "Consolas, 'D2Coding', monospace" }}>{sel.type === "text" ? sel.get().slice(0, 200000) : sel.get()}</pre>}
+                  {sel?.type === "table" && (() => { const rows = sel.rows(); const hdrIdx = rows.findIndex(r => r.length > 2); const body = rows.slice(hdrIdx); return (
+                    <div style={{ overflow: "auto", flex: 1 }}><table style={{ borderCollapse: "collapse", fontSize: 10.5, minWidth: "100%" }}>
+                      <tbody>{body.slice(0, 400).map((r, i) => <tr key={i} style={{ background: i === 0 ? T.bg : "transparent" }}>{(Array.isArray(r) ? r : [r]).map((c, j) => <td key={j} style={{ border: `1px solid ${T.border}`, padding: "3px 6px", fontWeight: i === 0 ? 700 : 400, whiteSpace: "pre-wrap", verticalAlign: "top" }}>{typeof c === "object" && c ? c.v : String(c ?? "")}</td>)}</tr>)}</tbody>
+                    </table>{body.length > 400 && <div style={{ padding: 6, fontSize: 10, color: T.muted }}>… {body.length - 400}행 더 있음 — xlsx로 내려받아 확인</div>}</div>); })()}
+                </div>
+              </div>);
           })()}
 
           {tab === "trace" && (<>
