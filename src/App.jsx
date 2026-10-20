@@ -9611,7 +9611,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     AE_PROCS.forEach(p => {
       if (p.tab === "verif") { const n = model.tests.filter(t => t.level === p.sub).length; out[p.id] = !n ? "todo" : AE.missingTestTargets(model, [p.sub]) > 0 ? "partial" : "done"; return; }
       const base = aeProg.steps.find(x => x.id === p.tab)?.state || "todo";
-      const cnt = p.sub === "STK" ? model.reqs.STK.length : p.sub === "SYS" ? model.reqs.SYS.length : p.sub === "req" ? model.reqs[p.tab].length : p.sub === "arch" ? model.comps[p.tab].length : p.sub === "unit" ? model.units.SW.length : null;
+      if (p.sub === "unit") {   // SWE.3: 유닛 분해 + 상세설계(dd)까지 있어야 완료
+        const us = model.units.SW, dd = us.filter(u => u.dd?.classes?.length).length;
+        out[p.id] = !us.length ? "todo" : dd === us.length && base === "done" ? "done" : "partial"; return;
+      }
+      const cnt = p.sub === "STK" ? model.reqs.STK.length : p.sub === "SYS" ? model.reqs.SYS.length : p.sub === "req" ? model.reqs[p.tab].length : p.sub === "arch" ? model.comps[p.tab].length : null;
       out[p.id] = cnt === null ? base : !cnt ? "todo" : base === "done" ? "done" : "partial";
     });
     return out;
@@ -9652,7 +9656,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               <button key={g.id} onClick={() => goGroup(g.id)} title={ps.map(p => `${p.id === "TRACE" ? "" : p.id + " "}${p.short} · ${procStates[p.id] === "done" ? "완료" : procStates[p.id] === "partial" ? "진행 중" : "아직"}`).join("\n")}
                 style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12.5, fontWeight: on ? 700 : 500, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${on ? T.accent : T.border}`, background: on ? T.accent : "transparent", color: on ? "#fff" : T.text, display: "inline-flex", alignItems: "center", gap: 8 }}>
                 {g.label}{badge ? <span style={{ fontSize: 10, color: on ? "#fff" : T.amber }}>({badge})</span> : null}
-                <span style={{ fontSize: 9, letterSpacing: 1.5 }}>{ps.map(p => <span key={p.id} style={{ color: on ? "#fff" : procColor(procStates[p.id]), opacity: on && procStates[p.id] === "todo" ? 0.55 : 1 }}>{procStates[p.id] === "done" ? "●" : procStates[p.id] === "partial" ? "◐" : "○"}</span>)}</span>
+                <span style={{ fontSize: 9, letterSpacing: 1.5 }}>{ps.map(p => <span key={p.id} style={{ color: on ? (procStates[p.id] === "done" ? "#B9F6CA" : procStates[p.id] === "partial" ? "#FFE082" : "#fff") : procColor(procStates[p.id]), opacity: procStates[p.id] === "todo" ? 0.5 : 1 }}>{procStates[p.id] === "done" ? "●" : procStates[p.id] === "partial" ? "◐" : "○"}</span>)}</span>
               </button>); })}
             <div style={{ flex: 1 }} />
             <button onClick={() => setTab("setup")} title="준비 — ASPICE 버전·개발 범위·입력자료(DBC 등). 눌러서 확인·변경"
