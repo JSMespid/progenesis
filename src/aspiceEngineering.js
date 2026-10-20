@@ -578,11 +578,13 @@ function repairUnitDD(u) {
   if (!dd.classes.some(c => bad(c.name))) return u;
   const base = asciiName(u.name, `Unit_${String(u.id || "").replace(/[^A-Za-z0-9]/g, "_")}`);
   const map = {}; let k = 0;
+  const swcBad = bad((dd.classes.find(c => c.stereotype === "SWC") || dd.classes[0]).name);
   const classes = dd.classes.map(c => { if (!bad(c.name)) return c; const nn = c.stereotype === "SWC" || k === 0 ? base : `${base}_C${k}`; k++; map[c.name] = nn; return { ...c, name: nn }; });
   const fix = n => map[n] || n;
   return { ...u, dd: { ...dd, classes, assoc: (dd.assoc || []).map(a => ({ ...a, from: fix(a.from), to: fix(a.to) })),
     sequences: (dd.sequences || []).map(sq => ({ ...sq, lifelines: (sq.lifelines || []).map(fix), steps: (sq.steps || []).map(st => ({ ...st, from: fix(st.from), to: fix(st.to) })) })),
-    code: undefined } };   // 이름이 바뀌었으므로 코드는 재생성 대상
+    // 파일명을 정하는 SWC 클래스명이 바뀐 경우에만 기존 코드를 폐기(재생성 대상). 내부 클래스명만 고친 경우 코드는 유지
+    code: swcBad ? undefined : dd.code } };
 }
 export function normalizeModel(m) {
   const e = emptyModel();
@@ -2350,23 +2352,24 @@ export function ddSvg(kind, unit, model) {
   if (kind === "component" || kind === "ibd") {
     // 중앙: 유닛(컴포넌트/파트), 좌: 수신 포트와 상대 컴포넌트, 우: 송신 포트와 상대
     const Rp = dd.ports.filter(p => p.dir === "R"), Pp = dd.ports.filter(p => p.dir === "P");
-    const rows = Math.max(Rp.length, Pp.length, 1), rowH = 46, cx = 330, cw = 240, ch = Math.max(110, rows * rowH + 70), top = 50;
+    const rows = Math.max(Rp.length, Pp.length, 1), rowH = 46, cx = 360, cw = 300, ch = Math.max(110, rows * rowH + 70), top = 50;
+    const cutC = (t, n) => { const x = String(t || ""); return x.length > n ? x.slice(0, n - 1) + "…" : x; };
     const cn = Object.fromEntries((m.comps.SW || []).map(c => [c.id, c.name]));
     const other = p => { const i = (m.interfaces.SW || []).find(x => x.id === p.source); return i ? (p.dir === "R" ? cn[i.from] || i.from : cn[i.to] || i.to) : (p.dir === "R" ? "Sender" : "Receiver"); };
     const compIcon = (x, y) => `<rect x="${x}" y="${y}" width="14" height="18" fill="#fff" stroke="#222"/><rect x="${x - 4}" y="${y + 3}" width="8" height="4" fill="#fff" stroke="#222"/><rect x="${x - 4}" y="${y + 10}" width="8" height="4" fill="#fff" stroke="#222"/>`;
-    let b = kind === "ibd" ? `<rect x="40" y="${top - 22}" width="${cx + cw + 300}" height="${ch + 60}" fill="none" stroke="#222"/><text x="48" y="${top - 8}" font-weight="700">ibd [block] ${X(comp?.name || uName)}</text>` : "";
+    let b = kind === "ibd" ? `<rect x="40" y="${top - 22}" width="${cx + cw + 360}" height="${ch + 60}" fill="none" stroke="#222"/><text x="48" y="${top - 8}" font-weight="700">ibd [block] ${X(comp?.name || uName)}</text>` : "";
     b += `<rect x="${cx}" y="${top}" width="${cw}" height="${ch}" fill="#E8F0FE" stroke="#222" stroke-width="1.4"/>${kind === "component" ? compIcon(cx + cw - 24, top + 6) : ""}
 <text x="${cx + cw / 2}" y="${top + 16}" text-anchor="middle" font-size="9" fill="#555">${kind === "ibd" ? "«part»" : "«component» " + X(DD_TARGETS[ddSettings(m).target]?.unitKind || "")}</text><text x="${cx + cw / 2}" y="${top + 32}" text-anchor="middle" font-weight="700">${X(uName)}</text>
 <text x="${cx + cw / 2}" y="${top + 46}" text-anchor="middle" font-size="9.5" fill="#555">${X(dd.runnables.map(r => `${r.name}${r.periodMs ? " " + r.periodMs + "ms" : ""}`).join(" · ").slice(0, 44))}</text>`;
     Rp.forEach((p, i) => { const y = top + 70 + i * rowH; const ox = 60, ow = 150;
       b += `<rect x="${ox}" y="${y - 14}" width="${ow}" height="30" fill="#F5F5F5" stroke="#222"/><text x="${ox + ow / 2}" y="${y + 5}" text-anchor="middle" font-size="10">${X(other(p))}</text>
 <rect x="${cx - 7}" y="${y - 7}" width="14" height="14" fill="#fff" stroke="#222"/><line x1="${ox + ow}" y1="${y}" x2="${cx - 26}" y2="${y}" stroke="#222"/><path d="M${cx - 26},${y - 8} a8,8 0 0 0 0,16" fill="none" stroke="#222"/><circle cx="${ox + ow + 10}" cy="${y}" r="0" />
-<text x="${cx + 10}" y="${y + 4}" font-size="9.5">${X(p.name)}: ${X(p.interface)}</text><text x="${(ox + ow + cx) / 2}" y="${y - 6}" text-anchor="middle" font-size="8.5" fill="#555">${X(p.elements.map(e => e.name).join(", ").slice(0, 30))}</text>`; });
-    Pp.forEach((p, i) => { const y = top + 70 + i * rowH; const ox = cx + cw + 110, ow = 150;
+<text x="${cx + 10}" y="${y + 4}" font-size="9.5"><title>${X(`${p.name}: ${p.interface}`)}</title>${X(cutC(p.name, 20))}</text><g><title>${X(p.elements.map(e => `${e.name}: ${e.type}`).join(", "))}</title><text x="${(ox + ow + cx - 26) / 2}" y="${y - 6}" text-anchor="middle" font-size="8.5" fill="#555">${X(cutC(p.elements.map(e => e.name).join(", "), 22))}</text></g>`; });
+    Pp.forEach((p, i) => { const y = top + 70 + i * rowH; const ox = cx + cw + 170, ow = 150;
       b += `<rect x="${ox}" y="${y - 14}" width="${ow}" height="30" fill="#F5F5F5" stroke="#222"/><text x="${ox + ow / 2}" y="${y + 5}" text-anchor="middle" font-size="10">${X(other(p))}</text>
 <rect x="${cx + cw - 7}" y="${y - 7}" width="14" height="14" fill="#fff" stroke="#222"/><line x1="${cx + cw + 7}" y1="${y}" x2="${cx + cw + 44}" y2="${y}" stroke="#222"/><circle cx="${cx + cw + 50}" cy="${y}" r="6" fill="#fff" stroke="#222"/><line x1="${cx + cw + 56}" y1="${y}" x2="${ox}" y2="${y}" stroke="#222"/>
-<text x="${cx + cw - 10}" y="${y + 4}" text-anchor="end" font-size="9.5">${X(p.name)}: ${X(p.interface)}</text><text x="${(cx + cw + 56 + ox) / 2}" y="${y - 6}" text-anchor="middle" font-size="8.5" fill="#555">${X(p.elements.map(e => e.name).join(", ").slice(0, 30))}</text>`; });
-    return svgWrap(cx + cw + 300, top + ch + 50, b, title);
+<text x="${cx + cw - 10}" y="${y + 4}" text-anchor="end" font-size="9.5"><title>${X(`${p.name}: ${p.interface}`)}</title>${X(cutC(p.name, 20))}</text><g><title>${X(p.elements.map(e => `${e.name}: ${e.type}`).join(", "))}</title><text x="${(cx + cw + 56 + ox) / 2}" y="${y - 6}" text-anchor="middle" font-size="8.5" fill="#555">${X(cutC(p.elements.map(e => e.name).join(", "), 22))}</text></g>`; });
+    return svgWrap(cx + cw + 380, top + ch + 50, b, title);
   }
   if (kind === "bdd") {
     // 블록: 컴포넌트(상위) ◆→ 유닛 블록 → 내부 클래스 블록. 값(values)=속성, 연산(operations)
@@ -2384,20 +2387,27 @@ export function ddSvg(kind, unit, model) {
   }
   if (kind === "state") {
     const S = dd.states.states; if (!S.length) return svgWrap(400, 80, `<text x="20" y="50">상태 없음</text>`, title);
-    const n = S.length, R = Math.max(120, n * 34), cx0 = R + 140, cy0 = R + 70;
-    const rects = S.map((s, i) => { const ang = -Math.PI / 2 + (2 * Math.PI * i) / n; const w = Math.max(110, tw(s.name) + 30, ...(s.entry ? [tw("entry / " + s.entry) * 0.8] : [])), h = 34 + (s.entry ? 13 : 0) + (s.do ? 13 : 0) + (s.exit ? 13 : 0); return { it: s, x: cx0 + Math.cos(ang) * R - w / 2, y: cy0 + Math.sin(ang) * R - h / 2, w: Math.min(w, 260), h }; });
+    const cut = (t, n) => { const x = String(t || ""); return x.length > n ? x.slice(0, n - 1) + "…" : x; };
+    const n = S.length, R = Math.max(150, n * 48) + (n > 4 ? 40 : 0), cx0 = R + 180, cy0 = R + 80;
+    const rects = S.map((s, i) => { const ang = -Math.PI / 2 + (2 * Math.PI * i) / n; const w = Math.max(120, tw(s.name) + 30, ...[s.entry, s.do, s.exit].filter(Boolean).map(x => tw(cut("entry / " + x, 34)) + 14)), h = 34 + (s.entry ? 13 : 0) + (s.do ? 13 : 0) + (s.exit ? 13 : 0); return { it: s, x: cx0 + Math.cos(ang) * R - w / 2, y: cy0 + Math.sin(ang) * R - h / 2, w: Math.min(w, 230), h }; });
     const by = Object.fromEntries(rects.map(r => [r.it.name, r]));
-    let b = rects.map(r => { const s = r.it; const extra = [s.entry && `entry / ${s.entry}`, s.do && `do / ${s.do}`, s.exit && `exit / ${s.exit}`].filter(Boolean).map(l => l.slice(0, 40));
-      return `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="10" fill="#FFFFE0" stroke="#222"/><text x="${r.x + r.w / 2}" y="${r.y + 16}" text-anchor="middle" font-weight="700">${X(s.name)}</text>${extra.length ? `<line x1="${r.x}" y1="${r.y + 22}" x2="${r.x + r.w}" y2="${r.y + 22}" stroke="#222"/>${boxText(r.x + 6, r.y + 34, extra, { lh: 13 })}` : ""}`; }).join("");
+    let b = rects.map(r => { const s = r.it; const full = [s.entry && `entry / ${s.entry}`, s.do && `do / ${s.do}`, s.exit && `exit / ${s.exit}`].filter(Boolean); const extra = full.map(l => cut(l, 34));
+      return `<g><title>${X(full.join("\n"))}</title><rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="10" fill="#FFFFE0" stroke="#222"/><text x="${r.x + r.w / 2}" y="${r.y + 16}" text-anchor="middle" font-weight="700">${X(s.name)}</text>${extra.length ? `<line x1="${r.x}" y1="${r.y + 22}" x2="${r.x + r.w}" y2="${r.y + 22}" stroke="#222"/>${boxText(r.x + 6, r.y + 34, extra, { lh: 13 })}` : ""}</g>`; }).join("");
     const init = by[dd.states.initial]; if (init) { const p = { x: init.x + init.w / 2, y: init.y - 36 }; b += `<circle cx="${p.x}" cy="${p.y}" r="7" fill="#222"/>` + arrowPath({ x: p.x, y: p.y + 7 }, { x: init.x + init.w / 2, y: init.y }); }
     const seen = {};
-    dd.states.transitions.forEach(t => { const f = by[t.from], g2 = by[t.to]; if (!f || !g2) return; const lab = [t.trigger, t.guard ? `[${t.guard}]` : "", t.effect ? `/ ${t.effect}` : ""].filter(Boolean).join(" ").slice(0, 46);
-      if (f === g2) { const x = f.x + f.w, y = f.y + 10; b += `<path d="M${x},${y} C${x + 40},${y - 30} ${x + 40},${y + 40} ${x},${y + 24}" fill="none" stroke="#222" marker-end="url(#ar)"/><text x="${x + 44}" y="${y + 8}" font-size="9.5">${X(lab)}</text>`; return; }
-      const k = [t.from, t.to].sort().join("|"); const off = (seen[k] = (seen[k] || 0) + 1) > 1 ? 10 : 0;
+    const legend = [];
+    dd.states.transitions.forEach((t, ti) => { const f = by[t.from], g2 = by[t.to]; if (!f || !g2) return; const full = [t.trigger, t.guard ? `[${t.guard}]` : "", t.effect ? `/ ${t.effect}` : ""].filter(Boolean).join(" "); const id = `T${ti + 1}`; const lab = `${id} ${cut(full, 26)}`; legend.push([id, `${t.from} → ${t.to}`, full]);
+      const lw = tw(lab, 9.5) + 6;
+      if (f === g2) { const x = f.x + f.w, y = f.y + 10; b += `<g><title>${X(full)}</title><path d="M${x},${y} C${x + 40},${y - 30} ${x + 40},${y + 40} ${x},${y + 24}" fill="none" stroke="#222" marker-end="url(#ar)"/><rect x="${x + 42}" y="${y - 2}" width="${lw}" height="12" fill="#fff" fill-opacity="0.9"/><text x="${x + 45}" y="${y + 8}" font-size="9.5">${X(lab)}</text></g>`; return; }
+      const k = [t.from, t.to].sort().join("|"); const nth = (seen[k] = (seen[k] || 0) + 1); const off = (nth - 1) * 22;
       const p1 = edgePoint(f, { x: g2.x + g2.w / 2, y: g2.y + g2.h / 2 }), p2 = edgePoint(g2, { x: f.x + f.w / 2, y: f.y + f.h / 2 });
-      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2, nx = -(p2.y - p1.y), ny = p2.x - p1.x, L = Math.hypot(nx, ny) || 1, c = { x: mx + (nx / L) * (28 + off), y: my + (ny / L) * (28 + off) };
-      b += `<path d="M${p1.x},${p1.y} Q${c.x},${c.y} ${p2.x},${p2.y}" fill="none" stroke="#222" stroke-width="1.2" marker-end="url(#ar)"/><text x="${(mx + c.x) / 2}" y="${(my + c.y) / 2}" text-anchor="middle" font-size="9.5" fill="#333">${X(lab)}</text>`; });
-    return svgWrap(cx0 + R + 160, cy0 + R + 80, b, title);
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2, nx = -(p2.y - p1.y), ny = p2.x - p1.x, L = Math.hypot(nx, ny) || 1, c = { x: mx + (nx / L) * (30 + off), y: my + (ny / L) * (30 + off) };
+      // 라벨은 출발점에서 35% 지점(곡선 위) — 같은 쌍의 역방향 전이와 겹치지 않도록
+      const tt = 0.35, qx = (1 - tt) * (1 - tt) * p1.x + 2 * (1 - tt) * tt * c.x + tt * tt * p2.x, qy = (1 - tt) * (1 - tt) * p1.y + 2 * (1 - tt) * tt * c.y + tt * tt * p2.y;
+      b += `<g><title>${X(full)}</title><path d="M${p1.x},${p1.y} Q${c.x},${c.y} ${p2.x},${p2.y}" fill="none" stroke="#222" stroke-width="1.2" marker-end="url(#ar)"/><rect x="${qx - lw / 2}" y="${qy - 11}" width="${lw}" height="12" fill="#fff" fill-opacity="0.9"/><text x="${qx}" y="${qy - 2}" text-anchor="middle" font-size="9.5" fill="#333">${X(lab)}</text></g>`; });
+    let ly = cy0 + R + 70; const W = Math.max(cx0 + R + 180, 720);
+    if (legend.length) { b += `<text x="30" y="${ly}" font-weight="700">전이 범례 (trigger [guard] / effect)</text>`; ly += 6; legend.forEach(([id, ft, d]) => { ly += 14; b += `<text x="30" y="${ly}" font-size="9.5" fill="#333"><tspan font-family="monospace">${X(id)}</tspan>  ${X(ft)} — ${X(cut(d, 110))}</text>`; }); ly += 16; }
+    return svgWrap(W, ly, b, title);
   }
   if (kind === "sequence") {
     const seqs = dd.sequences; if (!seqs.length) return svgWrap(400, 80, `<text x="20" y="50">시나리오 없음</text>`, title);

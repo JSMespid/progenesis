@@ -7674,7 +7674,7 @@ function makeAspiceUnitDesignDocx(meta, ctx, doc) {
     const d = u.dd;
     if (d?.classes?.length) {
       body += docxP("구조 — 클래스·속성", { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["클래스", "스테레오타입", "속성 (가시성 이름: 형 = 초기값)", "설명", "근거 요구"], ...d.classes.map(c => [c.name, c.stereotype || "class", c.attrs.map(a => `${a.vis} ${a.name}: ${a.type}${a.init ? " = " + a.init : ""}`).join("\n") || "-", c.desc || "", (c.reqs || []).join(", ") || "-"])], -1);
-      body += docxP("연산·알고리즘", { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["연산", "시그니처", "알고리즘(단계)", "사전/사후 조건", "근거 요구"], ...d.classes.flatMap(c => c.ops.map(o => [`${c.name}::${o.name}`, `${o.ret} ${o.name}(${o.params.map(pp => `${pp.dir !== "in" ? pp.dir + " " : ""}${pp.type} ${pp.name}`).join(", ")})`, (o.algo || []).map((x, i) => `${i + 1}. ${x}`).join("\n") || o.desc || "-", [o.pre && `pre: ${o.pre}`, o.post && `post: ${o.post}`].filter(Boolean).join("\n") || "-", (o.reqs || []).join(", ") || "-"]))], -1);
+      body += docxP("연산·알고리즘", { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["연산", "시그니처", "알고리즘(단계)", "사전/사후 조건", "근거 요구"], ...d.classes.flatMap(c => c.ops.map(o => [`${c.name}::${o.name}`, `${o.ret} ${o.name}(${o.params.map(pp => `${pp.dir !== "in" ? pp.dir + " " : ""}${pp.type} ${pp.name}`).join(", ")})`, (o.algo || []).map((x, i) => `${i + 1}. ${String(x).replace(/^\s*\d+[.)]\s*/, "")}`).join("\n") || o.desc || "-", [o.pre && `pre: ${o.pre}`, o.post && `post: ${o.post}`].filter(Boolean).join("\n") || "-", (o.reqs || []).join(", ") || "-"]))], -1);
       body += docxP("포트·인터페이스", { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["포트", "방향", "종류", "인터페이스", "데이터 요소 (이름: 형 [단위/범위])", "출처"], ...d.ports.map(pp => [pp.name, pp.dir === "R" ? "Required(수신)" : "Provided(송신)", pp.kind, pp.interface, pp.elements.map(e => `${e.name}: ${e.type}${e.unit || e.range ? ` [${[e.unit, e.range].filter(Boolean).join(" / ")}]` : ""}`).join("\n"), pp.source || "-"])], -1);
       body += docxP("Runnable(스케줄링)", { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["Runnable", "트리거", "읽기(포트)", "쓰기(포트)", "호출 연산", "근거 요구"], ...d.runnables.map(r => [r.name, r.trigger === "periodic" ? `주기 ${r.periodMs}ms` : r.trigger === "init" ? "초기화" : `이벤트 ${r.event || ""}`, r.reads.join(", ") || "-", r.writes.join(", ") || "-", r.calls.join(", ") || "-", (r.reqs || []).join(", ") || "-"])], -1);
       if (d.states.states.length) body += docxP(`상태 머신 (초기 상태 ${d.states.initial})`, { bold: true, size: 20, spacingAfter: 60 }) + docxTable([["상태", "entry / do / exit", "설명"], ...d.states.states.map(x => [x.name, [x.entry && `entry: ${x.entry}`, x.do && `do: ${x.do}`, x.exit && `exit: ${x.exit}`].filter(Boolean).join("\n") || "-", x.desc || ""])], -1) + docxTable([["From", "To", "트리거", "Guard", "Effect", "근거 요구"], ...d.states.transitions.map(t => [t.from, t.to, t.trigger || "-", t.guard || "-", t.effect || "-", (t.reqs || []).join(", ") || "-"])], -1);
@@ -7971,11 +7971,11 @@ async function previewOfficeBytes(bytes, ext) {
     const runText = p => [...p.matchAll(/<w:r\b[\s\S]*?<\/w:r>/g)].map(r => { const t = [...r[0].matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map(x => PV_UNESC(x[1])).join("") + (/<w:br\b/.test(r[0]) ? "\n" : ""); const b = /<w:b\b(?![^>]*w:val="0")/.test(r[0]); return b ? `<b>${PV_ESC(t)}</b>` : PV_ESC(t); }).join("").replace(/\n/g, "<br/>");
     const para = p => { const sz = Number(/<w:sz w:val="(\d+)"/.exec(p)?.[1] || 22); const jc = /<w:jc w:val="(center|right)"/.exec(p)?.[1]; const txt = runText(p); if (!txt.trim() && !/<w:drawing/.test(p)) return `<div style="height:6px"></div>`; const h = sz >= 32 ? "h1" : sz >= 26 ? "h2" : sz >= 24 ? "h3" : null; return h ? `<${h} style="margin:14px 0 6px;font-size:${sz / 2 + 2}px">${txt}</${h}>` : `<p style="margin:0 0 6px;font-size:${Math.max(11, sz / 2)}px;${jc ? `text-align:${jc};` : ""}line-height:1.6">${txt}</p>`; };
     const cell = c => { const ps = [...c.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)].map(m => runText(m[0])).filter(Boolean).join("<br/>"); const shade = /<w:shd\b[^>]*w:fill="([0-9A-Fa-f]{6})"/.exec(c)?.[1]; const span = /<w:gridSpan w:val="(\d+)"/.exec(c)?.[1]; return `<td${span ? ` colspan="${span}"` : ""} style="border:1px solid #bbb;padding:4px 6px;vertical-align:top;font-size:11.5px;${shade && shade !== "FFFFFF" && shade !== "auto" ? `background:#${shade};` : ""}">${ps || "&nbsp;"}</td>`; };
-    const table = t => `<table style="border-collapse:collapse;margin:6px 0 12px;width:100%">${[...t.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)].map(tr => `<tr>${[...tr[0].matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)].map(tc => cell(tc[0])).join("")}</tr>`).join("")}</table>`;
+    const table = t => `<table style="border-collapse:collapse;margin:6px 0 12px;width:100%;table-layout:fixed">${[...t.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)].map(tr => `<tr>${[...tr[0].matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)].map(tc => cell(tc[0])).join("")}</tr>`).join("")}</table>`;
     // 본문을 최상위 요소 순서대로(문단·표) 순회
     const out = []; const re = /<w:tbl\b[\s\S]*?<\/w:tbl>|<w:p\b[\s\S]*?<\/w:p>/g; let m, n = 0;
     while ((m = re.exec(body)) && n < 4000) { out.push(m[0].startsWith("<w:tbl") ? table(m[0]) : para(m[0])); n++; }
-    return { kind: "html", html: `<div style="font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#222;background:#fff;padding:22px 28px;max-width:900px">${out.join("")}</div>` };
+    return { kind: "html", html: `<div style="font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#222;background:#fff;padding:22px 28px;word-break:break-word;overflow-wrap:anywhere">${out.join("")}</div>` };
   }
   // xlsx: 시트별 표
   const unesc = PV_UNESC;
@@ -8996,7 +8996,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [artSel, setArtSel] = useState(null);   // 산출물 보기: 선택 항목 { type: doc|svg|code|text|table, ... }
   const [artQ, setArtQ] = useState("");         // 산출물 보기 필터
   const zipAllBusy = useRef(false);
-  const [artPrev, setArtPrev] = useState(null);   // 문서 미리보기 { key, kind: html|sheets|loading|error, html, sheets, tab, bytes, ext }   // mode: diagram | code   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
+  const [artPrev, setArtPrev] = useState(null);
+  const [artCat, setArtCat] = useState("doc");          // 산출물 보기 카테고리: doc | sw | hw | common
+  const [artOpen, setArtOpen] = useState(() => new Set());   // 펼친 유닛·블록 그룹   // 문서 미리보기 { key, kind: html|sheets|loading|error, html, sheets, tab, bytes, ext }   // mode: diagram | code   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
   // 커버리지 "빠짐 N건" → 해당 탭으로 이동해 미연결 항목만 표시 ({ tab, level?, ids:Set, q })
   const [focus, setFocus] = useState(null);
   const focusOn = tab === focus?.tab ? focus : null;
@@ -10690,33 +10692,38 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             const S = AE.ddSettings(model), HS = AE.hdSettings(model);
             const dl = (name, data, mime) => { const blob = new Blob([data], { type: mime || "application/octet-stream" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
             const sanitize = x => String(x || "").replace(/[\\/:*?"<>|]/g, "_");
-            const groups = [];
+            const groups = [];   // { cat, name, items }
             // 1) 문서
             const docItems = ASPICE_PKG_ORDER.filter(k => k === "SYS_RS" ? items.length > 0 : aspiceCanBuild(k, artCtx)).map(k => { const D = AE.ASPICE_DOCS[k]; const isX = /^(V_|R_)|RTM|STK_LIST|HW_BOM|HW_SC|HW_AN/.test(k); return { type: "doc", key: `doc:${k}`, kind: k, label: `${D.code} ${D.title}`, sub: `${D.proc} · ${isX ? "xlsx" : "docx"} · ${AE.wpLabel(k, V)}` }; });
-            groups.push({ name: `문서 (${docItems.length})`, items: docItems });
+            groups.push({ cat: "doc", name: `문서 (${docItems.length})`, items: docItems });
             // 2) SW 유닛
             const swUnits = model.units.SW.filter(u => u.dd?.classes?.length);
             if (swUnits.length) {
-              groups.push({ name: `SWE.3 모델 공통`, items: [{ type: "text", key: "xmi", label: "UML XMI 2.1 (EA 가져오기)", sub: `유닛 ${swUnits.length}개 · xml`, get: () => AE.buildXmi(model, metaF, { seed: metaF.id || metaF.name || "project" }), file: `${sanitize(metaF.name) || "project"}_SWE3_UML2.1.xml`, mime: "application/xml" },
+              groups.push({ cat: "common", name: `SWE.3 모델 공통`, items: [{ type: "text", key: "xmi", label: "UML XMI 2.1 (EA 가져오기)", sub: `유닛 ${swUnits.length}개 · xml`, get: () => AE.buildXmi(model, metaF, { seed: metaF.id || metaF.name || "project" }), file: `${sanitize(metaF.name) || "project"}_SWE3_UML2.1.xml`, mime: "application/xml" },
                 { type: "table", key: "misra", label: `MISRA 적용 체크리스트 (${S.target})`, sub: `${S.target === "CP" ? S.misraC : S.misraCpp} · xlsx`, rows: () => AE.misraChecklistRows(S), file: "MISRA_적용_체크리스트.xlsx", xlsx: () => makeXlsx({ sheetName: "MISRA", rows: AE.misraChecklistRows(S) }) }] });
-              swUnits.forEach(u => groups.push({ name: `${u.id} ${u.name}`, items: [
-                ...AE.DD_DIAGRAMS.map(([k, lab]) => ({ type: "svg", key: `dd:${u.id}:${k}`, label: `${lab} 다이어그램`, sub: "svg", get: () => AE.ddSvg(k, u, model), file: `${u.id}_${k}.svg` })),
-                ...((u.dd.code?.files || []).map((f, i) => ({ type: "code", key: `code:${u.id}:${i}`, label: f.name, sub: `${AE.DD_TARGETS[u.dd.code.target]?.lang} · ${u.dd.code.origin === "ai" ? "본문 AI" : "본문 규칙"}`, get: () => f.text, file: f.name }))),
-              ] }));
+              swUnits.forEach(u => { const code = u.dd.code && u.dd.code.target === S.target ? u.dd.code : (() => { try { return { ...AE.generateCode(u, model, metaF, S, null), provisional: true }; } catch (_) { return null; } })();
+                groups.push({ cat: "sw", name: `${u.id} ${u.name}`, items: [
+                  ...AE.DD_DIAGRAMS.map(([k, lab]) => ({ type: "svg", key: `dd:${u.id}:${k}`, label: `${lab} 다이어그램`, sub: "svg", get: () => AE.ddSvg(k, u, model), file: `${u.id}_${k}.svg` })),
+                  ...((code?.files || []).map((f, i) => ({ type: "code", key: `code:${u.id}:${i}`, label: f.name, sub: `${AE.DD_TARGETS[code.target]?.lang} · ${code.provisional ? "코드 생성 전 — 규칙 뼈대(연산 본문은 설계 단계 주석)" : code.origin === "ai" ? "본문 AI" : "본문 규칙"}`, get: () => f.text, file: f.name }))),
+                ] }); });
             }
             // 3) HW 블록
             const hwComps = model.comps.HW.filter(c => c.hd?.parts?.length);
             if (hwComps.length) {
-              groups.push({ name: "HWE.2 모델 공통", items: [{ type: "svg", key: "hw:block", label: "HW 아키텍처 블록도 (04-52)", sub: "svg", get: () => AE.hdSvg("block", null, model), file: "HW_architecture_block.svg" },
+              groups.push({ cat: "common", name: "HWE.2 모델 공통", items: [{ type: "svg", key: "hw:block", label: "HW 아키텍처 블록도 (04-52)", sub: "svg", get: () => AE.hdSvg("block", null, model), file: "HW_architecture_block.svg" },
                 { type: "table", key: "hw:bom", label: "BOM 미리보기 (14-54)", sub: "부품 PN 후보", rows: () => [["블록", "RefDes", "종류", "값", "패키지", "제조사", "PN(후보)", "정격", "근거 요구"], ...hwComps.flatMap(c => c.hd.parts.map(p => [c.name, p.ref, p.kind, p.value, p.pkg, p.mfr, p.mpn, p.rating, (p.reqs || []).join(", ")]))] },
                 { type: "table", key: "hw:sc", label: "특별 특성 미리보기 (17-57)", sub: "", rows: () => [["블록", "ID", "특성", "분류", "대상", "값", "관리", "검증", "근거"], ...hwComps.flatMap(c => c.hd.specials.map(x => [c.name, x.id, x.char, x.type, x.target, x.value, x.control, x.verify, (x.reqs || []).join(", ")]))] },
                 { type: "table", key: "hw:an", label: "설계 분석 미리보기 (15-51)", sub: "Derating·열·최악조건", rows: () => [["블록", "분석", "항목", "정격/공칭", "적용/최소~최대", "기준/한계", "판정", "비고"], ...hwComps.flatMap(c => [...c.hd.analysis.derating.map(x => [c.name, "Derating", `${x.ref} ${x.param}`, x.rated, x.applied, `${x.ratio} / ${x.limit}`, x.ok ? "OK" : "NG", x.note]), ...c.hd.analysis.thermal.map(x => [c.name, "열", x.ref, `Pd ${x.pd_mW}mW`, `Ta ${x.ta} → Tj ${x.tj}`, x.limit, x.ok ? "OK" : "NG", x.note]), ...c.hd.analysis.worstCase.map(x => [c.name, "최악조건", x.item, x.nominal, `${x.min} ~ ${x.max}`, x.limit, x.ok ? "OK" : "NG", `${x.method} ${x.note}`])])] }] });
-              hwComps.forEach(c => groups.push({ name: `${c.id} ${c.name}`, items: [{ type: "svg", key: `hd:${c.id}`, label: "회로도 (04-54)", sub: `부품 ${c.hd.parts.length} · 넷 ${c.hd.nets.length} · svg`, get: () => AE.hdSvg("schematic", c, model), file: `${c.id}_schematic.svg` },
+              hwComps.forEach(c => groups.push({ cat: "hw", name: `${c.id} ${c.name}`, items: [{ type: "svg", key: `hd:${c.id}`, label: "회로도 (04-54)", sub: `부품 ${c.hd.parts.length} · 넷 ${c.hd.nets.length} · svg`, get: () => AE.hdSvg("schematic", c, model), file: `${c.id}_schematic.svg` },
                 { type: "table", key: `hdp:${c.id}`, label: "부품·넷 표", sub: "", rows: () => [["RefDes", "종류", "값", "패키지", "제조사 / PN(후보)", "정격", "용도", "핀→넷"], ...c.hd.parts.map(p => [p.ref, p.kind, p.value, p.pkg, `${p.mfr} / ${p.mpn}`, p.rating, p.desc, c.hd.conns.filter(x => x.ref === p.ref).map(x => `${x.pin}:${x.net}`).join(" ")])] }] }));
             }
             const q = artQ.trim().toLowerCase();
-            const vis = groups.map(g => ({ ...g, items: g.items.filter(it => !q || `${g.name} ${it.label} ${it.sub || ""}`.toLowerCase().includes(q)) })).filter(g => g.items.length);
+            const catOf = { doc: "문서", sw: `SW 유닛 (${swUnits.length})`, hw: `HW 블록 (${hwComps.length})`, common: "모델 공통" };
+            const vis = groups.filter(g => q ? true : g.cat === artCat).map(g => ({ ...g, items: g.items.filter(it => !q || `${g.name} ${it.label} ${it.sub || ""}`.toLowerCase().includes(q)) })).filter(g => g.items.length);
             const total = groups.reduce((n, g) => n + g.items.length, 0);
+            const collapsible = g => g.cat === "sw" || g.cat === "hw";
+            const isOpen = g => !collapsible(g) || !!q || artOpen.has(g.name);
+            const toggle = name => setArtOpen(prev => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
             const sel = artSel && groups.flatMap(g => g.items).find(it => it.key === artSel) || null;
             const loadPrev = async (it) => { if (!it || it.type !== "doc" || (artPrev && artPrev.key === it.key && artPrev.kind !== "error")) return; setArtPrev({ key: it.key, kind: "loading" }); try { const of = await buildVmodelDoc(it.kind, metaF, artCtx); if (!of) { setArtPrev({ key: it.key, kind: "error", msg: "생성할 내용이 없습니다." }); return; } const pv = await previewOfficeBytes(of.bytes, of.ext); setArtPrev({ key: it.key, ...pv, tab: 0, bytes: of.bytes, ext: of.ext }); } catch (e) { setArtPrev({ key: it.key, kind: "error", msg: e.message }); } };
             if (sel && sel.type === "doc" && (!artPrev || artPrev.key !== sel.key)) setTimeout(() => loadPrev(sel), 0);
@@ -10729,16 +10736,19 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     <input value={artQ} onChange={e => setArtQ(e.target.value)} placeholder={`검색 (${total}개 산출물)`} style={{ ...inp, flex: 1 }} />
                     <button onClick={dlAll} title="문서·다이어그램·코드·회로도를 모두 담은 ZIP (V-모델 산출물 ZIP)" style={small}>⬇ 전체</button>
                   </div>
+                  {!q && <div style={{ display: "flex", gap: 3, padding: "6px 8px", borderBottom: `1px solid ${T.border}`, flexWrap: "wrap" }}>{Object.entries(catOf).map(([k, lab]) => <button key={k} onClick={() => setArtCat(k)} style={{ ...small, padding: "3px 9px", color: artCat === k ? "#fff" : T.muted, background: artCat === k ? T.accent : "transparent", borderColor: artCat === k ? T.accent : T.border }}>{lab}</button>)}</div>}
                   <div style={{ overflowY: "auto", flex: 1, padding: 6 }}>
                     {vis.map(g => (
-                      <div key={g.name} style={{ marginBottom: 6 }}>
-                        <div style={{ fontSize: 10.5, fontWeight: 700, color: T.muted, padding: "4px 6px" }}>{g.name}</div>
-                        {g.items.map(it => <button key={it.key} onClick={() => setArtSel(it.key)} style={{ display: "block", width: "100%", textAlign: "left", background: artSel === it.key ? T.accent + "22" : "none", border: `1px solid ${artSel === it.key ? T.accent : "transparent"}`, borderRadius: 6, padding: "4px 8px", cursor: "pointer", color: T.text, fontFamily: "inherit" }}>
+                      <div key={g.name} style={{ marginBottom: 4 }}>
+                        {collapsible(g) && !q
+                          ? <button onClick={() => toggle(g.name)} style={{ display: "flex", width: "100%", alignItems: "center", gap: 6, background: isOpen(g) ? T.accent + "14" : "none", border: `1px solid ${isOpen(g) ? T.accent + "66" : T.border}`, borderRadius: 6, padding: "5px 8px", cursor: "pointer", color: T.text, fontFamily: "inherit", textAlign: "left" }}><span style={{ color: T.muted, fontSize: 10 }}>{isOpen(g) ? "▾" : "▸"}</span><span style={{ fontSize: 11.5, fontWeight: 600, flex: 1 }}>{g.name}</span><span style={{ fontSize: 9.5, color: T.muted }}>{g.items.length}</span></button>
+                          : <div style={{ fontSize: 10.5, fontWeight: 700, color: T.muted, padding: "4px 6px" }}>{g.name}</div>}
+                        {isOpen(g) && g.items.map(it => <button key={it.key} onClick={() => setArtSel(it.key)} style={{ display: "block", width: collapsible(g) ? "calc(100% - 10px)" : "100%", textAlign: "left", background: artSel === it.key ? T.accent + "22" : "none", border: `1px solid ${artSel === it.key ? T.accent : "transparent"}`, borderRadius: 6, padding: "3px 8px", marginLeft: collapsible(g) ? 10 : 0, cursor: "pointer", color: T.text, fontFamily: "inherit" }}>
                           <div style={{ fontSize: 11.5 }}>{it.type === "doc" ? "📄" : it.type === "svg" ? "🖼" : it.type === "code" ? "💻" : it.type === "table" ? "📊" : "📑"} {it.label}</div>
                           {it.sub ? <div style={{ fontSize: 9.5, color: T.muted }}>{it.sub}</div> : null}
                         </button>)}
                       </div>))}
-                    {!vis.length && <div style={{ fontSize: 11, color: T.muted, padding: 10 }}>{total ? "검색 결과 없음" : "아직 생성된 산출물이 없습니다. SYS.2 확정 → SYS.3 → SWE.3 상세설계·코드 / HWE.2 회로 설계를 진행하세요."}</div>}
+                    {!vis.length && <div style={{ fontSize: 11, color: T.muted, padding: 10 }}>{total ? (q ? "검색 결과 없음" : "이 분류에 산출물이 없습니다.") : "아직 생성된 산출물이 없습니다. SYS.2 확정 → SYS.3 → SWE.3 상세설계·코드 / HWE.2 회로 설계를 진행하세요."}</div>}
                   </div>
                 </div>
                 <div style={{ border: `1px solid ${T.border}`, borderRadius: 9, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: 640 }}>
