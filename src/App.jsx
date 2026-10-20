@@ -8845,6 +8845,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [dbc, setDbc] = useState(null);        // { fileName, parsed, own }
   const [tplGroup, setTplGroup] = useState("SYS_RS");
   const [vFilter, setVFilter] = useState("SYS5");
+  const [ddView, setDdView] = useState({ unit: null, kind: "component" });   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
   // 커버리지 "빠짐 N건" → 해당 탭으로 이동해 미연결 항목만 표시 ({ tab, level?, ids:Set, q })
   const [focus, setFocus] = useState(null);
   const focusOn = tab === focus?.tab ? focus : null;
@@ -9131,6 +9132,42 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
 
   // ── SWE.1 / HWE.1: 하위 요구 파생 ──
   // only: 시스템 요구 ID 목록 — 주어지면 '빠진 것만 파생': 기존 하위 요구·할당은 그대로 두고 그 시스템 요구에서만 새로 파생
+  // ── SWE.3 상세설계(DD): 유닛별 정적 구조(A) → 동적 동작(B) 2회 AI 호출, 실패·AI 미사용 시 규칙 생성. 모든 요소에 요구 ID 추적 ──
+  function genDD(unitIds = null) {
+    const targets = (model.units.SW || []).filter(u => !unitIds || unitIds.includes(u.id));
+    return run(unitIds ? `SWE.3 상세설계 생성 (${targets.length}개 유닛)` : "SWE.3 상세설계 생성 (전체 유닛)", async () => {
+      if (!targets.length) throw new Error("설계할 유닛이 없습니다. 먼저 [규칙 골격 생성]으로 유닛을 만드세요.");
+      const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
+      const seed = form?.id || form?.name || "project";
+      const settings = AE.ddSettings(n);
+      let done = 0, aiOk = 0, ruleN = 0;
+      for (const u of targets) {
+        const idx = n.units.SW.findIndex(x => x.id === u.id); if (idx < 0) continue;
+        const base = 5 + (done / targets.length) * 90, step = 90 / targets.length;
+        setProg({ percent: base, label: `${n.useAI ? "AI: " : "규칙: "}${u.id} ${u.name} — 정적 구조 설계 중… (${done + 1}/${targets.length})` });
+        let dd = null;
+        if (n.useAI) {
+          try {
+            const a = await callClaudeJson(AE.promptDDStructure({ unit: u, model: n, version: V, settings }), 5000);
+            const st = AE.normalizeDD(a, u, n, seed);
+            setProg({ percent: base + step * 0.5, label: `AI: ${u.id} ${u.name} — 상태 머신·시퀀스·액티비티 설계 중… (${done + 1}/${targets.length})` });
+            let b = {};
+            try { b = await callClaudeJson(AE.promptDDBehavior({ unit: u, model: n, version: V, settings, structure: st }), 5000); } catch (_) { b = {}; }
+            dd = AE.normalizeDD({ ...(a || {}), ...(b || {}) }, u, n, seed); aiOk++;
+          } catch (_) { dd = null; }
+        }
+        if (!dd) { dd = AE.ruleDD(u, n, seed); ruleN++; }
+        const cur = n.units.SW[idx];
+        n.units.SW[idx] = { ...cur, dd, designDone: true,
+          desc: /TBD/.test(cur.desc || "") || !cur.desc ? dd.summary : cur.desc,
+          funcs: (cur.funcs || []).length ? cur.funcs : dd.classes.flatMap(c => c.ops.map(o => ({ ret: o.ret, name: o.name, params: o.params.map(pp => `${pp.type} ${pp.name}`).join(", ") }))) };
+        done++;
+      }
+      setModel(n);
+      if (targets.length === 1) setDdView({ unit: targets[0].id, kind: "component" });
+      return `유닛 ${done}개 상세설계 완료 (AI ${aiOk} · 규칙 ${ruleN}) — 각 유닛의 [다이어그램]에서 7종을 확인하세요. 설계 요소마다 근거 SW 요구 ID가 기록되며, QA 교차검토 대상에 포함됩니다.`;
+    });
+  }
   function derive(level, only = null) {
     return run(only ? `${level} 요구 파생 (빠진 ${only.length}건만)` : `${level} 요구사항 파생`, async () => {
       const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
@@ -9872,6 +9909,49 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </AeSec>
               </FileDrop>
             )}
+            {lv === "SW" && (!sub || sub === "unit") && (() => {
+              const S = AE.ddSettings(model); const TG = AE.DD_TARGETS[S.target] || AE.DD_TARGETS.CP;
+              const missing = AE.ddMissingUnits(model); const have = model.units.SW.filter(u => u.dd?.classes?.length);
+              const vu = ddView.unit ? model.units.SW.find(u => u.id === ddView.unit) : null;
+              const dlSvg = (u, k) => { const svg = AE.ddSvg(k, u, model); const blob = new Blob([svg], { type: "image/svg+xml" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${u.id}_${k}.svg`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
+              return (
+              <AeSec title={`SWE.3 상세설계 — 다이어그램 7종 · 코드 생성 기준 (설계 ${have.length}/${model.units.SW.length} 유닛)`}
+                right={<div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {missing.length > 0 && have.length > 0 && <Btn onClick={() => genDD(missing.map(u => u.id))} disabled={busy} title="설계가 없는 유닛만 생성 — 기존 설계는 그대로" style={{ fontSize: 11, padding: "4px 10px" }}>{model.useAI ? "🤖" : "⚙"} 빠진 {missing.length}개만 설계</Btn>}
+                  <Btn variant={have.length ? "outline" : undefined} onClick={() => { if (have.length && !window.confirm(`유닛 ${model.units.SW.length}개의 상세설계를 모두 다시 만듭니다. 기존 다이어그램·설계 내용은 교체됩니다.`)) return; genDD(); }} disabled={busy || !model.units.SW.length} style={{ fontSize: 11, padding: "4px 10px" }}>{model.useAI ? "🤖 AI 상세설계 생성 (전체)" : "⚙ 규칙 상세설계 생성 (전체)"}</Btn>
+                </div>}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 11, marginBottom: 8 }}>
+                  <span style={{ color: T.muted }}>대상 플랫폼</span>
+                  {Object.entries(AE.DD_TARGETS).map(([k, t]) => <button key={k} onClick={() => set(n => { n.swDesign = { ...AE.ddSettings(n), target: k }; })} style={{ ...small, padding: "4px 10px", color: S.target === k ? "#fff" : T.muted, background: S.target === k ? T.accent : "transparent", borderColor: S.target === k ? T.accent : T.border }}>{t.label}</button>)}
+                  <span style={{ color: T.muted }}>AUTOSAR {S.release} · {S.target === "CP" ? S.misraC : `${S.misraCpp} · ${S.cppGuide}`} · 정적분석 {S.tools.join("·")}</span>
+                </div>
+                <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>유닛마다 AI가 정적 구조(클래스·포트·Runnable·자료형·알고리즘)와 동적 동작(상태 머신·시퀀스·액티비티)을 근거 자료(할당 SW 요구·상위 시스템 요구·컴포넌트 인터페이스·운영 모드)로 설계하고, 모든 요소에 근거 요구 ID를 남깁니다. 다이어그램은 UML 2.5·SysML 표준 표기이며 XMI 2.1(EA 가져오기)·MISRA 준거 코드 생성은 이 설계를 입력으로 합니다.</div>
+                {!model.units.SW.length && <div style={{ fontSize: 11, color: T.amber }}>유닛이 없습니다 — 위 [규칙 골격 생성] 또는 [.h 헤더 가져오기]로 유닛을 먼저 만드세요.</div>}
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {model.units.SW.map(u => { const d = u.dd; const on = ddView.unit === u.id; return (
+                    <div key={u.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr auto auto auto", gap: 8, alignItems: "center", fontSize: 11, padding: "5px 8px", border: `1px solid ${on ? T.accent : T.border}`, borderRadius: 7, background: on ? T.accent + "12" : T.bg }}>
+                      <span style={{ fontFamily: "monospace", color: T.accent }}>{u.id}</span>
+                      <span><b>{u.name}</b>{d ? <span style={{ color: T.muted }}> — 클래스 {d.classes.length} · 포트 {d.ports.length} · Runnable {d.runnables.length} · 상태 {d.states.states.length}/전이 {d.states.transitions.length} · 시퀀스 {d.sequences.length} · 액티비티 {d.activities.length}</span> : <span style={{ color: T.amber }}> — 설계 없음</span>}</span>
+                      <span style={{ fontSize: 9.5, color: d ? (d.origin === "ai" ? T.green : T.muted) : T.muted }}>{d ? (d.origin === "ai" ? "AI 설계" : "규칙 설계") : ""}</span>
+                      {d ? <button onClick={() => setDdView(v => ({ unit: on ? null : u.id, kind: v.kind }))} style={{ ...small, padding: "2px 8px" }}>{on ? "접기" : "다이어그램"}</button> : <span />}
+                      <button onClick={() => genDD([u.id])} disabled={busy} style={{ ...small, padding: "2px 8px" }}>{d ? "재설계" : (model.useAI ? "🤖 설계" : "⚙ 설계")}</button>
+                    </div>); })}
+                </div>
+                {vu && vu.dd && (
+                  <div style={{ marginTop: 10, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
+                    <div style={{ display: "flex", gap: 3, alignItems: "center", padding: "6px 8px", flexWrap: "wrap", background: T.bg }}>
+                      {AE.DD_DIAGRAMS.map(([k, lab]) => <button key={k} onClick={() => setDdView(v => ({ ...v, kind: k }))} style={{ ...small, padding: "3px 9px", color: ddView.kind === k ? "#fff" : T.muted, background: ddView.kind === k ? T.accent : "transparent", borderColor: ddView.kind === k ? T.accent : T.border }}>{lab}</button>)}
+                      <div style={{ flex: 1 }} />
+                      <button onClick={() => dlSvg(vu, ddView.kind)} style={small}>⬇ SVG</button>
+                      <button onClick={() => AE.DD_DIAGRAMS.forEach(([k]) => dlSvg(vu, k))} style={small}>⬇ 7종 모두</button>
+                    </div>
+                    <div style={{ background: "#fff", overflow: "auto", maxHeight: 520, padding: 6 }} dangerouslySetInnerHTML={{ __html: AE.ddSvg(ddView.kind, vu, model) }} />
+                    <div style={{ padding: "6px 10px", fontSize: 10.5, color: T.muted, borderTop: `1px solid ${T.border}` }}>
+                      {vu.dd.summary}
+                      {(() => { const rs = new Set([...vu.dd.classes.flatMap(c => [...(c.reqs || []), ...c.ops.flatMap(o => o.reqs || [])]), ...vu.dd.states.transitions.flatMap(t => t.reqs || []), ...vu.dd.sequences.flatMap(x => x.reqs || []), ...vu.dd.activities.flatMap(x => x.reqs || [])]); return rs.size ? ` · 근거 요구: ${[...rs].join(", ")}` : " · 근거 요구 ID 없음(요구 할당을 확인하세요)"; })()}
+                    </div>
+                  </div>)}
+              </AeSec>); })()}
             {(!sub || sub === "arch") && <AeSec title="설계 근거"><textarea value={model.rationale[lv]} onChange={e => set(n => { n.rationale[lv] = e.target.value; })} style={{ ...ta, minHeight: 50 }} /></AeSec>}
           </>); })()}
 

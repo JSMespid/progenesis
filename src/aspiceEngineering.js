@@ -2042,3 +2042,375 @@ export function aeProgress(model, opts = {}) {
   const done = steps.filter(s => s.state === "done").length;
   return { steps, next, pct: Math.round(done / steps.length * 100) };
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 12) SWE.3 상세설계(DD) — 유닛별 정적 구조·동적 동작을 AI가 전부 작성하되, 모든 요소에 요구 ID 추적을 남긴다
+//    unit.dd = { guid, summary, dataTypes[], classes[], ports[], runnables[], assoc[], states{}, sequences[], activities[], origin, generatedAt }
+//    model.swDesign = 대상 플랫폼·릴리스·MISRA 판본·정적분석 도구 (코드 생성·체크리스트 기준)
+//    GUID: 요소마다 프로젝트·유닛·요소 이름으로 결정되는 영구 GUID — EA(XMI) 왕복 시 같은 요소로 매칭하기 위함
+// ═══════════════════════════════════════════════════════════════════════════
+export const DD_DEFAULT = {
+  target: "CP",                       // CP: AUTOSAR Classic(C) / AP: AUTOSAR Adaptive(C++17)
+  release: "R25-11",
+  misraC: "MISRA C:2023", misraCpp: "MISRA C++:2023", cppGuide: "AUTOSAR C++14",
+  tools: ["Helix QAC", "Polyspace"],
+  stack: "표준 RTE API (Vector MICROSAR/DaVinci 등 벤더 중립)",
+};
+export const DD_TARGETS = {
+  CP: { label: "AUTOSAR Classic Platform — C", lang: "C", std: "C99 (MISRA C:2023)", api: "Rte_Read/Rte_Write/Rte_Call · Runnable", unitKind: "SWC(Software Component)" },
+  AP: { label: "AUTOSAR Adaptive Platform — C++", lang: "C++17", std: "C++17 (MISRA C++:2023 · AUTOSAR C++14)", api: "ara::com Proxy/Skeleton · ara::core", unitKind: "Adaptive Application" },
+};
+export const ddSettings = m => ({ ...DD_DEFAULT, ...((m && m.swDesign) || {}) });
+
+// 결정적 GUID (FNV-1a 64비트 두 번 → 32 hex) — 같은 seed면 항상 같은 값. EA 형식 {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}
+function fnv64(str, seed) {
+  let h = BigInt(seed) ^ 0xcbf29ce484222325n;
+  for (let i = 0; i < str.length; i++) { h ^= BigInt(str.charCodeAt(i)); h = (h * 0x100000001b3n) & 0xffffffffffffffffn; }
+  return h.toString(16).padStart(16, "0");
+}
+export function guidFor(seed) {
+  const s = String(seed || "");
+  const hex = (fnv64(s, 1) + fnv64(s + "#2", 2)).toUpperCase();
+  return `{${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}}`;
+}
+export const xmiIdOf = guid => "EAID_" + String(guid || "").replace(/[{}]/g, "").replace(/-/g, "_");
+
+export function emptyDD() {
+  return { guid: "", summary: "", dataTypes: [], classes: [], ports: [], runnables: [], assoc: [], states: { initial: "", states: [], transitions: [] }, sequences: [], activities: [], origin: "", generatedAt: "" };
+}
+const cid = s => String(s || "").trim().replace(/[^A-Za-z0-9_]/g, "_").replace(/^(\d)/, "_$1").slice(0, 60) || "Unnamed";
+const arr = x => (Array.isArray(x) ? x : []);
+const str = (x, n = 400) => String(x == null ? "" : x).slice(0, n);
+const ids = x => arr(x).map(v => String(v || "").trim()).filter(Boolean);
+
+// AI 출력 → 정규화 (식별자 정리, 요구 ID는 이 유닛 범위의 SW 요구로만 제한, 빈 곳은 규칙 보강)
+export function normalizeDD(raw, unit, model, seedKey) {
+  const r = raw && typeof raw === "object" ? raw : {};
+  const m = normalizeModel(model);
+  const okReq = new Set([...(m.reqs.SW || []).map(x => x.id), ...(m.reqs.SYS || []).map(x => x.id)]);
+  const rq = x => ids(x).filter(i => okReq.has(i));
+  const unitReqs = ids(unit?.reqs);
+  const g = name => guidFor(`${seedKey}|${unit?.id}|${name}`);
+  const dd = emptyDD();
+  dd.guid = g("unit");
+  dd.summary = str(r.summary, 600);
+  dd.dataTypes = arr(r.dataTypes).slice(0, 30).map(t => ({ name: cid(t.name), base: str(t.base || "uint8", 40), desc: str(t.desc, 200), range: str(t.range, 80), reqs: rq(t.reqs) }));
+  dd.classes = arr(r.classes).slice(0, 12).map(c => ({
+    guid: g(`class:${cid(c.name)}`), name: cid(c.name), stereotype: str(c.stereotype || (c.name === unit?.name ? "SWC" : ""), 30), desc: str(c.desc, 300), reqs: rq(c.reqs).length ? rq(c.reqs) : unitReqs,
+    attrs: arr(c.attrs).slice(0, 30).map(a => ({ name: cid(a.name), type: str(a.type || "uint8", 40), init: str(a.init, 40), desc: str(a.desc, 160), vis: /^[+#-]$/.test(a.vis) ? a.vis : "-" })),
+    ops: arr(c.ops).slice(0, 30).map(o => ({ name: cid(o.name), ret: str(o.ret || "void", 40), vis: /^[+#-]$/.test(o.vis) ? o.vis : "+",
+      params: arr(o.params).slice(0, 10).map(p => ({ name: cid(p.name), type: str(p.type || "uint8", 40), dir: ["in", "out", "inout"].includes(p.dir) ? p.dir : "in" })),
+      desc: str(o.desc, 300), pre: str(o.pre, 200), post: str(o.post, 200), algo: arr(o.algo).slice(0, 25).map(s => str(s, 220)), reqs: rq(o.reqs) })),
+  }));
+  dd.ports = arr(r.ports).slice(0, 30).map(p => ({ guid: g(`port:${cid(p.name)}`), name: cid(p.name), dir: /^R/i.test(p.dir) ? "R" : "P", interface: cid(p.interface || p.name + "_If"), kind: /client|server|cs/i.test(p.kind) ? "C/S" : "S/R",
+    elements: arr(p.elements).slice(0, 20).map(e => ({ name: cid(e.name), type: str(e.type || "uint8", 40), unit: str(e.unit, 20), range: str(e.range, 60) })), source: str(p.source, 80), reqs: rq(p.reqs) }));
+  dd.runnables = arr(r.runnables).slice(0, 20).map(x => ({ guid: g(`run:${cid(x.name)}`), name: cid(x.name), trigger: /event|evt/i.test(x.trigger) ? "event" : /init/i.test(x.trigger) ? "init" : "periodic",
+    periodMs: Number(x.periodMs) > 0 ? Number(x.periodMs) : (/event|init/i.test(x.trigger) ? 0 : 10), event: str(x.event, 60), reads: ids(x.reads), writes: ids(x.writes), calls: ids(x.calls), desc: str(x.desc, 300), wcetUs: Number(x.wcetUs) > 0 ? Number(x.wcetUs) : 0, reqs: rq(x.reqs) }));
+  dd.assoc = arr(r.assoc).slice(0, 40).map(a => ({ from: cid(a.from), to: cid(a.to), kind: ["comp", "agg", "dep", "gen", "assoc"].includes(a.kind) ? a.kind : "assoc", label: str(a.label, 60), mult: str(a.mult, 20) }));
+  const st = r.states && typeof r.states === "object" ? r.states : {};
+  dd.states = { initial: cid(st.initial || (arr(st.states)[0] || {}).name || ""),
+    states: arr(st.states).slice(0, 20).map(s => ({ guid: g(`state:${cid(s.name)}`), name: cid(s.name), entry: str(s.entry, 200), do: str(s.do, 200), exit: str(s.exit, 200), desc: str(s.desc, 200), reqs: rq(s.reqs) })),
+    transitions: arr(st.transitions).slice(0, 60).map(t => ({ from: cid(t.from), to: cid(t.to), trigger: str(t.trigger, 80), guard: str(t.guard, 120), effect: str(t.effect, 120), reqs: rq(t.reqs) })) };
+  dd.sequences = arr(r.sequences).slice(0, 10).map(s => ({ guid: g(`seq:${cid(s.name)}`), name: cid(s.name), desc: str(s.desc, 300), lifelines: ids(s.lifelines).map(cid),
+    steps: arr(s.steps).slice(0, 40).map(x => ({ from: cid(x.from), to: cid(x.to), msg: cid(x.msg), args: str(x.args, 120), ret: str(x.ret, 80), kind: /async|signal/i.test(x.kind) ? "async" : "sync", note: str(x.note, 120) })), reqs: rq(s.reqs) }));
+  dd.activities = arr(r.activities).slice(0, 12).map(a => {
+    const nodes = arr(a.nodes).slice(0, 40).map((n, i) => ({ id: cid(n.id || `n${i + 1}`), kind: ["start", "action", "decision", "merge", "end", "fork", "join"].includes(n.kind) ? n.kind : "action", text: str(n.text, 160) }));
+    const have = new Set(nodes.map(n => n.id));
+    return { guid: g(`act:${cid(a.name)}`), name: cid(a.name), op: cid(a.op || a.name), desc: str(a.desc, 200), nodes,
+      edges: arr(a.edges).slice(0, 60).map(e => ({ from: cid(e.from), to: cid(e.to), guard: str(e.guard, 80) })).filter(e => have.has(e.from) && have.has(e.to)), reqs: rq(a.reqs) };
+  });
+  // 참조 무결성: 시퀀스 라이프라인이 비어 있으면 단계에서 수집, 상태 전이의 미정의 상태는 제거
+  dd.sequences.forEach(s => { if (!s.lifelines.length) s.lifelines = [...new Set(s.steps.flatMap(x => [x.from, x.to]))]; });
+  const stNames = new Set(dd.states.states.map(s => s.name));
+  dd.states.transitions = dd.states.transitions.filter(t => stNames.has(t.from) && stNames.has(t.to));
+  if (dd.states.states.length && !stNames.has(dd.states.initial)) dd.states.initial = dd.states.states[0].name;
+  dd.origin = "ai"; dd.generatedAt = new Date().toISOString();
+  return fillDDGaps(dd, unit, model, seedKey);
+}
+
+// 규칙 보강/규칙 생성 — AI 미사용이거나 AI 출력이 비어 있는 부분을 근거(요구·인터페이스·모드)로 채운다
+export function fillDDGaps(dd0, unit, model, seedKey) {
+  const m = normalizeModel(model);
+  const dd = dd0 || emptyDD();
+  const g = name => guidFor(`${seedKey}|${unit?.id}|${name}`);
+  if (!dd.guid) dd.guid = g("unit");
+  const uName = cid(unit?.name || unit?.id || "Unit");
+  const reqs = (m.reqs.SW || []).filter(r => ids(unit?.reqs).includes(r.id));
+  const comp = (m.comps.SW || []).find(c => c.id === unit?.comp);
+  const ifs = (m.interfaces.SW || []).filter(i => comp && (i.from === comp.id || i.to === comp.id));
+  if (!dd.classes.length) {
+    dd.classes.push({ guid: g(`class:${uName}`), name: uName, stereotype: "SWC", desc: unit?.desc || "", reqs: ids(unit?.reqs),
+      attrs: [{ name: "state", type: `${uName}_StateType`, init: "INIT", desc: "유닛 운영 상태", vis: "-" }],
+      ops: [{ name: `${uName}_Init`, ret: "void", vis: "+", params: [], desc: "초기화 — 내부 상태·버퍼 초기화", pre: "", post: "state == INIT", algo: ["내부 변수 초기화", "state := INIT"], reqs: [] },
+        ...reqs.filter(r => r.type !== "비기능").slice(0, 12).map(r => ({ name: `${uName}_${cid(r.title || r.id).slice(0, 28)}`, ret: "Std_ReturnType", vis: "+", params: [], desc: `${r.title} 처리 (${r.id})`, pre: "", post: "", algo: [`입력 유효성 검사`, `${r.title} 수행`, `결과 반환`], reqs: [r.id] })),
+        { name: `${uName}_MainFunction`, ret: "void", vis: "+", params: [], desc: "주기 처리 — 입력 읽기 → 상태 천이 → 출력 쓰기", pre: "", post: "", algo: ["RTE에서 입력 읽기", "상태 머신 수행", "RTE로 출력 쓰기"], reqs: ids(unit?.reqs) }],
+    });
+  }
+  if (!dd.dataTypes.length) dd.dataTypes.push({ name: `${uName}_StateType`, base: "enum", desc: "유닛 상태 열거형", range: "INIT, RUN, DEGRADED, ERROR", reqs: [] });
+  if (!dd.ports.length) {
+    ifs.forEach(i => {
+      const isIn = i.to === comp.id;
+      const els = String(i.signals || "").split(/[,;·/]/).map(s => s.trim()).filter(Boolean).slice(0, 12).map(s => ({ name: cid(s), type: "uint16", unit: "", range: "" }));
+      dd.ports.push({ guid: g(`port:${i.id}`), name: cid(`${isIn ? "R" : "P"}p_${i.id}`), dir: isIn ? "R" : "P", interface: cid(`${i.id}_If`), kind: "S/R", elements: els.length ? els : [{ name: cid(i.kind || "data"), type: "uint16", unit: "", range: "" }], source: i.id, reqs: [] });
+    });
+    if (!dd.ports.length) dd.ports.push({ guid: g("port:Rp_Input"), name: "Rp_Input", dir: "R", interface: `${uName}_InIf`, kind: "S/R", elements: [{ name: "inValue", type: "uint16", unit: "", range: "" }], source: "", reqs: [] },
+      { guid: g("port:Pp_Output"), name: "Pp_Output", dir: "P", interface: `${uName}_OutIf`, kind: "S/R", elements: [{ name: "outValue", type: "uint16", unit: "", range: "" }], source: "", reqs: [] });
+  }
+  if (!dd.runnables.length) {
+    const per = ifs.map(i => Number(i.periodMs)).find(n => n > 0) || 10;
+    dd.runnables.push({ guid: g("run:Init"), name: `${uName}_Init`, trigger: "init", periodMs: 0, event: "", reads: [], writes: [], calls: [`${uName}_Init`], desc: "초기화 Runnable", wcetUs: 0, reqs: [] },
+      { guid: g("run:Main"), name: `${uName}_MainFunction`, trigger: "periodic", periodMs: per, event: "", reads: dd.ports.filter(p => p.dir === "R").map(p => p.name), writes: dd.ports.filter(p => p.dir === "P").map(p => p.name), calls: [`${uName}_MainFunction`], desc: `${per}ms 주기 Runnable`, wcetUs: 0, reqs: ids(unit?.reqs) });
+  }
+  if (!dd.states.states.length) {
+    const modes = (m.modes || []).map(x => cid(x.name || x)).filter(Boolean);
+    const names = modes.length ? ["INIT", ...modes.filter(x => x !== "INIT"), "ERROR"] : ["INIT", "RUN", "DEGRADED", "ERROR"];
+    dd.states = { initial: "INIT", states: names.map(n => ({ guid: g(`state:${n}`), name: n, entry: n === "INIT" ? "내부 변수·버퍼 초기화" : n === "ERROR" ? "안전 출력 설정, DTC 기록" : "", do: n === "RUN" ? "입력 읽기 → 처리 → 출력" : "", exit: "", desc: "", reqs: [] })),
+      transitions: [{ from: "INIT", to: names[1], trigger: "Init 완료", guard: "자가진단 OK", effect: "", reqs: [] },
+        ...names.slice(1, -1).map(n => ({ from: n, to: "ERROR", trigger: "고장 검출", guard: "결함 확정(디바운스)", effect: "안전 상태 진입", reqs: [] })),
+        { from: "ERROR", to: "INIT", trigger: "복구 조건", guard: "결함 해소", effect: "재초기화", reqs: [] }] };
+  }
+  if (!dd.sequences.length) {
+    const main = dd.runnables.find(r => r.trigger === "periodic") || dd.runnables[0];
+    const steps = [{ from: "RTE", to: uName, msg: main.name, args: "", ret: "", kind: "sync", note: `${main.periodMs}ms 주기` }];
+    dd.ports.filter(p => p.dir === "R").slice(0, 4).forEach(p => steps.push({ from: uName, to: "RTE", msg: `Rte_Read_${p.name}`, args: p.elements[0]?.name || "", ret: "Std_ReturnType", kind: "sync", note: "" }));
+    steps.push({ from: uName, to: uName, msg: "process", args: "", ret: "", kind: "sync", note: "상태 머신 수행" });
+    dd.ports.filter(p => p.dir === "P").slice(0, 4).forEach(p => steps.push({ from: uName, to: "RTE", msg: `Rte_Write_${p.name}`, args: p.elements[0]?.name || "", ret: "Std_ReturnType", kind: "sync", note: "" }));
+    dd.sequences.push({ guid: g("seq:Main"), name: `${uName}_MainCycle`, desc: "주기 실행 시나리오", lifelines: ["RTE", uName], steps, reqs: ids(unit?.reqs) });
+  }
+  if (!dd.activities.length) {
+    const op = dd.classes[0].ops.find(o => /Main/.test(o.name)) || dd.classes[0].ops[0];
+    const nodes = [{ id: "n0", kind: "start", text: "" }, { id: "n1", kind: "action", text: "입력 읽기" }, { id: "n2", kind: "decision", text: "입력 유효?" }, { id: "n3", kind: "action", text: "처리·상태 천이" }, { id: "n4", kind: "action", text: "대체값·결함 카운트" }, { id: "n5", kind: "merge", text: "" }, { id: "n6", kind: "action", text: "출력 쓰기" }, { id: "n7", kind: "end", text: "" }];
+    dd.activities.push({ guid: g(`act:${op.name}`), name: op.name, op: op.name, desc: op.desc, nodes,
+      edges: [{ from: "n0", to: "n1", guard: "" }, { from: "n1", to: "n2", guard: "" }, { from: "n2", to: "n3", guard: "예" }, { from: "n2", to: "n4", guard: "아니오" }, { from: "n3", to: "n5", guard: "" }, { from: "n4", to: "n5", guard: "" }, { from: "n5", to: "n6", guard: "" }, { from: "n6", to: "n7", guard: "" }], reqs: op.reqs || [] });
+  }
+  if (!dd.summary) dd.summary = `${uName}: ${comp ? comp.name + " 컴포넌트의 " : ""}유닛 — 클래스 ${dd.classes.length}·포트 ${dd.ports.length}·Runnable ${dd.runnables.length}·상태 ${dd.states.states.length}·시나리오 ${dd.sequences.length}`;
+  if (!dd.origin) dd.origin = "rule";
+  if (!dd.generatedAt) dd.generatedAt = new Date().toISOString();
+  return dd;
+}
+export const ruleDD = (unit, model, seedKey) => fillDDGaps(emptyDD(), unit, model, seedKey);
+
+// ── AI 프롬프트 (유닛 1개 = 2회 호출: A 정적 구조 → B 동적 동작) — 근거 자료를 모두 넣고, 요구 ID 추적을 강제한다 ──
+function ddContext(unit, model, version) {
+  const m = normalizeModel(model);
+  const comp = (m.comps.SW || []).find(c => c.id === unit.comp);
+  const swReqs = (m.reqs.SW || []).filter(r => ids(unit.reqs).includes(r.id));
+  const sysIds = new Set(swReqs.flatMap(r => r.parents || []));
+  const sysReqs = (m.reqs.SYS || []).filter(r => sysIds.has(r.id));
+  const ifs = (m.interfaces.SW || []).filter(i => comp && (i.from === comp.id || i.to === comp.id));
+  const cn = Object.fromEntries((m.comps.SW || []).map(c => [c.id, c.name]));
+  const siblings = (m.units.SW || []).filter(u => u.comp === unit.comp && u.id !== unit.id).map(u => `${u.id} ${u.name}`);
+  return [
+    `[유닛] ${unit.id} ${unit.name} — ${unit.desc || ""}`,
+    comp ? `[소속 SW 컴포넌트] ${comp.id} ${comp.name} (${comp.kind || ""}) ${comp.desc || ""}${comp.behavior ? " / 동작: " + comp.behavior : ""}` : "",
+    siblings.length ? `[같은 컴포넌트의 다른 유닛] ${siblings.join(", ")}` : "",
+    `[할당 SW 요구 — 설계의 근거, 모든 요소의 reqs에 이 ID를 적을 것]\n${swReqs.map(r => `- ${r.id} [${r.type}] ${r.title}: ${r.text}${r.verifCriteria ? " / 검증 기준: " + r.verifCriteria : ""}`).join("\n") || "- (없음)"}`,
+    sysReqs.length ? `[상위 시스템 요구]\n${sysReqs.map(r => `- ${r.id} ${r.title}: ${String(r.text || "").slice(0, 200)}`).join("\n")}` : "",
+    ifs.length ? `[컴포넌트 인터페이스 — 포트의 근거]\n${ifs.map(i => `- ${i.id} ${cn[i.from] || i.from} → ${cn[i.to] || i.to}: ${i.kind || ""} ${i.signals || ""}${i.periodMs ? ` (${i.periodMs}ms)` : ""} ${i.desc || ""}`).join("\n")}` : "",
+    m.modes?.length ? `[운영 모드 — 상태 머신의 근거] ${m.modes.map(x => x.name || x).join(", ")}` : "",
+    (unit.funcs || []).length ? `[기존 코드 헤더 ${unit.file}] ${unit.funcs.map(f => `${f.ret} ${f.name}(${f.params})`).join("; ")}` : "",
+  ].filter(Boolean).join("\n");
+}
+export function promptDDStructure({ unit, model, version, settings }) {
+  const s = { ...DD_DEFAULT, ...(settings || {}) };
+  const T = DD_TARGETS[s.target] || DD_TARGETS.CP;
+  return `역할: ASPICE SWE.3(소프트웨어 상세설계 및 유닛 구현) 담당 수석 SW 설계자. 대상 플랫폼 ${T.label} (${s.release}), 코딩 표준 ${s.target === "CP" ? s.misraC : s.misraCpp + " · " + s.cppGuide}.
+아래 근거 자료만으로 유닛 1개의 **정적 구조**를 완전하게 설계하세요. 추측한 값은 desc에 "(가정)"이라고 적되 비워 두지 마세요.
+
+${ddContext(unit, model, version)}
+
+설계 규칙:
+- 식별자는 영문 C 식별자(ASCII, 공백 없음). 자료형은 AUTOSAR Platform Types(uint8·uint16·sint32·float32·boolean 등) 또는 여기서 정의한 dataTypes 이름만.
+- 모든 요소(class·op·port·runnable·dataType)에 reqs: 근거 SW 요구 ID 배열(위 목록의 ID만). 근거가 없으면 [].
+- ports: 인터페이스 목록에서 R(수신)/P(송신) 포트를 만들고 elements에 신호(이름·형·단위·범위)를 적는다. ${s.target === "CP" ? "S/R 또는 C/S 포트." : "ara::com 서비스 인터페이스의 이벤트/필드/메서드를 elements로 표현."}
+- runnables: 주기(periodMs)·이벤트·init 트리거와 reads/writes(포트 이름)·calls(연산 이름). 주기는 인터페이스 주기나 요구 문장의 수치에서 가져온다.
+- classes: 유닛 자체(stereotype "SWC") 1개 + 필요한 내부 클래스(필터·디바운스·진단 등). ops.algo는 구현 가능한 단계별 의사코드 5~15줄 — 수치 조건(이상·이하·범위·시간)은 요구의 값을 그대로 쓴다.
+- assoc: 클래스 간 관계(comp 합성·agg 집합·dep 의존·assoc 연관).
+
+JSON만 출력 (마크다운 금지):
+{"summary":"유닛 역할 2~3문장","dataTypes":[{"name":"","base":"uint16|enum|struct","desc":"","range":"","reqs":[]}],
+"classes":[{"name":"","stereotype":"SWC|class","desc":"","reqs":[],"attrs":[{"name":"","type":"","init":"","desc":"","vis":"-"}],"ops":[{"name":"","ret":"","vis":"+","params":[{"name":"","type":"","dir":"in|out|inout"}],"desc":"","pre":"","post":"","algo":["단계"],"reqs":[]}]}],
+"ports":[{"name":"","dir":"R|P","kind":"S/R|C/S","interface":"","elements":[{"name":"","type":"","unit":"","range":""}],"source":"인터페이스 ID","reqs":[]}],
+"runnables":[{"name":"","trigger":"periodic|event|init","periodMs":10,"event":"","reads":[],"writes":[],"calls":[],"wcetUs":0,"desc":"","reqs":[]}],
+"assoc":[{"from":"","to":"","kind":"comp|agg|dep|assoc","label":"","mult":""}]}`;
+}
+export function promptDDBehavior({ unit, model, version, settings, structure }) {
+  const s = { ...DD_DEFAULT, ...(settings || {}) };
+  const st = structure || emptyDD();
+  const brief = {
+    classes: st.classes.map(c => ({ name: c.name, ops: c.ops.map(o => o.name) })),
+    ports: st.ports.map(p => `${p.dir}:${p.name}`), runnables: st.runnables.map(r => `${r.name}(${r.trigger}${r.periodMs ? " " + r.periodMs + "ms" : ""})`),
+  };
+  return `역할: ASPICE SWE.3 담당 수석 SW 설계자 (${DD_TARGETS[s.target]?.label || ""}). 아래 유닛의 **동적 동작**을 완전하게 설계하세요: 상태 머신 1개, 시퀀스 시나리오 2~4개(정상 주기·초기화·고장 처리·인터페이스 이상 중 근거가 있는 것), 핵심 연산의 액티비티 2~4개.
+
+${ddContext(unit, model, version)}
+
+[이미 설계된 정적 구조 — 이 이름만 사용]
+${JSON.stringify(brief)}
+
+규칙:
+- 상태·전이·시나리오·액티비티마다 reqs에 근거 SW 요구 ID(위 목록의 ID만). 고장·진단 문장이 있으면 ERROR/DEGRADED 상태와 복구 전이를 반드시 포함.
+- transitions의 trigger는 이벤트(신호 수신·타이머·진단 결과), guard는 조건식(요구의 수치 그대로), effect는 동작.
+- sequences.steps의 from/to는 lifelines의 이름(RTE·유닛 클래스·내부 클래스·다른 유닛), msg는 연산/포트 이름.
+- activities.nodes의 kind: start|action|decision|merge|end|fork|join, edges.guard는 decision 분기 조건. 각 액티비티는 op(연산 이름)에 대응.
+
+JSON만 출력:
+{"states":{"initial":"","states":[{"name":"","entry":"","do":"","exit":"","desc":"","reqs":[]}],"transitions":[{"from":"","to":"","trigger":"","guard":"","effect":"","reqs":[]}]},
+"sequences":[{"name":"","desc":"","lifelines":[],"steps":[{"from":"","to":"","msg":"","args":"","ret":"","kind":"sync|async","note":""}],"reqs":[]}],
+"activities":[{"name":"","op":"","desc":"","nodes":[{"id":"n1","kind":"start|action|decision|merge|end","text":""}],"edges":[{"from":"","to":"","guard":""}],"reqs":[]}]}`;
+}
+// 설계가 없는(또는 TBD 골격만인) 유닛
+export const ddMissingUnits = m => (normalizeModel(m).units.SW || []).filter(u => !u.dd || !u.dd.classes?.length);
+
+// ═══ 다이어그램 SVG — UML 2.5 표준 표기, 흰 배경(문서·EA 비교용). kind: component|class|state|sequence|activity|bdd|ibd ═══
+const X = s => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const tw = (s, fs = 11) => { let w = 0; for (const ch of String(s || "")) w += ch.charCodeAt(0) > 255 ? fs * 0.98 : fs * 0.58; return w; };
+const SVG_FONT = "font-family=\"'Segoe UI','Malgun Gothic','Apple SD Gothic Neo',Arial,sans-serif\"";
+function svgWrap(w, h, body, title) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(w)}" height="${Math.ceil(h)}" viewBox="0 0 ${Math.ceil(w)} ${Math.ceil(h)}" ${SVG_FONT} font-size="11">
+<defs><marker id="ar" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#222"/></marker>
+<marker id="oar" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10" fill="none" stroke="#222" stroke-width="1.2"/></marker>
+<marker id="dia" viewBox="0 0 12 10" refX="0" refY="5" markerWidth="12" markerHeight="10" orient="auto"><path d="M0,5 L6,0 L12,5 L6,10 z" fill="#222"/></marker>
+<marker id="odia" viewBox="0 0 12 10" refX="0" refY="5" markerWidth="12" markerHeight="10" orient="auto"><path d="M0,5 L6,0 L12,5 L6,10 z" fill="#fff" stroke="#222"/></marker>
+<marker id="tri" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#fff" stroke="#222"/></marker></defs>
+<rect width="100%" height="100%" fill="#fff"/>
+<text x="10" y="16" font-size="12" font-weight="700" fill="#333">${X(title)}</text>
+${body}</svg>`;
+}
+const boxText = (x, y, lines, opt = {}) => lines.map((l, i) => `<text x="${x}" y="${y + i * (opt.lh || 14)}" ${opt.anchor ? `text-anchor="${opt.anchor}"` : ""} ${opt.bold && i === 0 ? 'font-weight="700"' : ""} ${opt.italic ? 'font-style="italic"' : ""} fill="#222">${X(l)}</text>`).join("");
+function arrowPath(a, b, marker = "ar", dash = "", label = "") {
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#222" stroke-width="1.2" ${dash ? `stroke-dasharray="${dash}"` : ""} marker-end="url(#${marker})"/>${label ? `<text x="${mx}" y="${my - 4}" text-anchor="middle" font-size="10" fill="#333">${X(label)}</text>` : ""}`;
+}
+// 사각형 경계와 중심 연결선의 교점
+function edgePoint(r, toward) {
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2, dx = toward.x - cx, dy = toward.y - cy;
+  if (!dx && !dy) return { x: cx, y: cy };
+  const sx = dx ? (r.w / 2) / Math.abs(dx) : Infinity, sy = dy ? (r.h / 2) / Math.abs(dy) : Infinity, s = Math.min(sx, sy);
+  return { x: cx + dx * s, y: cy + dy * s };
+}
+function gridLayout(items, estW, estH, perRow = 3, pad = 24, top = 36, left = 20) {
+  const rects = []; let x = left, y = top, rowH = 0;
+  items.forEach((it, i) => {
+    const w = estW(it), h = estH(it);
+    if (i && i % perRow === 0) { x = left; y += rowH + pad; rowH = 0; }
+    rects.push({ it, x, y, w, h }); x += w + pad; rowH = Math.max(rowH, h);
+  });
+  const W = Math.max(...rects.map(r => r.x + r.w), 300) + left, H = y + rowH + 24;
+  return { rects, W, H };
+}
+
+export function ddSvg(kind, unit, model) {
+  const dd = unit?.dd; if (!dd) return "";
+  const m = normalizeModel(model);
+  const uName = cid(unit.name || unit.id);
+  const comp = (m.comps.SW || []).find(c => c.id === unit.comp);
+  const title = `${unit.id} ${unit.name} — ${({ component: "컴포넌트 다이어그램", class: "클래스 다이어그램", state: "상태 머신 다이어그램", sequence: "시퀀스 다이어그램", activity: "액티비티 다이어그램", bdd: "SysML 블록 정의 다이어그램(BDD)", ibd: "SysML 내부 블록 다이어그램(IBD)" })[kind] || kind}`;
+  if (kind === "class") {
+    const est = c => { const lines = [`«${c.stereotype || "class"}»`, c.name, ...c.attrs.map(a => `${a.vis} ${a.name}: ${a.type}${a.init ? " = " + a.init : ""}`), ...c.ops.map(o => `${o.vis} ${o.name}(${o.params.map(p => `${p.dir !== "in" ? p.dir + " " : ""}${p.name}: ${p.type}`).join(", ")}): ${o.ret}`)]; return Math.min(360, Math.max(140, ...lines.map(l => tw(l) + 20))); };
+    const { rects, W, H } = gridLayout(dd.classes, est, c => 40 + 14 * (c.attrs.length || 1) + 14 * (c.ops.length || 1) + 16, 3);
+    const byName = Object.fromEntries(rects.map(r => [r.it.name, r]));
+    let b = rects.map(r => { const c = r.it; const aH = 14 * (c.attrs.length || 1) + 8, y1 = r.y + 34;
+      return `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="#FFFFE0" stroke="#222"/>
+<text x="${r.x + r.w / 2}" y="${r.y + 13}" text-anchor="middle" font-size="9" fill="#555">«${X(c.stereotype || "class")}»</text><text x="${r.x + r.w / 2}" y="${r.y + 27}" text-anchor="middle" font-weight="700" fill="#222">${X(c.name)}</text>
+<line x1="${r.x}" y1="${y1}" x2="${r.x + r.w}" y2="${y1}" stroke="#222"/>${boxText(r.x + 6, y1 + 13, c.attrs.length ? c.attrs.map(a => `${a.vis} ${a.name}: ${a.type}${a.init ? " = " + a.init : ""}`.slice(0, 52)) : [""])}
+<line x1="${r.x}" y1="${y1 + aH}" x2="${r.x + r.w}" y2="${y1 + aH}" stroke="#222"/>${boxText(r.x + 6, y1 + aH + 13, c.ops.length ? c.ops.map(o => `${o.vis} ${o.name}(${o.params.map(p => p.name).join(", ")}): ${o.ret}`.slice(0, 52)) : [""])}`; }).join("");
+    dd.assoc.forEach(a => { const f = byName[a.from], t = byName[a.to]; if (!f || !t) return; const p1 = edgePoint(f, { x: t.x + t.w / 2, y: t.y + t.h / 2 }), p2 = edgePoint(t, { x: f.x + f.w / 2, y: f.y + f.h / 2 });
+      b += a.kind === "dep" ? arrowPath(p1, p2, "oar", "5,4", a.label) : a.kind === "gen" ? arrowPath(p1, p2, "tri", "", a.label) : `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="#222" stroke-width="1.2" ${a.kind === "comp" ? 'marker-start="url(#dia)"' : a.kind === "agg" ? 'marker-start="url(#odia)"' : ""}/>${a.label || a.mult ? `<text x="${(p1.x + p2.x) / 2}" y="${(p1.y + p2.y) / 2 - 4}" text-anchor="middle" font-size="10" fill="#333">${X([a.label, a.mult].filter(Boolean).join(" "))}</text>` : ""}`; });
+    return svgWrap(W, H, b, title);
+  }
+  if (kind === "component" || kind === "ibd") {
+    // 중앙: 유닛(컴포넌트/파트), 좌: 수신 포트와 상대 컴포넌트, 우: 송신 포트와 상대
+    const Rp = dd.ports.filter(p => p.dir === "R"), Pp = dd.ports.filter(p => p.dir === "P");
+    const rows = Math.max(Rp.length, Pp.length, 1), rowH = 46, cx = 330, cw = 240, ch = Math.max(110, rows * rowH + 70), top = 50;
+    const cn = Object.fromEntries((m.comps.SW || []).map(c => [c.id, c.name]));
+    const other = p => { const i = (m.interfaces.SW || []).find(x => x.id === p.source); return i ? (p.dir === "R" ? cn[i.from] || i.from : cn[i.to] || i.to) : (p.dir === "R" ? "Sender" : "Receiver"); };
+    const compIcon = (x, y) => `<rect x="${x}" y="${y}" width="14" height="18" fill="#fff" stroke="#222"/><rect x="${x - 4}" y="${y + 3}" width="8" height="4" fill="#fff" stroke="#222"/><rect x="${x - 4}" y="${y + 10}" width="8" height="4" fill="#fff" stroke="#222"/>`;
+    let b = kind === "ibd" ? `<rect x="40" y="${top - 22}" width="${cx + cw + 300}" height="${ch + 60}" fill="none" stroke="#222"/><text x="48" y="${top - 8}" font-weight="700">ibd [block] ${X(comp?.name || uName)}</text>` : "";
+    b += `<rect x="${cx}" y="${top}" width="${cw}" height="${ch}" fill="#E8F0FE" stroke="#222" stroke-width="1.4"/>${kind === "component" ? compIcon(cx + cw - 24, top + 6) : ""}
+<text x="${cx + cw / 2}" y="${top + 16}" text-anchor="middle" font-size="9" fill="#555">${kind === "ibd" ? "«part»" : "«component» " + X(DD_TARGETS[ddSettings(m).target]?.unitKind || "")}</text><text x="${cx + cw / 2}" y="${top + 32}" text-anchor="middle" font-weight="700">${X(uName)}</text>
+<text x="${cx + cw / 2}" y="${top + 46}" text-anchor="middle" font-size="9.5" fill="#555">${X(dd.runnables.map(r => `${r.name}${r.periodMs ? " " + r.periodMs + "ms" : ""}`).join(" · ").slice(0, 44))}</text>`;
+    Rp.forEach((p, i) => { const y = top + 70 + i * rowH; const ox = 60, ow = 150;
+      b += `<rect x="${ox}" y="${y - 14}" width="${ow}" height="30" fill="#F5F5F5" stroke="#222"/><text x="${ox + ow / 2}" y="${y + 5}" text-anchor="middle" font-size="10">${X(other(p))}</text>
+<rect x="${cx - 7}" y="${y - 7}" width="14" height="14" fill="#fff" stroke="#222"/><line x1="${ox + ow}" y1="${y}" x2="${cx - 26}" y2="${y}" stroke="#222"/><path d="M${cx - 26},${y - 8} a8,8 0 0 0 0,16" fill="none" stroke="#222"/><circle cx="${ox + ow + 10}" cy="${y}" r="0" />
+<text x="${cx + 10}" y="${y + 4}" font-size="9.5">${X(p.name)}: ${X(p.interface)}</text><text x="${(ox + ow + cx) / 2}" y="${y - 6}" text-anchor="middle" font-size="8.5" fill="#555">${X(p.elements.map(e => e.name).join(", ").slice(0, 30))}</text>`; });
+    Pp.forEach((p, i) => { const y = top + 70 + i * rowH; const ox = cx + cw + 110, ow = 150;
+      b += `<rect x="${ox}" y="${y - 14}" width="${ow}" height="30" fill="#F5F5F5" stroke="#222"/><text x="${ox + ow / 2}" y="${y + 5}" text-anchor="middle" font-size="10">${X(other(p))}</text>
+<rect x="${cx + cw - 7}" y="${y - 7}" width="14" height="14" fill="#fff" stroke="#222"/><line x1="${cx + cw + 7}" y1="${y}" x2="${cx + cw + 44}" y2="${y}" stroke="#222"/><circle cx="${cx + cw + 50}" cy="${y}" r="6" fill="#fff" stroke="#222"/><line x1="${cx + cw + 56}" y1="${y}" x2="${ox}" y2="${y}" stroke="#222"/>
+<text x="${cx + cw - 10}" y="${y + 4}" text-anchor="end" font-size="9.5">${X(p.name)}: ${X(p.interface)}</text><text x="${(cx + cw + 56 + ox) / 2}" y="${y - 6}" text-anchor="middle" font-size="8.5" fill="#555">${X(p.elements.map(e => e.name).join(", ").slice(0, 30))}</text>`; });
+    return svgWrap(cx + cw + 300, top + ch + 50, b, title);
+  }
+  if (kind === "bdd") {
+    // 블록: 컴포넌트(상위) ◆→ 유닛 블록 → 내부 클래스 블록. 값(values)=속성, 연산(operations)
+    const blocks = [{ name: comp?.name || "SW", st: "block", vals: [], ops: [], top: true }, ...dd.classes.map(c => ({ name: c.name, st: "block", vals: c.attrs.map(a => `${a.name}: ${a.type}`), ops: c.ops.map(o => `${o.name}()`), ports: c.name === dd.classes[0].name ? dd.ports.map(p => `${p.dir === "R" ? "in" : "out"} ${p.name}: ${p.interface}`) : [] }))];
+    const estW = bk => Math.min(300, Math.max(150, ...[bk.name, ...bk.vals, ...bk.ops, ...(bk.ports || [])].map(l => tw(l) + 20)));
+    const estH = bk => 36 + (bk.vals.length ? 16 + 13 * bk.vals.length : 0) + (bk.ops.length ? 16 + 13 * bk.ops.length : 0) + ((bk.ports || []).length ? 16 + 13 * bk.ports.length : 0) + 8;
+    const topR = { it: blocks[0], x: 20, y: 36, w: estW(blocks[0]), h: estH(blocks[0]) };
+    const { rects: rs, W, H } = gridLayout(blocks.slice(1), estW, estH, 3, 24, topR.y + topR.h + 50);
+    const rects = [topR, ...rs];
+    let b = rects.map(r => { const bk = r.it; let y = r.y + 30; let s = `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="#FFF" stroke="#222"/><text x="${r.x + r.w / 2}" y="${r.y + 12}" text-anchor="middle" font-size="9" fill="#555">«block»</text><text x="${r.x + r.w / 2}" y="${r.y + 25}" text-anchor="middle" font-weight="700">${X(bk.name)}</text>`;
+      const sect = (label, lines) => { if (!lines.length) return; s += `<line x1="${r.x}" y1="${y + 2}" x2="${r.x + r.w}" y2="${y + 2}" stroke="#222"/><text x="${r.x + r.w / 2}" y="${y + 13}" text-anchor="middle" font-size="9" fill="#555">${label}</text>${boxText(r.x + 6, y + 26, lines.map(l => l.slice(0, 48)), { lh: 13 })}`; y += 16 + 13 * lines.length; };
+      sect("values", bk.vals); sect("operations", bk.ops); sect("ports", bk.ports || []); return s; }).join("");
+    rects.slice(1).forEach(r => { const a = edgePoint(topR, { x: r.x + r.w / 2, y: r.y + r.h / 2 }), c = edgePoint(r, { x: topR.x + topR.w / 2, y: topR.y + topR.h / 2 }); b += `<line x1="${a.x}" y1="${a.y}" x2="${c.x}" y2="${c.y}" stroke="#222" stroke-width="1.2" marker-start="url(#dia)"/>`; });
+    return svgWrap(Math.max(W, topR.x + topR.w + 20), H, b, title);
+  }
+  if (kind === "state") {
+    const S = dd.states.states; if (!S.length) return svgWrap(400, 80, `<text x="20" y="50">상태 없음</text>`, title);
+    const n = S.length, R = Math.max(120, n * 34), cx0 = R + 140, cy0 = R + 70;
+    const rects = S.map((s, i) => { const ang = -Math.PI / 2 + (2 * Math.PI * i) / n; const w = Math.max(110, tw(s.name) + 30, ...(s.entry ? [tw("entry / " + s.entry) * 0.8] : [])), h = 34 + (s.entry ? 13 : 0) + (s.do ? 13 : 0) + (s.exit ? 13 : 0); return { it: s, x: cx0 + Math.cos(ang) * R - w / 2, y: cy0 + Math.sin(ang) * R - h / 2, w: Math.min(w, 260), h }; });
+    const by = Object.fromEntries(rects.map(r => [r.it.name, r]));
+    let b = rects.map(r => { const s = r.it; const extra = [s.entry && `entry / ${s.entry}`, s.do && `do / ${s.do}`, s.exit && `exit / ${s.exit}`].filter(Boolean).map(l => l.slice(0, 40));
+      return `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="10" fill="#FFFFE0" stroke="#222"/><text x="${r.x + r.w / 2}" y="${r.y + 16}" text-anchor="middle" font-weight="700">${X(s.name)}</text>${extra.length ? `<line x1="${r.x}" y1="${r.y + 22}" x2="${r.x + r.w}" y2="${r.y + 22}" stroke="#222"/>${boxText(r.x + 6, r.y + 34, extra, { lh: 13 })}` : ""}`; }).join("");
+    const init = by[dd.states.initial]; if (init) { const p = { x: init.x + init.w / 2, y: init.y - 36 }; b += `<circle cx="${p.x}" cy="${p.y}" r="7" fill="#222"/>` + arrowPath({ x: p.x, y: p.y + 7 }, { x: init.x + init.w / 2, y: init.y }); }
+    const seen = {};
+    dd.states.transitions.forEach(t => { const f = by[t.from], g2 = by[t.to]; if (!f || !g2) return; const lab = [t.trigger, t.guard ? `[${t.guard}]` : "", t.effect ? `/ ${t.effect}` : ""].filter(Boolean).join(" ").slice(0, 46);
+      if (f === g2) { const x = f.x + f.w, y = f.y + 10; b += `<path d="M${x},${y} C${x + 40},${y - 30} ${x + 40},${y + 40} ${x},${y + 24}" fill="none" stroke="#222" marker-end="url(#ar)"/><text x="${x + 44}" y="${y + 8}" font-size="9.5">${X(lab)}</text>`; return; }
+      const k = [t.from, t.to].sort().join("|"); const off = (seen[k] = (seen[k] || 0) + 1) > 1 ? 10 : 0;
+      const p1 = edgePoint(f, { x: g2.x + g2.w / 2, y: g2.y + g2.h / 2 }), p2 = edgePoint(g2, { x: f.x + f.w / 2, y: f.y + f.h / 2 });
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2, nx = -(p2.y - p1.y), ny = p2.x - p1.x, L = Math.hypot(nx, ny) || 1, c = { x: mx + (nx / L) * (28 + off), y: my + (ny / L) * (28 + off) };
+      b += `<path d="M${p1.x},${p1.y} Q${c.x},${c.y} ${p2.x},${p2.y}" fill="none" stroke="#222" stroke-width="1.2" marker-end="url(#ar)"/><text x="${(mx + c.x) / 2}" y="${(my + c.y) / 2}" text-anchor="middle" font-size="9.5" fill="#333">${X(lab)}</text>`; });
+    return svgWrap(cx0 + R + 160, cy0 + R + 80, b, title);
+  }
+  if (kind === "sequence") {
+    const seqs = dd.sequences; if (!seqs.length) return svgWrap(400, 80, `<text x="20" y="50">시나리오 없음</text>`, title);
+    let y0 = 30, W = 400; const parts = [];
+    seqs.forEach(sq => {
+      const ll = sq.lifelines.length ? sq.lifelines : [...new Set(sq.steps.flatMap(s => [s.from, s.to]))];
+      const colW = Math.max(130, ...ll.map(l => tw(l) + 30)), x0 = 40, xs = Object.fromEntries(ll.map((l, i) => [l, x0 + colW / 2 + i * colW]));
+      const top = y0 + 22, H = 60 + sq.steps.length * 30 + 20;
+      let s = `<rect x="${x0 - 20}" y="${y0}" width="${ll.length * colW + 40}" height="${H}" fill="none" stroke="#222"/><path d="M${x0 - 20},${y0} h${Math.min(260, tw("sd " + sq.name) + 24)} v16 l-8,8 H${x0 - 20} z" fill="#F5F5F5" stroke="#222"/><text x="${x0 - 14}" y="${y0 + 13}" font-weight="700">sd ${X(sq.name)}</text>`;
+      ll.forEach(l => { const x = xs[l]; s += `<rect x="${x - colW / 2 + 10}" y="${top + 10}" width="${colW - 20}" height="26" fill="#E8F0FE" stroke="#222"/><text x="${x}" y="${top + 27}" text-anchor="middle" font-weight="700">${X(l)}</text><line x1="${x}" y1="${top + 36}" x2="${x}" y2="${y0 + H - 6}" stroke="#222" stroke-dasharray="4,3"/>`; });
+      sq.steps.forEach((st, i) => { const y = top + 60 + i * 30, a = xs[st.from], c = xs[st.to]; if (a == null || c == null) return; const lab = `${i + 1}: ${st.msg}${st.args ? "(" + st.args + ")" : "()"}`.slice(0, 48);
+        if (a === c) s += `<path d="M${a},${y} h30 v16 h-30" fill="none" stroke="#222" marker-end="url(#ar)"/><text x="${a + 34}" y="${y + 12}" font-size="9.5">${X(lab)}</text>`;
+        else s += `<line x1="${a}" y1="${y}" x2="${c}" y2="${y}" stroke="#222" stroke-width="1.2" ${st.kind === "async" ? 'marker-end="url(#oar)"' : 'marker-end="url(#ar)"'}/><text x="${(a + c) / 2}" y="${y - 4}" text-anchor="middle" font-size="9.5">${X(lab)}</text>${st.ret ? `<line x1="${c}" y1="${y + 14}" x2="${a}" y2="${y + 14}" stroke="#222" stroke-dasharray="4,3" marker-end="url(#oar)"/><text x="${(a + c) / 2}" y="${y + 25}" text-anchor="middle" font-size="8.5" fill="#555">${X(st.ret)}</text>` : ""}`; });
+      parts.push(s); W = Math.max(W, ll.length * colW + 80); y0 += H + 30;
+    });
+    return svgWrap(W, y0, parts.join(""), title);
+  }
+  if (kind === "activity") {
+    const acts = dd.activities; if (!acts.length) return svgWrap(400, 80, `<text x="20" y="50">액티비티 없음</text>`, title);
+    let x0 = 20, W = 0, H = 0; const parts = [];
+    acts.forEach(a => {
+      // 위상 정렬로 세로 배치, decision의 두 번째 분기는 오른쪽 열
+      const out = {}; a.edges.forEach(e => { (out[e.from] = out[e.from] || []).push(e); });
+      const depth = {}; const start = a.nodes.find(n => n.kind === "start") || a.nodes[0]; const q = [[start?.id, 0]]; const seen = new Set();
+      while (q.length) { const [id, d] = q.shift(); if (!id || seen.has(id)) continue; seen.add(id); depth[id] = d; (out[id] || []).forEach(e => q.push([e.to, d + 1])); }
+      a.nodes.forEach((n, i) => { if (depth[n.id] == null) depth[n.id] = i; });
+      const col = {}; a.nodes.forEach(n => { col[n.id] = 0; }); a.nodes.filter(n => n.kind === "decision").forEach(n => { (out[n.id] || []).slice(1).forEach(e => { col[e.to] = 1; }); });
+      const colW = 230, rowH = 64, pos = {}; a.nodes.forEach(n => { pos[n.id] = { x: x0 + 110 + col[n.id] * colW, y: 60 + depth[n.id] * rowH }; });
+      const sz = n => n.kind === "action" ? { w: Math.min(200, Math.max(90, tw(n.text) + 24)), h: 34 } : n.kind === "decision" || n.kind === "merge" ? { w: 36, h: 36 } : n.kind === "fork" || n.kind === "join" ? { w: 120, h: 6 } : { w: 18, h: 18 };
+      let s = `<text x="${x0}" y="${36}" font-weight="700">act ${X(a.name)}${a.op && a.op !== a.name ? ` (${X(a.op)})` : ""}</text>`;
+      const rect = {}; a.nodes.forEach(n => { const p = pos[n.id], d = sz(n); rect[n.id] = { x: p.x - d.w / 2, y: p.y - d.h / 2, w: d.w, h: d.h };
+        s += n.kind === "action" ? `<rect x="${p.x - d.w / 2}" y="${p.y - d.h / 2}" width="${d.w}" height="${d.h}" rx="12" fill="#FFFFE0" stroke="#222"/><text x="${p.x}" y="${p.y + 4}" text-anchor="middle" font-size="10">${X(n.text.slice(0, 32))}</text>`
+          : n.kind === "decision" || n.kind === "merge" ? `<path d="M${p.x},${p.y - 18} L${p.x + 18},${p.y} L${p.x},${p.y + 18} L${p.x - 18},${p.y} z" fill="#fff" stroke="#222"/>${n.text ? `<text x="${p.x + 22}" y="${p.y - 14}" font-size="9.5">${X(n.text.slice(0, 30))}</text>` : ""}`
+          : n.kind === "start" ? `<circle cx="${p.x}" cy="${p.y}" r="9" fill="#222"/>` : n.kind === "end" ? `<circle cx="${p.x}" cy="${p.y}" r="10" fill="#fff" stroke="#222"/><circle cx="${p.x}" cy="${p.y}" r="6" fill="#222"/>` : `<rect x="${p.x - 60}" y="${p.y - 3}" width="120" height="6" fill="#222"/>`; });
+      a.edges.forEach(e => { const f = rect[e.from], t = rect[e.to]; if (!f || !t) return; const p1 = edgePoint(f, { x: t.x + t.w / 2, y: t.y + t.h / 2 }), p2 = edgePoint(t, { x: f.x + f.w / 2, y: f.y + f.h / 2 }); s += arrowPath(p1, p2, "ar", "", e.guard ? `[${e.guard}]` : ""); });
+      const maxD = Math.max(...Object.values(depth), 0), maxC = Math.max(...Object.values(col), 0);
+      parts.push(s); W = Math.max(W, x0 + 110 + maxC * colW + 130); H = Math.max(H, 60 + (maxD + 1) * rowH + 20); x0 += 110 + (maxC + 1) * colW + 40;
+    });
+    return svgWrap(Math.max(W, x0), H, parts.join(""), title);
+  }
+  return "";
+}
+export const DD_DIAGRAMS = [["component", "컴포넌트"], ["class", "클래스"], ["sequence", "시퀀스"], ["state", "상태 머신"], ["activity", "액티비티"], ["bdd", "SysML BDD"], ["ibd", "SysML IBD"]];
