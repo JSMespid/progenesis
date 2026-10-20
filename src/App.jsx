@@ -7960,6 +7960,28 @@ function hw2ModelFiles(meta, ctx, folder = "HW4101_HW설계_모델") {
   files.push({ path: `${folder}/README.txt`, content: [`HWE.2 HW 설계 모델 — ${meta.name || ""}`, ``, `block/      : HW 아키텍처 블록도(04-52) SVG`, `schematics/ : 블록별 회로도(04-54) SVG — 넷 라벨 방식`, `EDA 교환 파일(${S.schematicFmt} 회로도 · ${S.layoutFmt} · ${S.fabFmt})은 다음 생성 단계에서 같은 폴더에 추가됩니다.`, `부품 PN은 AI 후보(BOM 14-54 참조). 모든 부품·넷·특성에 근거 HW 요구 ID가 기록됩니다.`].join("\n") });
   return files;
 }
+// ── SVG 미리보기 배율: "fit" = 패널 너비에 맞춤(viewBox 유지), 숫자 = 원본 대비 배율 ──
+function svgFit(svg, zoom = "fit") {
+  const m = /<svg\b([^>]*)>/.exec(svg || ""); if (!m) return svg || "";
+  const attrs = m[1]; const w = Number(/\bwidth="([\d.]+)"/.exec(attrs)?.[1] || 0), h = Number(/\bheight="([\d.]+)"/.exec(attrs)?.[1] || 0);
+  let a = attrs.replace(/\swidth="[^"]*"/, "").replace(/\sheight="[^"]*"/, "");
+  if (!/viewBox=/.test(a) && w && h) a += ` viewBox="0 0 ${w} ${h}"`;
+  const style = zoom === "fit" ? `style="width:100%;height:auto;max-width:${w ? w * 1.5 : 2400}px;display:block"` : `style="width:${Math.round((w || 800) * zoom)}px;height:auto;display:block"`;
+  return svg.replace(m[0], `<svg${a} ${style}>`);
+}
+const ZOOM_STEPS = ["fit", 0.5, 0.75, 1, 1.5, 2];
+function SvgView({ svg, zoom, setZoom, maxHeight = 520 }) {
+  const z = zoom ?? "fit";
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 3, alignItems: "center", padding: "4px 8px", background: T.bg, borderBottom: `1px solid ${T.border}`, fontSize: 10.5 }}>
+        <span style={{ color: T.muted, marginRight: 4 }}>배율</span>
+        {ZOOM_STEPS.map(st => <button key={String(st)} onClick={() => setZoom(st)} style={{ background: z === st ? T.accent : "none", color: z === st ? "#fff" : T.muted, border: `1px solid ${z === st ? T.accent : T.border}`, borderRadius: 5, padding: "1px 7px", cursor: "pointer", fontSize: 10.5, fontFamily: "inherit" }}>{st === "fit" ? "창에 맞춤" : `${Math.round(st * 100)}%`}</button>)}
+        <span style={{ color: T.muted, marginLeft: "auto" }}>{z === "fit" ? "전체가 보이도록 축소 — 글씨가 작으면 100% 이상을 고르세요(가로 스크롤)" : "가로·세로 스크롤로 이동"}</span>
+      </div>
+      <div style={{ background: "#fff", overflow: "auto", maxHeight, padding: 6 }} dangerouslySetInnerHTML={{ __html: svgFit(svg, z) }} />
+    </div>);
+}
 // ── 산출물 보기용 미리보기: 생성한 docx/xlsx 바이트를 HTML로 (외부 라이브러리 없이 문단·표·시트만) ──
 const PV_ESC = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const PV_UNESC = x => String(x).replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, d) => String.fromCharCode(d));
@@ -8997,6 +9019,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [artQ, setArtQ] = useState("");         // 산출물 보기 필터
   const zipAllBusy = useRef(false);
   const [artPrev, setArtPrev] = useState(null);
+  const [svgZoom, setSvgZoom] = useState("fit");   // SVG 미리보기 배율 (산출물 보기·SWE.3·HWE.2 공용)
   const [artCat, setArtCat] = useState("doc");          // 산출물 보기 카테고리: doc | sw | hw | common
   const [artOpen, setArtOpen] = useState(() => new Set());   // 펼친 유닛·블록 그룹   // 문서 미리보기 { key, kind: html|sheets|loading|error, html, sheets, tab, bytes, ext }   // mode: diagram | code   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
   // 커버리지 "빠짐 N건" → 해당 탭으로 이동해 미연결 항목만 표시 ({ tab, level?, ids:Set, q })
@@ -10186,7 +10209,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       <button onClick={() => dlSvg(vu, ddView.kind)} style={small}>⬇ SVG</button>
                       <button onClick={() => AE.DD_DIAGRAMS.forEach(([k]) => dlSvg(vu, k))} style={small}>⬇ 7종 모두</button>
                     </div>
-                    <div style={{ background: "#fff", overflow: "auto", maxHeight: 520, padding: 6 }} dangerouslySetInnerHTML={{ __html: AE.ddSvg(ddView.kind, vu, model) }} />
+                    <SvgView svg={AE.ddSvg(ddView.kind, vu, model)} zoom={svgZoom} setZoom={setSvgZoom} />
                     <div style={{ padding: "6px 10px", fontSize: 10.5, color: T.muted, borderTop: `1px solid ${T.border}` }}>
                       {vu.dd.summary}
                       {(() => { const rs = new Set([...vu.dd.classes.flatMap(c => [...(c.reqs || []), ...c.ops.flatMap(o => o.reqs || [])]), ...vu.dd.states.transitions.flatMap(t => t.reqs || []), ...vu.dd.sequences.flatMap(x => x.reqs || []), ...vu.dd.activities.flatMap(x => x.reqs || [])]); return rs.size ? ` · 근거 요구: ${[...rs].join(", ")}` : " · 근거 요구 ID 없음(요구 할당을 확인하세요)"; })()}
@@ -10222,7 +10245,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       <div style={{ flex: 1 }} />
                       <button onClick={() => dlSvgH(hdView.kind === "block" ? null : vc, hdView.kind)} style={small}>⬇ SVG</button>
                     </div>
-                    <div style={{ background: "#fff", overflow: "auto", maxHeight: 520, padding: 6 }} dangerouslySetInnerHTML={{ __html: AE.hdSvg(hdView.kind, hdView.kind === "block" ? vc : vc, model) }} />
+                    <SvgView svg={AE.hdSvg(hdView.kind, vc, model)} zoom={svgZoom} setZoom={setSvgZoom} />
                     <div style={{ padding: "6px 10px", fontSize: 10.5, color: T.muted, borderTop: `1px solid ${T.border}`, maxHeight: 180, overflow: "auto" }}>
                       <div>{vc.hd.summary}</div>
                       <div style={{ marginTop: 4 }}><b>부품(PN 후보):</b> {vc.hd.parts.map(p => `${p.ref} ${p.value}${p.mpn ? " [" + p.mpn + "]" : ""}`).join(" · ")}</div>
@@ -10709,8 +10732,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 { type: "table", key: "misra", label: `MISRA 적용 체크리스트 (${S.target})`, sub: `${S.target === "CP" ? S.misraC : S.misraCpp} · xlsx`, rows: () => AE.misraChecklistRows(S), file: "MISRA_적용_체크리스트.xlsx", xlsx: () => makeXlsx({ sheetName: "MISRA", rows: AE.misraChecklistRows(S) }) }] });
               swUnits.forEach(u => { const code = u.dd.code && u.dd.code.target === S.target ? u.dd.code : (() => { try { return { ...AE.generateCode(u, model, metaF, S, null), provisional: true }; } catch (_) { return null; } })();
                 groups.push({ cat: "sw", name: `${u.id} ${u.name}`, items: [
-                  ...AE.DD_DIAGRAMS.map(([k, lab]) => ({ type: "svg", key: `dd:${u.id}:${k}`, label: `${lab} 다이어그램`, sub: "svg", get: () => AE.ddSvg(k, u, model), file: `${u.id}_${k}.svg` })),
-                  ...((code?.files || []).map((f, i) => ({ type: "code", key: `code:${u.id}:${i}`, label: f.name, sub: `${AE.DD_TARGETS[code.target]?.lang} · ${code.provisional ? "코드 생성 전 — 규칙 뼈대(연산 본문은 설계 단계 주석)" : code.origin === "ai" ? "본문 AI" : "본문 규칙"}`, get: () => f.text, file: f.name }))),
+                  ...AE.DD_DIAGRAMS.map(([k, lab]) => ({ type: "svg", section: "다이어그램", key: `dd:${u.id}:${k}`, label: `${lab} 다이어그램`, sub: "svg", get: () => AE.ddSvg(k, u, model), file: `${u.id}_${k}.svg` })),
+                  ...([...(code?.files || [])].sort((a, b) => (/\.(c|cpp)$/.test(a.name) ? 0 : 1) - (/\.(c|cpp)$/.test(b.name) ? 0 : 1)).map((f, i) => ({ type: "code", section: "소스코드", key: `code:${u.id}:${i}`, label: f.name, sub: `${AE.DD_TARGETS[code.target]?.lang} · ${code.provisional ? "코드 생성 전 — 규칙 뼈대(연산 본문은 설계 단계 주석)" : code.origin === "ai" ? "본문 AI" : "본문 규칙"}`, get: () => f.text, file: f.name }))),
                 ] }); });
             }
             // 3) HW 블록
@@ -10749,10 +10772,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                         {collapsible(g) && !q
                           ? <button onClick={() => toggle(g.name)} style={{ display: "flex", width: "100%", alignItems: "center", gap: 6, background: isOpen(g) ? T.accent + "14" : "none", border: `1px solid ${isOpen(g) ? T.accent + "66" : T.border}`, borderRadius: 6, padding: "5px 8px", cursor: "pointer", color: T.text, fontFamily: "inherit", textAlign: "left" }}><span style={{ color: T.muted, fontSize: 10 }}>{isOpen(g) ? "▾" : "▸"}</span><span style={{ fontSize: 11.5, fontWeight: 600, flex: 1 }}>{g.name}</span><span style={{ fontSize: 9.5, color: T.muted }}>{g.items.length}</span></button>
                           : <div style={{ fontSize: 10.5, fontWeight: 700, color: T.muted, padding: "4px 6px" }}>{g.name}</div>}
-                        {isOpen(g) && g.items.map(it => <button key={it.key} onClick={() => setArtSel(it.key)} style={{ display: "block", width: collapsible(g) ? "calc(100% - 10px)" : "100%", textAlign: "left", background: artSel === it.key ? T.accent + "22" : "none", border: `1px solid ${artSel === it.key ? T.accent : "transparent"}`, borderRadius: 6, padding: "3px 8px", marginLeft: collapsible(g) ? 10 : 0, cursor: "pointer", color: T.text, fontFamily: "inherit" }}>
+                        {isOpen(g) && g.items.map((it, idx) => <React.Fragment key={it.key}>{it.section && (idx === 0 || g.items[idx - 1].section !== it.section) && <div style={{ fontSize: 9.5, color: it.section === "소스코드" ? T.green : T.muted, fontWeight: 700, padding: "4px 6px 1px 18px" }}>{it.section === "소스코드" ? "💻 소스코드" : "🖼 다이어그램"}{it.section === "소스코드" && it.sub?.includes("코드 생성 전") ? <span style={{ fontWeight: 400, color: T.amber }}> — 코드 생성 전(규칙 뼈대)</span> : null}</div>}{ <button onClick={() => setArtSel(it.key)} style={{ display: "block", width: collapsible(g) ? "calc(100% - 10px)" : "100%", textAlign: "left", background: artSel === it.key ? T.accent + "22" : "none", border: `1px solid ${artSel === it.key ? T.accent : "transparent"}`, borderRadius: 6, padding: "3px 8px", marginLeft: collapsible(g) ? 10 : 0, cursor: "pointer", color: T.text, fontFamily: "inherit" }}>
                           <div style={{ fontSize: 11.5 }}>{it.type === "doc" ? "📄" : it.type === "svg" ? "🖼" : it.type === "code" ? "💻" : it.type === "table" ? "📊" : "📑"} {it.label}</div>
                           {it.sub ? <div style={{ fontSize: 9.5, color: T.muted }}>{it.sub}</div> : null}
-                        </button>)}
+                        </button>}</React.Fragment>)}
                       </div>))}
                     {!vis.length && <div style={{ fontSize: 11, color: T.muted, padding: 10 }}>{total ? (q ? "검색 결과 없음" : "이 분류에 산출물이 없습니다.") : "아직 생성된 산출물이 없습니다. SYS.2 확정 → SYS.3 → SWE.3 상세설계·코드 / HWE.2 회로 설계를 진행하세요."}</div>}
                   </div>
@@ -10781,7 +10804,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       <div style={{ marginTop: 8 }}>현재 추적 모델에서 바로 생성됩니다(저장 여부와 무관). 내용은 {sel.kind === "HW_DD" ? "블록별 부품표·넷·인터페이스·설계 근거, 요구↔블록↔부품 일관성 증거(13-51), 설계 검토·합의 기록(13-52)" : sel.kind === "SW_DD" ? "유닛 분해·요구 추적, 유닛별 클래스·연산·알고리즘·포트·Runnable·상태·시퀀스·액티비티 표" : sel.kind === "RTM" ? "순방향·역방향 추적, 변경 영향·판정 이력, 일관성 점검 결과" : /^V_/.test(sel.kind) ? "검증 전략·대상·시험 항목(절차·기대 결과·합격 기준)" : /^R_/.test(sel.kind) ? "시험 결과 기록 틀(Pass/Fail/Not executed)" : "해당 프로세스의 요구·설계 내용"}입니다.</div>
                       <div style={{ marginTop: 8, color: T.muted }}>미리보기 대신 내려받아 Word/Excel에서 확인하세요. 표 형식 산출물(BOM·특별 특성·분석·MISRA)은 왼쪽 '미리보기' 항목에서 바로 볼 수 있습니다.</div>
                     </div>); })()}
-                  {sel?.type === "svg" && <div style={{ background: "#fff", overflow: "auto", flex: 1, padding: 6 }} dangerouslySetInnerHTML={{ __html: sel.get() }} />}
+                  {sel?.type === "svg" && <div style={{ overflow: "hidden", flex: 1, display: "flex", flexDirection: "column" }}><SvgView svg={sel.get()} zoom={svgZoom} setZoom={setSvgZoom} maxHeight={600} /></div>}
                   {(sel?.type === "code" || sel?.type === "text") && <pre style={{ margin: 0, padding: 10, overflow: "auto", flex: 1, fontSize: 11, lineHeight: 1.45, background: "#0B0F1A", color: "#D6DEEB", fontFamily: "Consolas, 'D2Coding', monospace" }}>{sel.type === "text" ? sel.get().slice(0, 200000) : sel.get()}</pre>}
                   {sel?.type === "table" && (() => { const rows = sel.rows(); const hdrIdx = rows.findIndex(r => r.length > 2); const body = rows.slice(hdrIdx); return (
                     <div style={{ overflow: "auto", flex: 1 }}><table style={{ borderCollapse: "collapse", fontSize: 10.5, minWidth: "100%" }}>
