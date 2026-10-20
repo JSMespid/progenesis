@@ -7841,9 +7841,9 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   const rvw = AE.reviewView(fullModel);
   const rvCov = AE.reviewCoverage(fullModel);
   const scopeName = k => { const S = AE.reviewScope(k); return S ? `${S.proc} ${S.label}` : (AE.LEVELS[k]?.reqProc || k); };
-  const critName = (k, c) => (AE.reviewKindOf(k).criteria.find(x => x.code === c) || {}).label || c;
+  const critName = (k, c) => (AE.reviewCriteriaFor(k, model.version).all.find(x => x.code === c) || {}).label || c;
   const rvRows = [["3단 교차검토 — 검토 AI 의견 및 QA 판정 기록"],
-    [`검토 기준: ${Object.values(AE.REVIEW_KINDS).map(K => `${K.ver} (${K.basis})`).join(" / ")} · 의견 ${rvw.list.length}건 · 미판정 ${rvw.count().open}건`],
+    [`검토 기준: ① ${AE.vdaBasis(model.version)} → ② ${Object.values(AE.REVIEW_KINDS).map(K => `${K.ver} (${K.basis})`).join(" / ")} · 의견 ${rvw.list.length}건 · 미판정 ${rvw.count().open}건`],
     ["산출물", "검토 기준", "항목", "검토됨(현재 내용)", "미판정", "지적 맞음(수정 필요)", "상태"],
     ...rvCov.map(c => [`${c.proc} ${c.label}`, AE.REVIEW_KINDS[c.kind].ver, c.total, c.reviewedAny, c.open, c.valid, !c.total ? "항목 없음" : c.reviewedAny < c.total ? "검토 필요" : c.open ? "판정 필요" : "완료"]),
     [`AI 검토 대상 제외: ${AE.REVIEW_EXCLUDED.map(x => `${x.doc ? AE.ASPICE_DOCS[x.doc].title : x.label}(${x.why})`).join(" · ")}`],
@@ -9170,7 +9170,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       try {
         const r = await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "review", provider: rvSel.id, system: AE.reviewSystemPrompt(), prompt: AE.reviewPrompt(model, lv, batch, V) }) });
         meta = { provider: r.provider, label: r.label, model: r.model, sameAsGenerator: r.sameAsGenerator };
-        const v = AE.validateReviewScope(AE.parseReviewJson(r.text), batch, lv);
+        const v = AE.validateReviewScope(AE.parseReviewJson(r.text), batch, lv, V);
         kept.push(...v.kept); res.dropped += v.dropped.length; done.push(...batch.map(b => b.id));
       } catch (e) {
         if ([401, 403, 409, 428, 500].includes(e.status)) { res.fatal = e; return; }   // 설정·권한 문제는 즉시 중단
@@ -9913,7 +9913,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
                     <button onClick={() => hideGuide(tab, true)} title="이 단계의 안내를 숨깁니다(❓로 다시 볼 수 있음)" style={{ ...small, padding: "2px 8px", color: T.muted }}>안내 숨기기</button>
-                    {(() => { const i = activeProc ? procVisible.findIndex(p => p.id === activeProc.id) : -1; const nx = i >= 0 ? procVisible[i + 1] : tab === "setup" ? procVisible[0] : null; return nx ? <button onClick={() => goProc(nx.id)} title={`${nx.id === "TRACE" ? "" : nx.id + " "}${nx.short}`} style={{ ...small, padding: "2px 8px" }}>다음: {nx.id === "TRACE" ? nx.short : nx.id} →</button> : null; })()}
+                    {(() => { const i = activeProc ? procVisible.findIndex(p => p.id === activeProc.id) : -1; const nx = i >= 0 ? procVisible[i + 1] : tab === "setup" ? procVisible[0] : null; return nx ? <button onClick={() => goProc(nx.id)} title={`${nx.id === "TRACE" ? "" : nx.id + " "}${nx.short}`} style={{ ...small, padding: "2px 8px" }}>다음: {nx.id === "TRACE" || nx.id === "ARTIFACTS" ? nx.short : nx.id} →</button> : null; })()}
                   </div>
                 </div>
               </div>)}
@@ -10288,7 +10288,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             const qf = S.kind === "req" ? (model.reqs[S.lv] || []).filter(r => AE.qualityFlags(r).length).length : 0;
             const ruleHere = findings.filter(f => (f.ids || []).some(id => itemIds.has(id)));
             const sevN = k => findings.filter(f => f.sev === k).length;
-            const critLabel = Object.fromEntries(K.criteria.map(c => [c.code, c.label]));
+            const RC = AE.reviewCriteriaFor(rvLevel, V);
+            const critLabel = Object.fromEntries(RC.all.map(c => [c.code, c.label]));
             const sevColor = { major: T.red, minor: T.amber, info: T.muted };
             const jColor = { valid: T.green, invalid: T.muted, opinion: T.accent };
             const reviewers = [...new Set(v.list.filter(f => f.level === rvLevel).map(f => f.reviewer || f.provider || "검토 AI"))];
@@ -10350,7 +10351,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                           <td style={{ ...cell }} onClick={e => e.stopPropagation()}><input type="checkbox" disabled={busy || !c.total} checked={pick.includes(c.key)} onChange={() => togglePick(c.key)} title={c.total ? `선택 검토에 포함 (변경분 ${chOf[c.key] || 0}건)` : "항목 없음"} /></td>
                           <td style={{ ...cell, color: T.muted }}>{c.group}</td>
                           <td style={{ ...cell }}><span style={{ color: T.muted }}>{c.proc}</span> {c.label}</td>
-                          <td style={{ ...cell }} onClick={e => { e.stopPropagation(); setRvLevel(c.key); setRvGuide(true); }} title="눌러서 검토 기준 설명 보기"><span style={{ color: T.accent, borderBottom: `1px dotted ${T.accent}`, cursor: "help" }}>{AE.REVIEW_KINDS[c.kind].ver}</span></td>
+                          <td style={{ ...cell }} onClick={e => { e.stopPropagation(); setRvLevel(c.key); setRvGuide(true); }} title="눌러서 검토 기준 설명 보기"><span style={{ color: T.accent, borderBottom: `1px dotted ${T.accent}`, cursor: "help" }}>{AE.vdaVersionLabel(V)}</span><span style={{ color: T.muted }}> → {AE.REVIEW_KINDS[c.kind].ver}</span></td>
                           <td style={{ ...cell, textAlign: "right" }}>{c.total}</td>
                           <td style={{ ...cell }}>{c.total ? <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ flex: 1, height: 5, background: T.border, borderRadius: 3, overflow: "hidden" }}><span style={{ display: "block", width: `${pct}%`, height: "100%", background: pct === 100 ? T.green : T.amber }} /></span>{c.reviewedAny}/{c.total}</span> : "-"}</td>
                           <td style={{ ...cell, textAlign: "right", color: c.open ? T.accent : T.muted }}>{c.open}</td>
@@ -10368,6 +10369,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
 
               <div style={{ fontSize: 12, fontWeight: 700, margin: "4px 0 8px" }}>선택한 산출물: <span style={{ color: T.accent }}>{S.proc} {S.label}</span> <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· {K.noun} {lvItems.length}건</span></div>
 
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, padding: "7px 10px", marginBottom: 8, background: T.accent + "0D", border: `1px solid ${T.accentDim}`, borderLeft: `3px solid ${T.accent}`, borderRadius: 8 }}>
+                <b>검토 기준 적용 순서</b><span>① Automotive SPICE <b>{AE.vdaVersionLabel(V)}</b> (VDA QMC) 프로세스 BP 요건 — 적용 기준에서 고른 버전 기준</span><span style={{ color: T.muted }}>→</span><span>② 기존 산출물 품질 기준 (RC · AC · DC · TC)</span><span style={{ marginLeft: "auto", color: T.muted }}>의견의 기준 코드가 VDA-로 시작하면 ①, 아니면 ②에서 나온 지적입니다</span>
+              </div>
               <AeSec title="① 규칙 검사 — 결정론적 (같은 입력이면 같은 결과)" right={<button onClick={() => setTab("trace")} style={small}>추적성·충족도에서 보기</button>}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {chip("V-모델 오류", sevN("error"), sevN("error") ? T.red : T.green, "error")}
@@ -10444,7 +10448,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   const withOp = new Set(fs.map(f => f.reqId));
                   const rset = AE.reviewedIds(model, rvLevel), reviewed = rset.size;
                   const noOp = [...rset].filter(id => !withOp.has(id)).length;
-                  const byCrit = K.criteria.map(c => [c, fs.filter(f => f.criterion === c.code).length]).filter(([, n]) => n);
+                  const byCrit = RC.all.map(c => [c, fs.filter(f => f.criterion === c.code).length]).filter(([, n]) => n);
                   const bySev = ["major", "minor", "info"].map(k => [k, fs.filter(f => f.severity === k).length]);
                   if (!fs.length) return <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: T.bg, fontSize: 11, color: T.muted }}>{reviewed ? `검토한 ${reviewed}건에서 검토 AI 의견이 나오지 않았습니다 (문제 없음으로 판단).` : "아직 이 산출물을 검토하지 않았습니다. 위 버튼으로 검토를 실행하세요."}</div>;
                   return (
@@ -10463,12 +10467,14 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     </div>);
                 })()}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 10.5, color: T.muted, flexWrap: "wrap" }}>
-                  <span>검토 기준 <b style={{ color: T.text }}>{K.ver}</b> — {AE.REVIEW_KIND_ABOUT[S.kind].what}</span>
+                  <span>검토 기준 <b style={{ color: T.text }}>① {AE.vdaVersionLabel(V)} BP 요건</b> → <b style={{ color: T.text }}>② {K.ver}</b> — {AE.REVIEW_KIND_ABOUT[S.kind].what}</span>
                   <button onClick={() => setRvGuide(g => !g)} style={{ ...small, padding: "2px 9px" }}>{rvGuide ? "검토 기준 접기 ▴" : "검토 기준 자세히 보기 ▾"}</button>
                 </div>
                 {rvGuide && (
                   <div style={{ marginTop: 8, padding: "10px 12px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg, fontSize: 11, lineHeight: 1.6 }}>
-                    <div style={{ marginBottom: 6 }}><b>{K.ver}</b>는 {AE.REVIEW_KIND_ABOUT[S.kind].what}입니다. 검토 AI는 이 기준에 해당하는 문제만 지적하고, 기준 코드가 맞지 않는 의견은 규칙으로 걸러집니다. 판 번호(1.0)를 고정해 두어 언제 어떤 기준으로 검토했는지가 기록에 남습니다.</div>
+                    <div style={{ marginBottom: 6, padding: "6px 8px", background: T.accent + "10", border: `1px solid ${T.accent}44`, borderRadius: 7 }}><b>① 1차 — Automotive SPICE {AE.vdaVersionLabel(V)} (VDA QMC) 프로세스 BP 요건</b>: 적용 기준으로 고른 버전의 {S.proc} BP를 항목 단위 점검문으로 요약한 것입니다(원문은 VDA QMC 발행본 기준). 검토 AI는 이 기준을 <b>먼저</b> 적용하고 코드는 <code>VDA-…</code>로 시작합니다.
+                      <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>{RC.vda.map(c => <div key={c.code} style={{ fontSize: 10.5 }}><code style={{ color: T.accent }}>{c.code}</code> <b>{c.label}</b> — <span style={{ color: T.muted }}>{c.desc}</span></div>)}</div></div>
+                    <div style={{ marginBottom: 6 }}><b>② 2차 — {K.ver}</b>는 {AE.REVIEW_KIND_ABOUT[S.kind].what}입니다. 검토 AI는 이 기준에 해당하는 문제만 지적하고, 기준 코드가 맞지 않는 의견은 규칙으로 걸러집니다. 판 번호(1.0)를 고정해 두어 언제 어떤 기준으로 검토했는지가 기록에 남습니다.</div>
                     <div style={{ color: T.muted, marginBottom: 8 }}>근거: {AE.REVIEW_KIND_ABOUT[S.kind].std}</div>
                     <div style={{ overflowX: "auto" }}>
                       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
@@ -10610,7 +10616,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                             <div style={{ marginTop: 6, borderTop: `1px solid ${T.border}` }}>
                               {g.fs.map(f => (
                                 <div key={f.key} style={{ display: "grid", gridTemplateColumns: "86px 1fr 230px", gap: 8, padding: "5px 0", borderBottom: `1px solid ${T.border}22`, fontSize: 10.5, opacity: f.judge?.state === "invalid" ? 0.6 : 1 }}>
-                                  <div><div>{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}{(agr[`${f.level}|${f.reqId}|${f.criterion}`] || 0) >= 2 && <div title="서로 다른 검토 AI가 같은 기준으로 같은 대상을 지적했습니다 — 독립된 두 검토가 일치" style={{ color: T.green, fontSize: 9.5, fontWeight: 700 }}>◎ 검토 AI {agr[`${f.level}|${f.reqId}|${f.criterion}`]}곳 일치</div>}</div>
+                                  <div><div>{AE.isVdaCode(f.criterion) && <span style={{ fontSize: 9, color: "#fff", background: T.accent, borderRadius: 4, padding: "0 4px", marginRight: 4 }}>ASPICE BP</span>}{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}{(agr[`${f.level}|${f.reqId}|${f.criterion}`] || 0) >= 2 && <div title="서로 다른 검토 AI가 같은 기준으로 같은 대상을 지적했습니다 — 독립된 두 검토가 일치" style={{ color: T.green, fontSize: 9.5, fontWeight: 700 }}>◎ 검토 AI {agr[`${f.level}|${f.reqId}|${f.criterion}`]}곳 일치</div>}</div>
                                   <div style={{ lineHeight: 1.5 }}>
                                     {f.evidence && <div>근거: <span style={{ background: T.amber + "22", padding: "0 3px", borderRadius: 3 }}>"{f.evidence}"</span></div>}
                                     <div>{f.issue}</div>
@@ -10648,7 +10654,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                               : !f.removed && <div style={{ marginTop: 4, color: T.muted, fontSize: 9.5, fontFamily: "inherit" }}>수정 안 함</div>}
                             {f.stale && <div style={{ color: T.amber, fontSize: 9.5, fontFamily: "inherit", marginTop: 2 }}>{f.edits.length ? "재검토로 확인 필요" : "내용 변경됨 — 재검토 권장"}</div>}
                             {f.removed && <div style={{ color: T.red, fontSize: 9.5, fontFamily: "inherit" }}>대상 삭제됨</div>}</td>
-                          <td style={{ padding: "6px" }}><div>{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }} title={f.reviewerModel}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}</td>
+                          <td style={{ padding: "6px" }}><div>{AE.isVdaCode(f.criterion) && <span style={{ fontSize: 9, color: "#fff", background: T.accent, borderRadius: 4, padding: "0 4px", marginRight: 4 }}>ASPICE BP</span>}{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }} title={f.reviewerModel}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}</td>
                           <td style={{ padding: "6px", lineHeight: 1.5 }}>
                             <div style={{ color: T.muted, fontSize: 10 }}>{f.reqTitle}</div>
                             {f.evidence && <div style={{ fontSize: 10.5 }}>근거: <span style={{ background: T.amber + "22", padding: "0 3px", borderRadius: 3 }}>"{f.evidence}"</span></div>}

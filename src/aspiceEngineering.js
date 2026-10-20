@@ -47,6 +47,7 @@ export const PROC_NAMES = {
   "HWE.2": { "3.1": "Hardware Design (PAM 확장)", "4.0": "Hardware Design" },
   "HWE.3": { "3.1": "Verification against Hardware Design (PAM 확장)", "4.0": "Verification against Hardware Design" },
   "HWE.4": { "3.1": "Verification against Hardware Requirements (PAM 확장)", "4.0": "Verification against Hardware Requirements" },
+  "SUP.1": { "3.1": "Quality Assurance", "4.0": "Quality Assurance" },
 };
 export function procLabel(proc, version) {
   const n = PROC_NAMES[proc] || {};
@@ -1419,19 +1420,21 @@ export function reviewSystemPrompt() {
 // 검토 대상 요구(batch)와 상위 요구(parents)로 검토 프롬프트를 만든다.
 export function promptReview({ level, reqs, parents = [], version = "both" }) {
   const proc = (LEVELS[level] || {}).reqProc || level;
-  const crit = REVIEW_CRITERIA.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n");
+  const vda = vdaCriteria(proc, version);
+  const crit = `[1차 — ${vdaBasis(version)}]\n${vda.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}\n\n[2차 — ${REVIEW_CRITERIA_VER}, ${REVIEW_CRITERIA_BASIS}]\n${REVIEW_CRITERIA.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}`;
   const brief = r => ({ id: r.id, title: nz(r.title), text: nz(r.text), type: r.type || "", verifCriteria: nz(r.verifCriteria), parents: r.parents || [] });
   const usedParents = new Set(reqs.flatMap(r => r.parents || []));
   const par = parents.filter(p => usedParents.has(p.id)).map(p => ({ id: p.id, title: nz(p.title), text: nz(p.text) }));
   return `역할: 당신은 ASPICE ${proc} (${procLabel(proc, version)}) 산출물을 검토하는 독립 품질보증(QA) 검토자입니다.
 아래 [검토 대상] 요구사항을 [검토 기준]에 따라 검토하고, 문제가 있는 것만 지적하세요.
+검토 순서: 먼저 1차 기준(Automotive SPICE PAM 프로세스 BP 요건)으로 항목마다 점검하고, 그 다음 2차 기준(요구 품질 특성)으로 점검한다. 같은 문제가 두 기준에 모두 해당하면 1차 기준 코드로 한 번만 지적한다.
 
-[검토 기준] (${REVIEW_CRITERIA_VER}, ${REVIEW_CRITERIA_BASIS})
+[검토 기준]
 ${crit}
 
 [규칙]
 1) id는 반드시 [검토 대상]에 있는 ID만 사용한다. 다른 ID를 만들지 않는다.
-2) criterion은 위 기준 코드 중 하나만 쓴다.
+2) criterion은 위 1차·2차 기준 코드 중 하나만 쓴다(1차 코드는 VDA-로 시작).
 3) evidence는 해당 요구의 title·text·verifCriteria에서 그대로 복사한 짧은 구절(30자 이내)이다. 원문에 없는 문구를 쓰지 않는다. 빠진 정보를 지적할 때(COMPLETE·VERIF)는 빈 문자열로 둔다.
 4) severity는 major(검증·구현 불가 수준) / minor(수정 권장) / info(개선 제안) 중 하나.
 5) 문제가 없는 요구는 지적하지 않는다. 요구 하나당 최대 3건.
@@ -1702,19 +1705,21 @@ export function reviewPrompt(model, key, batch, version = "both") {
     const parents = S.lv === "SYS" ? m.reqs.STK : parentsForLevel(m, S.lv);
     return promptReview({ level: S.lv, reqs: batch.map(b => b.src), parents, version });
   }
-  const crit = K.criteria.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n");
+  const vda = vdaCriteria(S.proc, version);
+  const crit = `[1차 — ${vdaBasis(version)}]\n${vda.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}\n\n[2차 — ${K.ver}, ${K.basis}]\n${K.criteria.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}`;
   // 관련 항목은 판단 근거일 뿐이므로 길이를 제한한다 — 서버가 프롬프트를 24,000자에서 자르면 [출력 형식]이 잘려 응답 형식이 깨진다
   const ctx = reviewContext(m, batch.flatMap(b => b.refs || []));
   while (ctx.length && JSON.stringify(ctx).length > 9000) ctx.pop();
   return `역할: 당신은 ASPICE ${S.proc} (${procLabel(S.proc, version)}) 산출물 「${S.label}」을 검토하는 독립 품질보증(QA) 검토자입니다.
 아래 [검토 대상] ${K.noun}을 [검토 기준]에 따라 검토하고, 문제가 있는 것만 지적하세요.
+검토 순서: 먼저 1차 기준(Automotive SPICE PAM 프로세스 BP 요건)으로 항목마다 점검하고, 그 다음 2차 기준으로 점검한다. 같은 문제가 두 기준에 모두 해당하면 1차 기준 코드로 한 번만 지적한다.
 
-[검토 기준] (${K.ver}, ${K.basis})
+[검토 기준]
 ${crit}
 
 [규칙]
 1) id는 반드시 [검토 대상]에 있는 ID만 사용한다. [관련 항목]의 ID로 지적하지 않는다. 다른 ID를 만들지 않는다.
-2) criterion은 위 기준 코드 중 하나만 쓴다.
+2) criterion은 위 1차·2차 기준 코드 중 하나만 쓴다(1차 코드는 VDA-로 시작).
 3) evidence는 해당 항목의 값에서 그대로 복사한 짧은 구절(30자 이내)이다. 원문에 없는 문구를 쓰지 않는다. 빠진 정보를 지적할 때는 빈 문자열로 둔다.
 4) severity는 major(검증·구현 불가 수준) / minor(수정 권장) / info(개선 제안) 중 하나.
 5) 문제가 없는 항목은 지적하지 않는다. 항목 하나당 최대 3건.
@@ -1732,10 +1737,11 @@ ${JSON.stringify(batch.map(b => b.body))}
 {"findings":[{"id":"","criterion":"${K.criteria[0].code}","severity":"minor","evidence":"","issue":"","suggestion":""}]}`;
 }
 // 검토 범위에 맞춘 의견 검증 (대상 ID·기준 코드·근거 인용)
-export function validateReviewScope(raw, batch, key) {
+export function validateReviewScope(raw, batch, key, version = "both") {
   const S = reviewScope(key);
-  if (!S || S.kind === "req") return validateReview(raw, batch.map(b => b.src || b));
-  return validateReview(raw, batch, { criteria: reviewKindOf(key).criteria, evOf: b => b.ev || "" });
+  const all = reviewCriteriaFor(key, version).all;
+  if (!S || S.kind === "req") return validateReview(raw, batch.map(b => b.src || b), { criteria: all });
+  return validateReview(raw, batch, { criteria: all, evOf: b => b.ev || "" });
 }
 // 검토 범위별 현황 — 항목 수 · 현재 내용 기준 검토 완료 수(선택 검토 AI / 아무 검토 AI) · 의견 판정 현황
 export function reviewCoverage(model, provider = "") {
@@ -2966,4 +2972,69 @@ export function hdSvg(kind, comp, model) {
   const H = y + rowH + 60;
   b += `<text x="${left}" y="${H - 30}" font-size="9" fill="#555">넷 라벨 방식 회로도 — 같은 이름의 라벨은 서로 연결됨(빨강: 전원 넷, 파랑: 신호 넷, 기호: GND). 부품 PN은 후보(BOM 참조). 넷 ${hd.nets.length}개 · 부품 ${parts.length}개 · 연결 ${hd.conns.length}</text>`;
   return svgWrap(W, H, b, `${comp.id} ${comp.name} — 회로도 (04-54, ${hdSettings(m).schematicFmt} 내보내기 기준)`);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 16) 1차 검토 기준 — Automotive SPICE PAM(VDA QMC) 프로세스 BP 기반 (선택 버전 3.1 / 4.0 / 겸용)
+//    기존 기준(RC/AC/DC/TC)은 그대로 2차로 쓰고, 그 앞에 해당 프로세스의 BP 요건을 항목 단위 점검문으로 둔다.
+//    BP 문구는 PAM 원문을 옮기지 않고 점검 목적으로 요약한 것이다(원문·심사 기준은 VDA QMC 발행본 참조).
+// ═══════════════════════════════════════════════════════════════════════════
+const VDA_FAMILY = { "SYS.2": "req", "SWE.1": "req", "HWE.1": "req", "SYS.3": "arch", "SWE.2": "arch", "HWE.2": "arch", "SWE.3": "dd",
+  "SYS.4": "ver", "SYS.5": "ver", "SWE.4": "ver", "SWE.5": "ver", "SWE.6": "ver", "HWE.3": "ver", "HWE.4": "ver" };
+// [코드 접미, 4.0 BP, 3.1 BP, 라벨, 항목 점검문]
+const VDA_BP = {
+  req: [
+    ["SPEC", "BP1", "BP1", "요구 명세", "상위(이해관계자·시스템) 요구에서 도출된 요구로서 기능·비기능이 식별되고 '무엇을' 하는지 완결된 문장으로 적혀 있는가"],
+    ["STRUCT", "BP2", "BP2", "구조화", "요구가 유형(기능·비기능·인터페이스)·우선순위·그룹으로 구조화·분류되어 있는가"],
+    ["ANALYZE", "BP3", "BP3", "분석·실현성", "정확성·기술적 실현 가능성·검증 가능성 관점에서 분석된 흔적(수치·조건·제약)이 있는가"],
+    ["CONTEXT", "BP4", "BP4", "환경 영향", "운영 환경·시스템 컨텍스트(다른 요소·외부 시스템)에 미치는 영향이 고려되었는가"],
+    ["VERIFC", "BP3", "BP5", "검증 기준", "합격·불합격을 가를 검증 기준(수치·허용오차·조건)이 요구에 붙어 있는가 (4.0은 BP3 분석에 포함)"],
+    ["TRACE", "BP5", "BP6", "양방향 추적", "상위 요구와의 양방향 추적(부모 ID)이 있고 고아 요구가 아닌가"],
+    ["CONSIST", "BP5", "BP7", "일관성", "상위 요구 및 같은 수준의 다른 요구와 내용·수치·용어가 일관되는가"],
+    ["COMM", "BP6", "BP8", "합의·공유", "관련자(고객·설계)와 합의된 상태(status·release)가 표시되어 있는가"],
+  ],
+  arch: [
+    ["DEVEL", "BP1", "BP1", "아키텍처 수립", "요소(컴포넌트)가 책임·기능과 함께 식별되고 상위 요구를 실현하는 구조로 정의되어 있는가"],
+    ["ALLOC", "BP2", "BP2", "요구 할당", "상위 요구가 요소에 빠짐없이·중복 없이 할당되어 있는가"],
+    ["IFACE", "BP3", "BP3", "인터페이스 정의", "요소 간·외부 인터페이스의 방향·데이터(신호)·주기·프로토콜·범위가 정의되어 있는가"],
+    ["DYN", "BP4", "BP4", "동적 동작", "운영 모드·상태 전이·타이밍·시퀀스 등 동적 동작이 기술되고 요소 설명과 맞는가"],
+    ["ALT", "BP5", "BP5", "대안 평가·근거", "아키텍처 대안 검토와 선택 근거(자원·성능·안전·비용)가 있는가 (SWE.2 3.1 BP6 자원 소비 목표 포함)"],
+    ["TRACE", "BP6", "BP6", "양방향 추적", "요구 ↔ 요소(↔ 인터페이스) 양방향 추적이 성립하는가"],
+    ["CONSIST", "BP6", "BP7", "일관성", "요구·요소·인터페이스·동적 동작 사이에 명칭·수치·방향이 일관되는가"],
+    ["COMM", "BP7", "BP8", "합의·공유", "합의된 설계임이 식별되고 관련자에게 공유 가능한 상태인가"],
+  ],
+  dd: [
+    ["DEVEL", "BP1", "BP1", "상세설계 수립", "유닛의 알고리즘·자료구조·내부 동작이 구현 가능할 만큼 구체적으로 설계되어 있는가"],
+    ["IFACE", "BP2", "BP2", "유닛 인터페이스", "유닛 간·컴포넌트 간 인터페이스(함수 원형·포트·자료형·범위)가 정의되어 있는가"],
+    ["DYN", "BP3", "BP3", "동적 동작", "유닛의 상태·호출 순서·타이밍이 기술되고 아키텍처의 동적 동작과 맞는가"],
+    ["EVAL", "BP4", "BP4", "설계 평가", "상호운용성·상호작용·중요도·복잡도 등 평가 기준으로 설계가 검토된 근거가 있는가"],
+    ["UNIT", "BP5", "BP8", "유닛 구현", "유닛(코드)이 상세설계와 일치하게 작성되었는가(명칭·인터페이스·알고리즘)"],
+    ["TRACE", "BP6", "BP5", "양방향 추적", "SW 요구 ↔ 유닛 ↔ 코드의 양방향 추적이 성립하는가"],
+    ["CONSIST", "BP6", "BP6", "일관성", "상세설계와 아키텍처·요구·코드 사이에 불일치가 없는가"],
+    ["COMM", "BP7", "BP7", "합의·공유", "합의된 상세설계임이 식별되는가"],
+  ],
+  ver: [
+    ["SPEC", "BP1", "BP2", "검증 수단 명세", "시험 항목이 검증 대상(요구·인터페이스·유닛)에 대응하고 입력·절차·기대 결과·합격 기준이 명세되어 있는가"],
+    ["CRIT", "BP1", "BP2", "검증 기준·환경", "합격 기준이 정량적이고 시험 환경·사전조건·커버리지 기준(유닛 검증)이 정의되어 있는가"],
+    ["SELECT", "BP2", "BP3", "선택·회귀", "릴리스·변경에 따라 수행할 시험(회귀 포함) 선택 기준과 선택 결과가 있는가"],
+    ["PERFORM", "BP3", "BP4", "수행·기록", "수행 결과(통과·미통과·미수행)와 형상·일자·수행자 기록 틀이 갖춰져 있는가"],
+    ["TRACE", "BP4", "BP5", "양방향 추적", "검증 수단 ↔ 대상(요구·설계·유닛) ↔ 결과의 양방향 추적이 성립하는가"],
+    ["CONSIST", "BP4", "BP6", "일관성", "검증 수단이 대상 요구·설계의 수치·조건·용어와 일관되는가"],
+    ["COMM", "BP5", "BP7", "요약·공유", "검증 결과 요약과 관련자 공유 상태가 있는가"],
+  ],
+};
+export function vdaVersionLabel(version) { const vs = versionsOf(version); return vs.map(v => `PAM v${v}`).join(" + "); }
+export function vdaCriteria(proc, version = "both") {
+  const fam = VDA_FAMILY[proc]; if (!fam) return [];
+  const vs = versionsOf(version);
+  const bpLabel = r => vs.length === 1 ? (vs[0] === "4.0" ? r[1] : r[2]) : (r[1] === r[2] ? r[1] : `4.0 ${r[1]} / 3.1 ${r[2]}`);
+  return VDA_BP[fam].map(r => ({ code: `VDA-${proc.replace(".", "")}-${r[0]}`, label: `ASPICE ${proc} ${bpLabel(r)} ${r[3]}`, desc: r[4], vda: true, bp: bpLabel(r) }));
+}
+export const vdaBasis = version => `Automotive SPICE ${vdaVersionLabel(version)} (VDA QMC) 프로세스 BP 요건 — 점검용 요약`;
+export const isVdaCode = code => /^VDA-/.test(String(code || ""));
+// 검토 범위 key의 전체 기준(1차 VDA + 2차 기존) — 화면 표기·의견 라벨·검증용
+export function reviewCriteriaFor(key, version = "both") {
+  const S = reviewScope(key); const K = reviewKindOf(key);
+  return { vda: S ? vdaCriteria(S.proc, version) : [], base: K.criteria, all: [...(S ? vdaCriteria(S.proc, version) : []), ...K.criteria], ver: `${vdaVersionLabel(version)} + ${K.ver}`, baseVer: K.ver };
 }
