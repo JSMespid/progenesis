@@ -570,6 +570,19 @@ export function emptyModel() {
     aiReview: { runs: [], findings: [], hashes: {}, edits: [] }, // 3단 교차검토(규칙 → 검토 AI 의견 → 사람 판정 → 대상 수정 기록) — 11절
   };
 }
+// 이전 생성본의 클래스명이 한글→"____"로 저장된 경우를 영문 식별자로 복구 (코드 파일명·XMI·다이어그램 공통)
+function repairUnitDD(u) {
+  const dd = u && u.dd; if (!dd || !Array.isArray(dd.classes) || !dd.classes.length) return u;
+  const bad = n => !n || /^_*$/.test(n) || n === "Unnamed";
+  if (!dd.classes.some(c => bad(c.name))) return u;
+  const base = asciiName(u.name, `Unit_${String(u.id || "").replace(/[^A-Za-z0-9]/g, "_")}`);
+  const map = {}; let k = 0;
+  const classes = dd.classes.map(c => { if (!bad(c.name)) return c; const nn = c.stereotype === "SWC" || k === 0 ? base : `${base}_C${k}`; k++; map[c.name] = nn; return { ...c, name: nn }; });
+  const fix = n => map[n] || n;
+  return { ...u, dd: { ...dd, classes, assoc: (dd.assoc || []).map(a => ({ ...a, from: fix(a.from), to: fix(a.to) })),
+    sequences: (dd.sequences || []).map(sq => ({ ...sq, lifelines: (sq.lifelines || []).map(fix), steps: (sq.steps || []).map(st => ({ ...st, from: fix(st.from), to: fix(st.to) })) })),
+    code: undefined } };   // 이름이 바뀌었으므로 코드는 재생성 대상
+}
 export function normalizeModel(m) {
   const e = emptyModel();
   const x = m && typeof m === "object" ? m : {};
@@ -583,7 +596,7 @@ export function normalizeModel(m) {
     modes: [...(x.modes || [])], rationale: { ...e.rationale, ...(x.rationale || {}) },
     tests: [...(x.tests || [])],
     linkReview: { ...(x.linkReview || {}) }, reqSnaps: { ...(x.reqSnaps || {}) }, reviewLog: [...(x.reviewLog || [])],
-    units: { SW: [...((x.units || {}).SW || [])] },
+    units: { SW: [...((x.units || {}).SW || [])].map(repairUnitDD) },
     aiReview: { runs: [...((x.aiReview || {}).runs || [])], findings: [...((x.aiReview || {}).findings || [])], hashes: { ...((x.aiReview || {}).hashes || {}) }, edits: [...((x.aiReview || {}).edits || [])] },
   };
 }
