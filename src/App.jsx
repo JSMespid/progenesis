@@ -7999,9 +7999,9 @@ function hw2ModelFiles(meta, ctx, folder = "HW4101_HW설계_모델") {
   if (!comps.length) return [];
   const files = [];
   try { files.push({ path: `${folder}/block/HW_architecture_block.svg`, content: AE.hdSvg("block", null, model) }); } catch (_) {}
-  comps.forEach(c => { try { files.push({ path: `${folder}/schematics/${c.id}_schematic.svg`, content: AE.hdSvg("schematic", c, model) }); } catch (_) {} });
+  comps.forEach(c => { try { files.push({ path: `${folder}/schematics/${c.id}_schematic.svg`, content: AE.hdSvg("schematic", c, model) }); } catch (_) {} try { files.push({ path: `${folder}/schematics/${c.id}_wired.svg`, content: AE.hdSvg("wired", c, model) }); } catch (_) {} });
   const S = AE.hdSettings(model);
-  files.push({ path: `${folder}/README.txt`, content: [`HWE.2 HW 설계 모델 — ${meta.name || ""}`, ``, `block/      : HW 아키텍처 블록도(04-52) SVG`, `schematics/ : 블록별 회로도(04-54) SVG — 넷 라벨 방식`, `EDA 교환 파일(${S.schematicFmt} 회로도 · ${S.layoutFmt} · ${S.fabFmt})은 다음 생성 단계에서 같은 폴더에 추가됩니다.`, `부품 PN은 AI 후보(BOM 14-54 참조). 모든 부품·넷·특성에 근거 HW 요구 ID가 기록됩니다.`].join("\n") });
+  files.push({ path: `${folder}/README.txt`, content: [`HWE.2 HW 설계 모델 — ${meta.name || ""}`, ``, `block/      : HW 아키텍처 블록도(04-52) SVG`, `schematics/ : 블록별 회로도(04-54) SVG — <id>_schematic.svg 넷 라벨 방식(EDA용) · <id>_wired.svg 연결선 회로도(모든 넷을 선으로, 보기용)`, `EDA 교환 파일(${S.schematicFmt} 회로도 · ${S.layoutFmt} · ${S.fabFmt})은 다음 생성 단계에서 같은 폴더에 추가됩니다.`, `부품 PN은 AI 후보(BOM 14-54 참조). 모든 부품·넷·특성에 근거 HW 요구 ID가 기록됩니다.`].join("\n") });
   return files;
 }
 // ── SVG 미리보기 배율: "fit" = 패널 너비에 맞춤(viewBox 유지), 숫자 = 원본 대비 배율 ──
@@ -9082,7 +9082,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [tplGroup, setTplGroup] = useState("SYS_RS");
   const [vFilter, setVFilter] = useState("SYS5");
   const [ddView, setDdView] = useState({ unit: null, kind: "component", mode: "diagram", file: 0 });
-  const [hdView, setHdView] = useState({ comp: null, kind: "schematic" });   // HWE.2 회로 설계 보기
+  const [hdView, setHdView] = useState({ comp: null, kind: "wired" });   // HWE.2 회로 설계 보기
   const [artSel, setArtSel] = useState(null);   // 산출물 보기: 선택 항목 { type: doc|svg|code|text|table, ... }
   const [artQ, setArtQ] = useState("");         // 산출물 보기 필터
   const zipAllBusy = useRef(false);
@@ -9581,7 +9581,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       const CONC = n.useAI ? 3 : 20;
       for (let i = 0; i < targets.length; i += CONC) await Promise.all(targets.slice(i, i + CONC).map(one));
       setModel(n);
-      if (targets.length === 1) setHdView({ comp: targets[0].id, kind: "schematic" });
+      if (targets.length === 1) setHdView({ comp: targets[0].id, kind: "wired" });
       return `HW 블록 ${done}개 회로 설계 완료 (AI ${aiOk} · 규칙 ${done - aiOk}) — 부품 PN은 후보입니다. 회로도·BOM·특별 특성·분석 결과는 ZIP의 HW 상세설계서(04-53)·BOM(14-54)·특별 특성(17-57)·분석 결과(15-51)로 생성됩니다.`;
     });
   }
@@ -11095,7 +11095,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 { type: "table", key: "hw:bom", label: "BOM 미리보기 (14-54)", sub: "부품 PN 후보", rows: () => [["블록", "RefDes", "종류", "값", "패키지", "제조사", "PN(후보)", "정격", "근거 요구"], ...hwComps.flatMap(c => c.hd.parts.map(p => [c.name, p.ref, p.kind, p.value, p.pkg, p.mfr, p.mpn, p.rating, (p.reqs || []).join(", ")]))] },
                 { type: "table", key: "hw:sc", label: "특별 특성 미리보기 (17-57)", sub: "", rows: () => [["블록", "ID", "특성", "분류", "대상", "값", "관리", "검증", "근거"], ...hwComps.flatMap(c => c.hd.specials.map(x => [c.name, x.id, x.char, x.type, x.target, x.value, x.control, x.verify, (x.reqs || []).join(", ")]))] },
                 { type: "table", key: "hw:an", label: "설계 분석 미리보기 (15-51)", sub: "Derating·열·최악조건", rows: () => [["블록", "분석", "항목", "정격/공칭", "적용/최소~최대", "기준/한계", "판정", "비고"], ...hwComps.flatMap(c => [...c.hd.analysis.derating.map(x => [c.name, "Derating", `${x.ref} ${x.param}`, x.rated, x.applied, `${x.ratio} / ${x.limit}`, x.ok ? "OK" : "NG", x.note]), ...c.hd.analysis.thermal.map(x => [c.name, "열", x.ref, `Pd ${x.pd_mW}mW`, `Ta ${x.ta} → Tj ${x.tj}`, x.limit, x.ok ? "OK" : "NG", x.note]), ...c.hd.analysis.worstCase.map(x => [c.name, "최악조건", x.item, x.nominal, `${x.min} ~ ${x.max}`, x.limit, x.ok ? "OK" : "NG", `${x.method} ${x.note}`])])] }] });
-              hwComps.forEach(c => groups.push({ cat: "hw", name: `${c.id} ${c.name}`, items: [{ type: "svg", key: `hd:${c.id}`, label: "회로도 (04-54)", sub: `부품 ${c.hd.parts.length} · 넷 ${c.hd.nets.length} · svg`, get: () => AE.hdSvg("schematic", c, model), file: `${c.id}_schematic.svg` },
+              hwComps.forEach(c => groups.push({ cat: "hw", name: `${c.id} ${c.name}`, items: [{ type: "svg", key: `hdw:${c.id}`, label: "연결선 회로도 (한눈에)", sub: `핀 연결 ${AE.hdPinStats(c.hd).con}/${AE.hdPinStats(c.hd).total} · svg`, get: () => AE.hdSvg("wired", c, model), file: `${c.id}_wired.svg` },
+                { type: "svg", key: `hd:${c.id}`, label: "회로도 (04-54 · 넷 라벨·EDA용)", sub: `부품 ${c.hd.parts.length} · 넷 ${c.hd.nets.length} · svg`, get: () => AE.hdSvg("schematic", c, model), file: `${c.id}_schematic.svg` },
                 { type: "table", key: `hdp:${c.id}`, label: "부품·넷 표", sub: "", rows: () => [["RefDes", "종류", "값", "패키지", "제조사 / PN(후보)", "정격", "용도", "핀→넷"], ...c.hd.parts.map(p => [p.ref, p.kind, p.value, p.pkg, `${p.mfr} / ${p.mpn}`, p.rating, p.desc, c.hd.conns.filter(x => x.ref === p.ref).map(x => `${x.pin}:${x.net}`).join(" ")])] }] }));
             }
             const q = artQ.trim().toLowerCase();

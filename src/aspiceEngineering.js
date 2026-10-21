@@ -3003,7 +3003,107 @@ JSON만 출력:
 }
 
 // ── HW 다이어그램 SVG: block(아키텍처 블록도, 04-52) · schematic(회로도 — 넷 라벨 방식) ──
-export const HD_DIAGRAMS = [["schematic", "회로도"], ["block", "블록도"]];
+export const HD_DIAGRAMS = [["wired", "연결선 회로도(한눈에)"], ["schematic", "회로도(넷 라벨·EDA용)"], ["block", "블록도"]];
+// 연결선 회로도(한눈에 보기) — 모든 넷을 실제 선으로 잇는다.
+//  · 핀이 가장 많은 부품(허브: MCU 등)을 가운데, 나머지 부품은 좌·우 열에 두고 모든 핀을 허브 쪽으로 낸다.
+//  · 허브와 좌·우 열 사이의 '채널'에 넷마다 세로 선(트랙) 1개 — 핀은 가로선으로 자기 넷 트랙에 붙는다(접점 ●).
+//  · 좌·우 양쪽에 걸친 넷은 허브 위쪽의 가로 브리지로 두 트랙을 잇는다. 허브 핀과 열 부품 핀은 y가 반 칸 어긋나 가로선이 겹치지 않는다.
+function hdWiredSvg(comp, m) {
+  const hd = comp?.hd; if (!hd || !hd.parts.length) return "";
+  const P = 16, STUB = 18, TRK = 13;
+  const netOf = {}; hd.conns.forEach(c => { if (c.net && c.net !== "NC") netOf[`${c.ref}.${c.pin}`] = c.net; });
+  const pinNet = (p, pn) => netOf[`${p.ref}.${pn.num}`] || netOf[`${p.ref}.${pn.name}`] || null;
+  const parts = hd.parts;
+  const hub = parts.length > 2 ? parts.reduce((a, p) => (p.pins.length > a.pins.length ? p : a), parts[0]) : null;
+  const ml = xs => xs.reduce((s, q) => Math.max(s, String(q.name || "").length), 0);
+  const kindOf = n => /GND|VSS/i.test(n) ? "gnd" : /^(V|VCC|VDD|\+?\d+V|\d+V\d)/i.test(n) ? "pwr" : "sig";
+  const col = n => kindOf(n) === "gnd" ? "#333" : kindOf(n) === "pwr" ? "#B00020" : "#1A4D8F";
+  // 허브 핀 좌우 배분 (기존 회로도와 같은 규칙)
+  let hubL = [], hubR = [];
+  if (hub) { hubL = hub.pins.filter((pn, i) => pn.type === "in" || pn.type === "pwr" || (pn.type === "passive" && i % 2 === 0)); hubR = hub.pins.filter(pn => !hubL.includes(pn)); }
+  const netSideHub = {}; hubL.forEach(pn => { const n = pinNet(hub, pn); if (n) netSideHub[n] = (netSideHub[n] || 0) - 1; }); hubR.forEach(pn => { const n = pinNet(hub, pn); if (n) netSideHub[n] = (netSideHub[n] || 0) + 1; });
+  // 나머지 부품을 좌/우 열로 — 허브와 공유하는 넷이 있는 쪽, 없으면 높이 균형
+  const others = parts.filter(p => p !== hub);
+  const colL = [], colR = []; let hL = 0, hR = 0;
+  // 전원·GND는 어디에나 있으므로 배치 판단에서 빼고, 신호 넷으로 허브의 어느 쪽과 이어지는지 본다(다른 부품을 거쳐 이어지면 그 부품 쪽)
+  const sideOfNet = { ...netSideHub };
+  others.forEach(p => { const score = p.pins.reduce((s, pn) => { const n = pinNet(p, pn); return s + (n && kindOf(n) === "sig" ? (sideOfNet[n] || 0) : 0); }, 0); const ph = 24 + p.pins.length * P + 30;
+    const goL = score < 0 || (score === 0 && hL <= hR); if (goL) { colL.push(p); hL += ph; } else { colR.push(p); hR += ph; }
+    p.pins.forEach(pn => { const n = pinNet(p, pn); if (n && kindOf(n) === "sig" && !sideOfNet[n]) sideOfNet[n] = goL ? -1 : 1; }); });
+  // 좌표
+  const top0 = 60;
+  const wOf = p => Math.max(70, Math.round(ml(p.pins) * 5.2 + 26));
+  const colLW = Math.max(0, ...colL.map(wOf)), colRW = Math.max(0, ...colR.map(wOf));
+  const leftX = 30;
+  const pinsAt = []; // { net, x, y, side: "L"(채널 왼쪽 끝에서 오른쪽으로) | "R", ref, name }
+  const boxes = [];
+  const place = (list, xBox, w, side) => { let y = top0 + 8; // 열 부품은 핀 y가 허브 격자와 반 칸 어긋나게(… +8)
+    list.forEach(p => { const h = 20 + p.pins.length * P; boxes.push({ p, x: xBox, y, w, h, pinSide: side });
+      p.pins.forEach((pn, k) => { const py = y + 14 + k * P; pinsAt.push({ p, pn, net: pinNet(p, pn), y: py, x: side === "R" ? xBox + w + STUB : xBox - STUB, edge: side === "R" ? xBox + w : xBox, dir: side }); });
+      y += h + 30; while ((y + 14 - top0) % P !== 8) y++; }); return y; };
+  // 채널 트랙 수를 먼저 세기 위해 임시로 넷의 위치 집합 계산
+  const netsL = new Set(), netsR = new Set();
+  colL.forEach(p => p.pins.forEach(pn => { const n = pinNet(p, pn); if (n) netsL.add(n); }));
+  colR.forEach(p => p.pins.forEach(pn => { const n = pinNet(p, pn); if (n) netsR.add(n); }));
+  hubL.forEach(pn => { const n = pinNet(hub, pn); if (n) netsL.add(n); });
+  hubR.forEach(pn => { const n = pinNet(hub, pn); if (n) netsR.add(n); });
+  const order = s => [...s].sort((a, b) => (kindOf(a) === "sig" ? 1 : 0) - (kindOf(b) === "sig" ? 1 : 0) || a.localeCompare(b));
+  const trL = order(netsL), trR = order(netsR);
+  const chLW = trL.length * TRK + 50, chRW = trR.length * TRK + 50;
+  const colLx = leftX + 40;
+  const chL0 = colLx + colLW + STUB + 25;
+  const hubW = hub ? Math.max(120, Math.round((ml(hubL) + ml(hubR)) * 5.2 + 30)) : 0;
+  const hubX = hub ? chL0 + chLW : chL0;
+  const chR0 = hub ? hubX + hubW + STUB + 25 : chL0;
+  const colRx = (hub ? chR0 + chRW : chL0 + chLW) + STUB + 25;
+  const yEndL = place(colL, colLx, colLW || 70, "R");
+  const yEndR = place(colR, colRx, colRW || 70, "L");
+  let hubH = 0;
+  if (hub) { hubH = 24 + Math.max(hubL.length, hubR.length) * P; boxes.push({ p: hub, x: hubX, y: top0, w: hubW, h: hubH, hub: true });
+    hubL.forEach((pn, k) => pinsAt.push({ p: hub, pn, net: pinNet(hub, pn), y: top0 + 16 + k * P, x: hubX - STUB, edge: hubX, dir: "L" }));
+    hubR.forEach((pn, k) => pinsAt.push({ p: hub, pn, net: pinNet(hub, pn), y: top0 + 16 + k * P, x: hubX + hubW + STUB, edge: hubX + hubW, dir: "R" })); }
+  // 핀이 어느 채널에 붙는지: 좌열·허브 왼쪽 → 왼쪽 채널, 우열·허브 오른쪽 → 오른쪽 채널 (허브가 없으면 모두 왼쪽 채널)
+  const chOf = pa => (!hub ? "L" : (colL.includes(pa.p) || (pa.p === hub && pa.dir === "L")) ? "L" : "R");
+  const trackX = (ch, n) => ch === "L" ? chL0 + 20 + trL.indexOf(n) * TRK : chR0 + 20 + trR.indexOf(n) * TRK;
+  const both = hub ? trL.filter(n => trR.includes(n)) : [];
+  const bridgeY = {}; both.forEach((n, i) => { bridgeY[n] = top0 - 24 - i * 10; });
+  const topY = Math.min(top0 - 20, ...Object.values(bridgeY).map(v => v - 12));
+  const shift = topY < 40 ? 40 - topY : 0;   // 브리지가 많으면 전체를 아래로
+  let b = "";
+  const dn = (n, pa) => n ? ` data-net="${X(n)}"${pa ? ` data-pin="${X(pa.p.ref)}.${X(pa.pn.name)}"` : ""}` : "";
+  // 부품 상자
+  boxes.forEach(bx => { const p = bx.p;
+    b += `<rect x="${bx.x}" y="${bx.y}" width="${bx.w}" height="${bx.h}" fill="${bx.hub ? "#EEF4FF" : "#FFFDF2"}" stroke="#222"/><text x="${bx.x + bx.w / 2}" y="${bx.y - 6}" text-anchor="middle" font-weight="700" font-size="10.5">${X(p.ref)}</text><text x="${bx.x + bx.w / 2}" y="${bx.y + bx.h + 11}" text-anchor="middle" font-size="8.5" fill="#555">${X(p.value)}${p.pkg ? ` · ${X(p.pkg)}` : ""}</text>`; });
+  // 핀·가로선·접점
+  const byNet = {};
+  pinsAt.forEach(pa => {
+    const nm = X(pa.pn.name); const inside = pa.dir === "R" ? `<text x="${pa.edge - 4}" y="${pa.y + 3}" text-anchor="end" font-size="8">${nm}</text>` : `<text x="${pa.edge + 4}" y="${pa.y + 3}" font-size="8">${nm}</text>`;
+    b += `<line x1="${pa.edge}" y1="${pa.y}" x2="${pa.x}" y2="${pa.y}" stroke="#222"${dn(pa.net, pa)}/>` + inside;
+    if (!pa.net) { const xx = pa.x; b += `<text x="${pa.dir === "R" ? xx + 3 : xx - 3}" y="${pa.y + 3}" font-size="8" fill="#999" ${pa.dir === "R" ? "" : 'text-anchor="end"'}>NC ×</text>`; return; }
+    const ch = chOf(pa); const tx = trackX(ch, pa.net); const c = col(pa.net);
+    b += `<line x1="${pa.x}" y1="${pa.y}" x2="${tx}" y2="${pa.y}" stroke="${c}" stroke-width="1.2"${dn(pa.net, pa)}/><circle cx="${tx}" cy="${pa.y}" r="2.6" fill="${c}"${dn(pa.net)}/>`;
+    (byNet[pa.net] = byNet[pa.net] || { L: [], R: [], n: 0 }); byNet[pa.net][ch].push(pa.y); byNet[pa.net].n++;
+  });
+  // 트랙(세로선)·브리지·넷 이름
+  Object.entries(byNet).forEach(([n, g]) => { const c = col(n); const lone = g.n < 2;
+    ["L", "R"].forEach(ch => { const ys = g[ch]; if (!ys.length) return; const tx = trackX(ch, n);
+      const y1 = both.includes(n) ? bridgeY[n] : Math.min(...ys), y2 = Math.max(...ys);
+      if (y2 > y1) b += `<line x1="${tx}" y1="${y1}" x2="${tx}" y2="${y2}" stroke="${c}" stroke-width="1.4"${dn(n)}/>`;
+      if (!both.includes(n)) b += `<text x="${tx}" y="${Math.min(...ys) - 4}" text-anchor="middle" font-size="7.5" fill="${lone ? "#C77700" : c}" font-weight="700"${dn(n)}>${X(n)}${lone ? " ⚠" : ""}</text>`; });
+    if (both.includes(n)) { const xa = trackX("L", n), xb = trackX("R", n), yb = bridgeY[n];
+      b += `<line x1="${xa}" y1="${yb}" x2="${xb}" y2="${yb}" stroke="${c}" stroke-width="1.4"${dn(n)}/><circle cx="${xa}" cy="${yb}" r="2" fill="${c}"/><circle cx="${xb}" cy="${yb}" r="2" fill="${c}"/><text x="${(xa + xb) / 2}" y="${yb - 2.5}" text-anchor="middle" font-size="7.5" font-weight="700" fill="${c}"${dn(n)}>${X(n)}</text>`; } });
+  const st = hdPinStats(hd);
+  const W = Math.max(colRx + (colRW || 0) + 60, (hub ? chR0 + chRW : chL0 + chLW) + 80, 600);
+  const Hc = Math.max(yEndL, yEndR, top0 + hubH + 30);
+  let ly = Hc + 10;
+  b += `<text x="${leftX}" y="${ly}" font-size="9" fill="#555">연결선 회로도(한눈에 보기) — 모든 넷을 선으로 표시: 빨강 전원 · 검정 GND · 파랑 신호 · ● 접점 · NC × 미연결 · ⚠ 한 핀만 연결. 연결된 핀 ${st.con}/${st.total} · 넷 ${Object.keys(byNet).length} · 부품 ${parts.length}${hub ? ` · 가운데 ${hub.ref}` : ""}</text>`;
+  ly += 14; b += `<text x="${leftX}" y="${ly}" font-size="9" fill="#555">이해를 돕는 보기용 배치입니다. EDA 납품용은 '회로도'(넷 라벨 방식, ${hdSettings(m).schematicFmt} 기준)를 쓰세요.</text>`;
+  if (!st.con) { ly += 16; b += `<text x="${leftX}" y="${ly}" font-size="10" fill="#B00020">⚠ 이 블록은 아직 연결(넷)이 없습니다 — HWE.2의 [🔗 연결 생성]을 먼저 실행하세요.</text>`; }
+  const H = ly + 24 + shift;
+  const body = shift ? `<g transform="translate(0,${shift})">${b}</g>` : b;
+  return svgWrap(W, H, body, `${comp.id} ${comp.name} — 연결선 회로도 (한눈에 보기)`);
+}
+
 export function hdSvg(kind, comp, model) {
   const m = normalizeModel(model);
   if (kind === "block") {
@@ -3032,6 +3132,7 @@ export function hdSvg(kind, comp, model) {
     if (legendRows.length) { b += `<text x="30" y="${ly}" font-weight="700">인터페이스 범례</text>`; ly += 8; legendRows.forEach(([id, ft, d]) => { ly += 14; b += `<text x="30" y="${ly}" font-size="9.5" fill="#333"><tspan font-family="monospace">${X(id)}</tspan>  ${X(ft)} — ${X(d.slice(0, 100))}</text>`; }); ly += 16; }
     return svgWrap(W, legendRows.length ? ly : H, b, `HW 아키텍처 블록도 (04-52)${comp ? ` — ${comp.name} 강조` : ""}`);
   }
+  if (kind === "wired") return hdWiredSvg(comp, m);
   const hd = comp?.hd; if (!hd) return "";
   // 회로도: 부품 심볼(사각 + 핀)을 격자 배치, 각 핀 끝에 넷 라벨. 전원/GND 넷은 심볼 표기.
   const parts = hd.parts; const perRow = 4, colW = 290, rowGap = 44, top = 44, left = 70;
