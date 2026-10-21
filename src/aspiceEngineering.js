@@ -623,6 +623,22 @@ export function ruleTestsForInterface(itf, testLevel, compName = {}) {
   const to = compName[itf.to] || itf.to || "?";
   const base = { level: testLevel, targets: [itf.id], origin: "rule", regression: true, env: "" };
   const sig = itf.signals ? ` (${String(itf.signals).slice(0, 60)})` : "";
+  // HWE.3(HW 설계 검증): 인터페이스 종류별 전기적 검증 — SW식 '연동·타임아웃' 대신 측정·물리층 시험
+  if (testLevel === "HWE3") {
+    const k = `${itf.kind || ""} ${itf.signals || ""}`;
+    if (/전원|power|supply|vdd|vcc|\d\s*v\b/i.test(k) && !/버스|bus|can|lin|spi|i2c|uart/i.test(itf.kind || "")) return [
+      { ...base, title: `${from} → ${to} 전원 품질 (전압 정확도·리플)${sig}`, technique: "측정(전압·리플)", precondition: "정상 부하, 오실로스코프·DMM 준비",
+        steps: `1) ${to} 입력단에서 정상 부하 시 전압을 측정한다; 2) 리플·노이즈(peak-to-peak)를 측정한다; 3) 최소·최대 입력 전압 조건에서 반복한다`, expected: "설계 전압·허용 편차·리플 한계 이내", passCriteria: "전 조건에서 설계 사양 이내" },
+      { ...base, title: `${from} → ${to} 부하 과도 응답${sig}`, technique: "측정(과도 응답)", precondition: "전자 부하·오실로스코프",
+        steps: "1) 부하를 최소↔최대로 계단 변화시킨다; 2) 전압 언더슈트·오버슈트와 회복 시간을 측정한다", expected: "과도 전압이 하위 회로 동작 범위 안에서 회복", passCriteria: "언더·오버슈트와 회복 시간이 설계 기준 이내", regression: false }];
+    if (/버스|bus|can|lin|spi|i2c|uart|ethernet/i.test(k)) return [
+      { ...base, title: `${from} → ${to} 물리층 파형·타이밍${sig}`, technique: "측정(신호 무결성·타이밍)", precondition: "오실로스코프·프로토콜 분석기",
+        steps: "1) 신호 레벨(High/Low)·상승·하강 시간을 측정한다; 2) 셋업·홀드 또는 비트 타이밍을 측정한다; 3) 종단·노이즈를 확인한다", expected: "레벨·타이밍이 부품 데이터시트·버스 규격 이내", passCriteria: "전 항목 규격 이내" },
+      { ...base, title: `${from} → ${to} 배선 결함(단선·단락) 주입`, technique: "결함 주입(fault injection)", precondition: "결함 주입 박스(단선·GND/전원 단락)",
+        steps: "1) 신호선 단선·GND 단락·전원 단락을 차례로 주입한다; 2) 부품 손상 여부와 보호 동작을 확인한다; 3) 해제 후 정상 동작 복귀를 확인한다", expected: "부품 손상 없음, 결함 해제 후 정상 동작", passCriteria: "손상 없음·복귀 확인" }];
+    return [{ ...base, title: `${from} → ${to} 신호 레벨·잡음${sig}`, technique: "측정(신호 레벨·잡음)", precondition: "오실로스코프·신호 발생기",
+      steps: `1) ${from} 출력 신호의 레벨·범위를 측정한다; 2) ${to} 입력단에서 잡음·필터 응답을 측정한다; 3) 최소·최대 신호 조건에서 반복한다`, expected: `${to} 입력 허용 범위 안의 신호, 잡음은 설계 한계 이내`, passCriteria: "레벨·잡음이 설계 기준 이내" }];
+  }
   const tests = [{ ...base, title: `${from} → ${to} 연동${sig}`, technique: "인터페이스 기반 통합 검증",
     precondition: `${from}, ${to} 통합 형상 준비`,
     steps: `1) ${from}에서 인터페이스 출력(${itf.kind || "신호"})을 발생시킨다; 2) ${to}의 수신·처리 결과를 관측한다; 3) 값·단위·범위 일치를 확인한다`,
