@@ -3797,7 +3797,7 @@ export function applyUtResults(model, parsed, fileName = "") {
     cases: cases.map(c => ({ unit: c.unit, case: c.case, origin: c.origin, reqs: c.reqs, result: c.result, checks: c.checks, failed: c.failed, detail: str(c.detail, 300) })), units };
   // 유닛별 최신 결과를 누적 보관 — 유닛을 하나씩 실행해도 앞서 실행한 유닛의 결과가 사라지지 않는다
   m.utResults = { ...utResultsOf(m) };
-  Object.entries(units).forEach(([uid, r]) => { m.utResults[uid] = { ...r, at: run.at, ranAt: run.ranAt, cc: run.cc, os: run.os, file: run.file, coverageOn: run.coverage, cases: run.cases.filter(c => c.unit === uid) }; });
+  Object.entries(units).forEach(([uid, r]) => { m.utResults[uid] = { ...r, at: run.at, ranAt: run.ranAt, cc: run.cc, os: run.os, file: run.file, coverageOn: run.coverage, caseList: run.cases.filter(c => c.unit === uid) }; });
   // 실행 이력은 요약만(최근 30회)
   m.utRuns = [...arr(m.utRuns).map(x => ({ ...x, cases: undefined, units: Object.fromEntries(Object.entries(x.units || {}).map(([k, v]) => [k, { result: v.result, pass: v.pass, cases: v.cases }])) })),
     { ...run, cases: undefined, units: Object.fromEntries(Object.entries(units).map(([k, v]) => [k, { result: v.result, pass: v.pass, cases: v.cases }])) }].slice(-30);
@@ -3805,9 +3805,12 @@ export function applyUtResults(model, parsed, fileName = "") {
 }
 // 유닛별 누적 결과 — 이전 형식(utRuns에 케이스까지 저장)도 시간순으로 합쳐 읽는다
 function utResultsOf(m) {
-  if (m.utResults && typeof m.utResults === "object") return m.utResults;
+  if (m.utResults && typeof m.utResults === "object") {
+    // 이전 저장본 보정: cases 자리에 케이스 목록이 들어간 경우
+    return Object.fromEntries(Object.entries(m.utResults).map(([k, r]) => Array.isArray(r?.cases) ? [k, { ...r, caseList: r.caseList || r.cases, cases: r.cases.length }] : [k, r]));
+  }
   const out = {};
-  arr(m.utRuns).forEach(run => { if (!Array.isArray(run.cases)) return; Object.entries(run.units || {}).forEach(([uid, r]) => { out[uid] = { ...r, at: run.at, ranAt: run.ranAt, cc: run.cc, os: run.os, file: run.file, coverageOn: run.coverage, cases: run.cases.filter(c => c.unit === uid) }; }); });
+  arr(m.utRuns).forEach(run => { if (!Array.isArray(run.cases)) return; Object.entries(run.units || {}).forEach(([uid, r]) => { out[uid] = { ...r, at: run.at, ranAt: run.ranAt, cc: run.cc, os: run.os, file: run.file, coverageOn: run.coverage, caseList: run.cases.filter(c => c.unit === uid) }; }); });
   return out;
 }
 // 최신 실행 결과 + 현재 코드와의 일치 여부
@@ -3820,7 +3823,7 @@ export function utLatest(model) {
   const latest = ids.map(k => res[k]).sort((p, q) => String(q.at).localeCompare(String(p.at)))[0];
   // 화면·결과서가 쓰는 '실행' 모양으로 합친다 (유닛마다 자기 실행 일시·환경을 가짐)
   const run = { at: latest.at, ranAt: latest.ranAt, cc: uniq(ids.map(k => res[k].cc)).join(" / "), os: uniq(ids.map(k => res[k].os)).join(" / "), file: latest.file,
-    coverage: ids.some(k => res[k].coverageOn), units: res, cases: ids.flatMap(k => arr(res[k].cases)), runs: arr(m.utRuns).length };
+    coverage: ids.some(k => res[k].coverageOn), units: res, cases: ids.flatMap(k => arr(res[k].caseList)), runs: arr(m.utRuns).length };
   const stale = {};
   (m.units.SW || []).forEach(u => { const r = res[u.id]; if (!r) return; const h = utCodeHash(u.dd?.code); stale[u.id] = !!(r.code && h && r.code !== h); });
   return { run, stale };
