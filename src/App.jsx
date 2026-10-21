@@ -8808,30 +8808,33 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
             const addS = () => setStk(l => assignStkIds([...l, { id: "", text: "", source: "", stakeholder: "OEM", type: "기능", status: "검토 중" }], reqIdFloor(requirements, l.map(x => x.id))));
             return (
             <div style={{ marginTop:8 }}>
-              <WhyBox title="이해관계자 요구(SYS.1)와 시스템 요구(SYS.2)를 왜 나누나요?">
+              <div className={embedded ? "ae-hint" : ""}><WhyBox title="이해관계자 요구(SYS.1)와 시스템 요구(SYS.2)를 왜 나누나요?">
                 이해관계자 요구는 <b>고객(OEM)·법규가 말한 그대로의 문장</b>이고, 시스템 요구는 그것을 <b>우리 시스템이 검증 가능하게 다시 쓴 문장</b>입니다. 둘을 같은 목록으로 두면 "고객 요구를 분석했다"는 근거가 남지 않고, 고객 사양서가 개정됐을 때 어느 시스템 요구를 다시 봐야 하는지도 알 수 없습니다.
                 그래서 SPIDer는 원문 발췌(STK)를 따로 두고, 각 시스템 요구에 <b>근거 STK</b>를 연결합니다. STK 문장이 바뀌면 연결된 시스템 요구가 "변경 검토 필요"로 표시되고, 추적 매트릭스에 STK → SYS가 함께 출력됩니다. 합의 상태(검토 중·합의·보류)는 고객과의 합의 증적입니다.
-              </WhyBox>
+              </WhyBox></div>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
                 <div style={{ fontSize:12, fontWeight:600 }}>이해관계자 요구 (SYS.1) <span style={{ color:T.accent }}>{stk.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 원문 그대로. 합의 {stk.filter(k => k.status === "합의").length} · 검토 중 {stk.filter(k => !["합의", "보류", "해당 없음"].includes(k.status)).length} · 보류 {stk.filter(k => k.status === "보류").length}{stk.some(k => k.status === "해당 없음") ? ` · 해당 없음 ${stk.filter(k => k.status === "해당 없음").length}` : ""} · 시스템 요구 미도출 {stk.filter(k => !sysCount[k.id] && !AE.stkClosed(k)).length}</span></div>
                 <button onClick={addS} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>+ 행 추가</button>
               </div>
               <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:14 }}>
-                <div style={{ display:"grid", gridTemplateColumns:"72px 1fr 90px 92px 90px 84px 150px 24px", gap:6, fontSize:10, color:T.muted, padding:"0 4px" }}>
-                  <span>ID</span><span>요구 문장 (원문 발췌)</span><span>출처</span><span>주체</span><span>유형</span><span>합의</span><span>SYS</span><span></span>
+                <div style={{ display:"grid", gridTemplateColumns:"72px 1fr 130px 92px 90px 84px 150px 24px", gap:6, fontSize:10, color:T.muted, padding:"0 4px" }}>
+                  <span>ID</span><span>요구 문장 (원문 발췌)</span><span>출처(문서·조항)</span><span>주체</span><span>유형</span><span title="고객과의 합의 상태 — 검토 중 · 합의 · 보류 · 해당 없음(사유 필수)">합의 상태</span><span title="이 원문에서 도출되어 근거로 연결된 시스템 요구(SYS.2) — 누르면 SYS.2 탭으로 이동">도출된 시스템 요구</span><span></span>
                 </div>
                 {stkMsg && <div style={{ fontSize:11, color:T.green, background:T.green + "12", border:`1px solid ${T.green}44`, borderRadius:7, padding:"6px 10px", display:"flex", gap:8, alignItems:"center" }}><span style={{ flex:1 }}>✓ {stkMsg}</span><button onClick={() => setStkMsg(null)} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer" }}>✕</button></div>}
                 {stk.some(k => !sysCount[k.id] && k.status !== "해당 없음") && <div style={{ fontSize:10.5, color:T.muted, padding:"0 4px" }}>SYS가 0건인 요구는 <b style={{ color:T.accent }}>＋ 도출</b>(새 시스템 요구 초안) 또는 <b>연결…</b>(기존 시스템 요구에 근거 추가)로 처리하거나, 우리 범위가 아니면 합의를 <b>해당 없음</b>으로 바꾸고 사유를 적으세요. 처리 후 '요구사항 확정'을 눌러야 반영됩니다.</div>}
                 {stk.map((k, i) => (!focusIds || !stk.some(x => focusIds.has(x.id)) || focusIds.has(k.id)) && (
-                  <div key={k.id || i} style={{ display:"grid", gridTemplateColumns:"72px 1fr 90px 92px 90px 84px 150px 24px", gap:6, alignItems:"center", background:T.bg, border:`1px solid ${sysCount[k.id] || AE.stkClosed(k) ? T.border : T.amber + "66"}`, borderRadius:8, padding:"5px 8px", opacity: AE.stkClosed(k) ? 0.8 : 1 }}>
+                  <div key={k.id || i} style={{ display:"grid", gridTemplateColumns:"72px 1fr 130px 92px 90px 84px 150px 24px", gap:6, alignItems:"center", background:T.bg, border:`1px solid ${sysCount[k.id] || AE.stkClosed(k) ? T.border : T.amber + "66"}`, borderRadius:8, padding:"5px 8px", opacity: AE.stkClosed(k) ? 0.8 : 1 }}>
                     <span style={{ fontFamily:"monospace", fontSize:10, color:T.accent }}>{k.id}</span>
                     <input value={k.text} onChange={e=>updS(i,"text",e.target.value)} placeholder="원문 그대로" style={inp} />
-                    <input value={k.source || ""} onChange={e=>updS(i,"source",e.target.value)} placeholder="조항" style={inp} />
+                    <input value={k.source || ""} onChange={e=>updS(i,"source",e.target.value)} title={k.source || ""} placeholder="문서·조항" style={inp} />
                     <select value={k.stakeholder || "OEM"} onChange={e=>updS(i,"stakeholder",e.target.value)} style={inp}>{["OEM","법규·표준","내부","기타"].map(x=><option key={x}>{x}</option>)}</select>
                     <select value={k.type || "기능"} onChange={e=>updS(i,"type",e.target.value)} style={inp}>{["기능","비기능","규제","인터페이스"].map(x=><option key={x}>{x}</option>)}</select>
                     <select value={k.status || "검토 중"} onChange={e=>updS(i,"status",e.target.value)} title="해당 없음: 시스템 요구로 도출하지 않기로 결정 — 사유 필수" style={{ ...inp, color: k.status === "합의" ? T.green : k.status === "보류" ? T.amber : k.status === "해당 없음" ? T.muted : T.text }}>{["검토 중","합의","보류","해당 없음"].map(x=><option key={x}>{x}</option>)}</select>
                     {sysCount[k.id] || AE.stkClosed(k) || k.status === "해당 없음"
-                      ? <span title={sysCount[k.id] ? `도출된 시스템 요구: ${items.filter(it => (it.stkIds || []).includes(k.id)).map(it => it.id).join(", ")}` : "해당 없음 — 도출 대상 아님"} style={{ fontSize:11, color: sysCount[k.id] ? T.green : T.muted, textAlign:"center" }}>{sysCount[k.id] ? `${sysCount[k.id]}건` : "N/A"}</span>
+                      ? (() => { const ds = items.filter(it => (it.stkIds || []).includes(k.id)).map(it => it.id || "(미채번)");
+                          return <span onClick={ds.length && onGoPart ? () => onGoPart("SYS") : undefined} title={ds.length ? `이 원문에서 도출된 시스템 요구 ${ds.length}건: ${ds.join(", ")}${onGoPart ? " — 누르면 SYS.2 탭으로" : ""}` : "해당 없음 — 도출 대상 아님"}
+                            style={{ fontSize:10.5, fontFamily: ds.length ? "monospace" : "inherit", color: ds.length ? T.green : T.muted, textAlign:"center", cursor: ds.length && onGoPart ? "pointer" : "default", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                            {ds.length ? `→ ${ds.slice(0, 2).join(", ")}${ds.length > 2 ? ` 외 ${ds.length - 2}` : ""}` : "N/A"}</span>; })()
                       : <span style={{ display:"flex", gap:3, alignItems:"center" }}>
                           <button onClick={() => deriveFromStk(k)} title="이 원문으로 새 시스템 요구 초안을 만들고 근거로 연결합니다" style={{ background:T.accent, border:"none", borderRadius:5, color:"#fff", cursor:"pointer", fontSize:10, padding:"4px 6px", fontFamily:"inherit", whiteSpace:"nowrap" }}>＋ 도출</button>
                           <select value="" onChange={e => linkStk(k, e.target.value)} title="이미 이 내용을 다루는 시스템 요구가 있으면 근거로 연결합니다" style={{ ...inp, fontSize:10, padding:"3px 2px", minWidth:0 }}>
@@ -8920,18 +8923,18 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
   const footerEl = (
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, padding: embedded ? "10px 0" : "12px 18px", borderTop:`1px solid ${T.border}`, flexShrink:0, ...(embedded ? { position:"sticky", bottom:-16, background:T.surface, zIndex:3 } : {}) }}>
           {(() => { const imp = aeForPreview ? AE.previewImpact(aeForPreview, assignReqIds(items.filter(it => String(it.name || "").trim()), reqIdFloor(requirements)), STK_ON ? stk.filter(k => k.id && String(k.text || "").trim()) : undefined) : null; return (
-          <span style={{ fontSize:10.5, color:T.muted }}>{requirements?.items?.length ? `현재 확정본: ${requirements.items.length}건 (${(requirements.updatedAt||"").slice(0,10)})` : "확정된 요구사항 없음"}
+          <span style={{ fontSize:10.5, color:T.muted }}>{requirements?.items?.length ? `현재 확정본: ${requirements?.stk?.items?.length ? `이해관계자 ${requirements.stk.items.length} · ` : ""}시스템 요구 ${requirements.items.length}건 (${(requirements.updatedAt||"").slice(0,10)})` : "확정된 요구사항 없음"}
             {imp && (imp.suspect || imp.orphan) ? <span style={{ color:T.amber, marginLeft:8 }}>⚠ 확정하면 V-모델 추적 연결 {imp.suspect ? `${imp.suspect}건이 '변경 검토 필요'(변경 요구 ${imp.changedReqs}건)` : ""}{imp.suspect && imp.orphan ? ", " : ""}{imp.orphan ? `${imp.orphan}건이 고아 연결(삭제 요구 ${imp.removedReqs}건)` : ""}로 표시됩니다</span> : null}
           </span>); })()}
           <div style={{ display:"flex", gap:8, flexShrink:0 }}>
             {!embedded && <Btn variant="outline" onClick={onClose} style={{ fontSize:12, padding:"7px 14px" }}>취소</Btn>}
-            <Btn onClick={confirmSave} disabled={busy || !items.length} style={{ fontSize:12, padding:"7px 14px" }}>{embedded ? `✓ 요구사항 확정 (${items.length}건)` : `✓ 확정 저장 (${items.length}건)`}</Btn>
+            <Btn onClick={confirmSave} disabled={busy || !items.length} title="이해관계자 요구(SYS.1)와 시스템 요구(SYS.2)를 V-모델 추적 모델에 반영합니다" style={{ fontSize:12, padding:"7px 14px" }}>{embedded ? `✓ 요구사항 확정 (${STK_ON && stk.length ? `이해관계자 ${stk.length} · ` : ""}시스템 ${items.length}건)` : `✓ 확정 저장 (${items.length}건)`}</Btn>
           </div>
         </div>
   );
   if (embedded) return (
     <div>
-      <div style={{ fontSize:11, color:T.muted, marginBottom:10 }}>이해관계자 요구 원문(OEM 사양서·RFQ·SOR·법규) → 요구 도출(SYS.1)·시스템 요구 명세(SYS.2) → <b>확정</b>하면 ③ 시스템 이후 단계와 추적 모델에 반영됩니다. 이미 연결된 요구의 내용이 바뀌면 하위 연결이 '변경 검토 필요'로 표시됩니다.</div>
+      <div className="ae-hint" style={{ fontSize:11, color:T.muted, marginBottom:10 }}>이해관계자 요구 원문(OEM 사양서·RFQ·SOR·법규) → 요구 도출(SYS.1)·시스템 요구 명세(SYS.2) → <b>확정</b>하면 ③ 시스템 이후 단계와 추적 모델에 반영됩니다. 이미 연결된 요구의 내용이 바뀌면 하위 연결이 '변경 검토 필요'로 표시됩니다.</div>
       {bodyEl}
       {footerEl}
     </div>
