@@ -10825,7 +10825,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   ? <button onClick={() => { rvStop.current = true; }} title="지금 보내고 있는 묶음이 끝나면 멈춥니다. 그때까지 받은 의견은 반영되고, 남은 항목은 '변경분 검토'로 이어서 할 수 있습니다" style={{ ...small, color: T.red, borderColor: T.red + "88" }}>■ 검토 중지</button>
                   : <button disabled={busy || !rvSel?.ready || !allChangedN} onClick={() => aiReviewMany(scopes.map(x => x.key), "changed")} title="개발 범위의 모든 산출물에서 아직 검토하지 않았거나 바뀐 항목만 차례로 보냅니다 (선택한 검토 AI 기준)" style={{ ...small, background: allChangedN ? T.accent : "none", color: allChangedN ? "#fff" : T.muted, borderColor: allChangedN ? T.accent : T.border }}>전체 산출물 변경분 검토 (항목 {allChangedN}건)</button>}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 8, fontSize: 11 }}>
-                  <span style={{ color: T.muted }}>선택 검토:</span>
+                  <span style={{ color: T.muted }} title="아래 표의 체크를 한 번에 고릅니다">빠른 선택:</span>
                   {[["요구", "요구"], ["설계", "설계"], ["검증", "검증 명세"], ["todo", "미검토 남은 것"]].map(([g, l]) => <button key={g} disabled={busy} onClick={() => pickGroup(g)} style={{ ...small, padding: "3px 9px" }}>{l}</button>)}
                   {pick.length > 0 && <button disabled={busy} onClick={() => setRvPick([])} style={{ ...small, padding: "3px 9px", color: T.muted }}>선택 해제</button>}
                   <span style={{ flex: 1 }} />
@@ -11298,7 +11298,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 <div style={{ border: `1px solid ${T.border}`, borderRadius: 9, background: T.bg, display: "flex", flexDirection: "column", maxHeight: 640 }}>
                   <div style={{ padding: "8px 10px", borderBottom: `1px solid ${T.border}`, display: "flex", gap: 6, alignItems: "center" }}>
                     <input value={artQ} onChange={e => setArtQ(e.target.value)} placeholder={`검색 (${total}개 산출물)`} style={{ ...inp, flex: 1 }} />
-                    <button onClick={dlAll} title="문서·다이어그램·코드·회로도를 모두 담은 ZIP (V-모델 산출물 ZIP)" style={small}>⬇ 전체</button>
+                    <button onClick={dlAll} title="문서·다이어그램·코드·회로도를 모두 담은 ZIP — 아래쪽 [📦 V-모델 산출물 ZIP]과 같습니다" style={small}>⬇ 전체 ZIP</button>
                   </div>
                   {!q && <div style={{ display: "flex", gap: 3, padding: "6px 8px", borderBottom: `1px solid ${T.border}`, flexWrap: "wrap" }}>{Object.entries(catOf).map(([k, lab]) => <button key={k} onClick={() => setArtCat(k)} style={{ ...small, padding: "3px 9px", color: artCat === k ? "#fff" : T.muted, background: artCat === k ? T.accent : "transparent", borderColor: artCat === k ? T.accent : T.border }}>{lab}</button>)}</div>}
                   <div style={{ overflowY: "auto", flex: 1, padding: 6 }}>
@@ -11420,7 +11420,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       </div>))}
                   </div>)}
               </AeSec>); })()}
-            <AeSec title="추적·검증 커버리지" right={<Btn onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} style={{ fontSize: 11, padding: "4px 12px" }}>📦 V-모델 산출물 ZIP</Btn>}>
+            <AeSec title="추적·검증 커버리지">
               {(() => {
                 const cov = AE.coverageDetail(model);
                 const color = v => v == null ? T.muted : v === 100 ? T.green : v >= 70 ? T.amber : T.red;
@@ -11577,7 +11577,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             })()}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="이해관계자 요구 목록·시스템 요구사항 명세서·아키텍처·하위 요구·상세설계·검증 명세·추적 매트릭스를 한 번에 내려받습니다 (저장 전 편집 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 산출물 ZIP</Btn>
+            <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="이해관계자 요구 목록·시스템 요구사항 명세서·아키텍처·하위 요구·상세설계·검증 명세·추적 매트릭스를 한 번에 내려받습니다 (저장 전 편집 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 V-모델 산출물 ZIP</Btn>
             {reqDirty && <button onClick={() => setTab("req", "STK")} title="SYS.1·SYS.2에서 고친 요구를 아직 확정하지 않았습니다 — [확정·V-모델 반영]을 눌러야 V-모델과 저장에 포함됩니다" style={{ alignSelf: "center", fontSize: 10.5, color: T.amber, background: "none", border: `1px solid ${T.amber}88`, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>● 요구 확정 안 됨 →</button>}
             <span style={{ alignSelf: "center", fontSize: 10.5, color: dirty ? T.amber : T.green, whiteSpace: "nowrap" }}>{dirty ? "● 저장 안 된 변경 있음" : "✓ 저장됨"}</span>
             <Btn variant="outline" onClick={requestClose} style={{ fontSize: 12, padding: "7px 14px" }}>닫기</Btn>
@@ -11637,7 +11637,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                   : "먼저 '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2 요구사항을 확정하세요 (DBC만으로 시작할 수도 있습니다)"}
             </div>
           </div>
-          {/* V-모델 산출물은 '전체 ZIP 다운로드'에 포함된다(WBS에 없는 V-모델 문서는 99 폴더). V-모델만 따로 받을 때는 V-모델 창의 '산출물 ZIP' 사용 */}
+          {/* V-모델 산출물은 '전체 ZIP 다운로드'에 포함된다(WBS에 없는 V-모델 문서는 99 폴더). V-모델만 따로 받을 때는 V-모델 창의 'V-모델 산출물 ZIP' 사용 */}
             <Btn onClick={()=>{ setAeInitTab(null); setAeModal(true); }} style={{ fontSize:11.5, padding:"6px 14px" }}>{am ? "V-모델 편집" : "V-모델 시작"}</Btn>
         </div>); })()}
       {deliverablesData && (
