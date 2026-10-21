@@ -2915,16 +2915,75 @@ ${hdContext(comp, model)}
 
 규칙:
 - parts: 기능에 필요한 모든 부품(IC·수동소자·보호소자·커넥터). ref는 R1·C1·U1·D1·J1 규칙, pins에 핀 번호·이름·type(in|out|io|pwr|gnd|passive). value·pkg(0402·SOIC-8 등)·mfr·mpn·rating(정격)·grade(AEC-Q100/Q200)·special(특별 특성 후보면 true)·reqs.
-- nets: 이름(영문 대문자, 예 VBAT·3V3·GND·CANH)·kind(power|gnd|signal|bus|analog)·voltage.
-- conns: 모든 부품의 모든 핀을 넷에 연결(미연결 핀은 넷 "NC"). 보호(퓨즈·TVS·역접속)·디커플링·풀업/다운·종단을 빠뜨리지 말 것.
+- 보호(퓨즈·TVS·역접속)·디커플링·풀업/다운·종단 부품을 빠뜨리지 말 것. 핀 이름은 데이터시트 핀 이름(예 VDD·VSS·PA5·TXD). 2단자 수동소자의 핀은 "1"·"2".
+- 넷(연결)은 다음 단계에서 따로 작성하므로 이번에는 nets·conns를 쓰지 말 것.
 - ifs: 블록 밖으로 나가는 신호·전원(name·dir·net·connector·spec·source 인터페이스 ID·reqs).
 - 수치(전압·전류·주파수·저항값)는 요구 문장의 값을 그대로 쓰고, 계산이 필요하면 desc에 식을 적는다.
 
 JSON만 출력:
 {"summary":"블록 역할 2~3문장","parts":[{"ref":"U1","kind":"IC|MCU|트랜지스터|다이오드|저항|커패시터|인덕터|커넥터|크리스탈|퓨즈|TVS|릴레이|기타","value":"","pkg":"","mfr":"","mpn":"xxx (후보)","rating":"","grade":"AEC-Q100","desc":"","special":false,"reqs":[],"pins":[{"num":"1","name":"VIN","type":"pwr"}]}],
-"nets":[{"name":"","kind":"power|gnd|signal|bus|analog","voltage":"","desc":"","reqs":[]}],"conns":[{"ref":"U1","pin":"1","net":"VBAT"}],
 "ifs":[{"name":"","dir":"in|out|io","net":"","connector":"J1.1","spec":"","source":"HWIF-001","reqs":[]}]}`;
 }
+// 넷(연결) 전용 — 넷 이름 → 핀 목록의 압축 형식으로 받아 응답 잘림을 피한다
+export function promptHDNets({ comp, model, circuit }) {
+  const c = circuit || emptyHD();
+  return `역할: 자동차 전장 ECU 수석 HW 설계자(ASPICE HWE.2). 아래 회로 블록의 부품·핀 목록으로 **넷(전기적 연결)**을 빠짐없이 작성하세요.
+
+${hdContext(comp, model)}
+
+[부품·핀 — "REF: 핀번호 핀이름(형)"]
+${c.parts.map(p => `${p.ref} (${p.kind} ${p.value}${p.desc ? " · " + p.desc.slice(0, 40) : ""}): ${p.pins.map(pn => `${pn.num} ${pn.name}(${pn.type})`).join(", ")}`).join("\n")}
+${c.ifs.length ? `[블록 밖 인터페이스 — 이 신호 이름을 넷 이름으로] ${c.ifs.map(x => `${x.name}(${x.dir}) net=${x.net}`).join("; ")}` : ""}
+
+규칙:
+- 넷마다 연결된 핀을 "REF.핀번호"로 모두 나열. 같은 넷 = 같은 전기적 노드.
+- 전원(VBAT·5V·3V3 등)·GND·디커플링 커패시터 양단·풀업/풀다운·크리스탈·리셋·디버그·통신·아날로그 입력을 빠뜨리지 말 것. 2단자 부품은 두 핀 모두 어딘가에 연결.
+- 쓰지 않는 핀은 어떤 넷에도 넣지 말 것(NC로 표시됨). 한 핀은 한 넷에만.
+- 넷 이름은 영문 대문자·숫자·_ (예 3V3, GND, MCU_RESET_N, CAN1_TX). kind는 power|gnd|signal|bus|analog.
+
+JSON만 출력:
+{"nets":[{"name":"3V3","kind":"power","voltage":"3.3V","pins":["U1.1","C1.1"]}]}`;
+}
+// 넷 응답 → conns·nets (핀은 번호 또는 이름 허용, 없는 핀·중복 할당은 버림)
+export function applyHDNets(hd0, raw) {
+  const hd = { ...hd0, nets: [], conns: [] };
+  const idx = {};
+  hd0.parts.forEach(p => { const m = {}; p.pins.forEach(pn => { m[String(pn.num).toUpperCase()] = pn.num; m[String(pn.name).toUpperCase()] = pn.num; }); idx[p.ref] = m; });
+  const used = new Set(); let dropped = 0;
+  arr(raw?.nets).slice(0, 400).forEach(n => {
+    const name = netName(n?.name); if (!name || name === "NC") return;
+    const kind = ["power", "gnd", "signal", "bus", "analog"].includes(n.kind) ? n.kind : (/GND|VSS/i.test(name) ? "gnd" : /^(V|VCC|VDD|\+?\d+V|\d+V\d)/i.test(name) ? "power" : "signal");
+    let any = false;
+    arr(n.pins).slice(0, 300).forEach(s => {
+      const mm = String(s || "").trim().match(/^([A-Za-z0-9_]+)[.:\-]([A-Za-z0-9_+\-#/]+)$/); if (!mm) { dropped++; return; }
+      const ref = cid(mm[1]).toUpperCase(); const pin = idx[ref] && idx[ref][mm[2].toUpperCase()];
+      if (!pin) { dropped++; return; }
+      const k = `${ref}.${pin}`; if (used.has(k)) { dropped++; return; }
+      used.add(k); hd.conns.push({ ref, pin, net: name }); any = true;
+    });
+    if (any && !hd.nets.some(x => x.name === name)) hd.nets.push({ name, kind, voltage: str(n.voltage, 20), desc: str(n.desc, 120), reqs: [] });
+  });
+  hd.netsDropped = dropped;
+  return hd;
+}
+// AI 넷을 못 받았을 때의 최소 보강 — 핀 이름·형으로 전원/GND만 연결(신호는 NC로 남김)
+export function rulePowerNets(hd0) {
+  const hd = { ...hd0, nets: [...hd0.nets], conns: [...hd0.conns] };
+  const done = new Set(hd.conns.map(c => `${c.ref}.${c.pin}`));
+  const add = (n, kind, v) => { if (!hd.nets.some(x => x.name === n)) hd.nets.push({ name: n, kind, voltage: v, desc: "규칙 보강(핀 이름 기준)", reqs: [] }); };
+  hd.parts.forEach(p => p.pins.forEach(pn => {
+    if (done.has(`${p.ref}.${pn.num}`)) return;
+    const nm = String(pn.name || "").toUpperCase();
+    let net = null;
+    if (pn.type === "gnd" || /^(A|D|P)?(GND|VSS)/.test(nm)) { net = "GND"; add("GND", "gnd", "0V"); }
+    else if (/^(VBAT|VIN|VSUP|KL30)/.test(nm)) { net = "VBAT"; add("VBAT", "power", "12V"); }
+    else if (pn.type === "pwr" || /^(VDD|VCC|AVDD|DVDD|VDDA|VDDIO|VCORE|VREF\+?)/.test(nm)) { net = "3V3"; add("3V3", "power", "3.3V"); }
+    if (net) { hd.conns.push({ ref: p.ref, pin: pn.num, net }); done.add(`${p.ref}.${pn.num}`); }
+  }));
+  return hd;
+}
+export const hdPinStats = hd => { const total = (hd?.parts || []).reduce((s, p) => s + p.pins.length, 0); const con = new Set((hd?.conns || []).filter(c => c.net && c.net !== "NC").map(c => `${c.ref}.${c.pin}`)).size; return { total, con }; };
+export const hdNeedsNets = hd => !!(hd && hd.parts?.length && hdPinStats(hd).con === 0);
 export function promptHDAnalysis({ comp, model, circuit }) {
   const c = circuit || emptyHD();
   return `역할: 자동차 전장 ECU 수석 HW 설계자(ASPICE HWE.2). 아래 회로 블록에 대해 **특별 특성(17-57)**과 **설계 분석 결과(15-51: Derating·열·타이밍·최악조건)**, **설계 근거**를 작성하세요. 수치는 부품 정격(rating)과 요구 값을 대입해 계산식과 함께 적으세요(가정값은 "(가정)").
@@ -2980,20 +3039,31 @@ export function hdSvg(kind, comp, model) {
   let x = left, y = top, rowH = 0, W = 400; let b = "";
   parts.forEach((p, i) => {
     const L = p.pins.filter(pn => pn.type === "in" || pn.type === "pwr" || pn.type === "passive" && p.pins.indexOf(pn) % 2 === 0), Rr = p.pins.filter(pn => !L.includes(pn));
-    const h = Math.max(54, 24 + Math.max(L.length, Rr.length) * 16), w = 110;
+    const ml = xs => xs.reduce((s, q) => Math.max(s, String(q.name || "").length), 0);
+    const h = Math.max(54, 24 + Math.max(L.length, Rr.length) * 16), w = Math.max(110, Math.round((ml(L) + ml(Rr)) * 5 + 26));   // 핀 이름이 길면 심볼을 넓혀 좌우 이름이 겹치지 않게
     if (i && i % perRow === 0) { x = left; y += rowH + rowGap; rowH = 0; }
     const bx = x + 55, by0 = y;
     b += `<rect x="${bx}" y="${by0}" width="${w}" height="${h}" fill="#FFFDF2" stroke="#222"/><text x="${bx + w / 2}" y="${by0 - 6}" text-anchor="middle" font-weight="700" font-size="10.5">${X(p.ref)}</text><text x="${bx + w / 2}" y="${by0 + h + 11}" text-anchor="middle" font-size="9">${X(p.value)}${p.pkg ? ` · ${X(p.pkg)}` : ""}</text>`;
     const pinRow = (pn, k, side) => { const py = by0 + 16 + k * 16; const net = netOf[`${p.ref}.${pn.num}`] || netOf[`${p.ref}.${pn.name}`] || "NC"; const isGnd = /GND|VSS/i.test(net), isPwr = /^(V|VCC|VDD|\+?\d+V|3V3|5V)/i.test(net) && !isGnd;
-      if (side === "L") { b += `<line x1="${bx - 24}" y1="${py}" x2="${bx}" y2="${py}" stroke="#222"/><text x="${bx + 4}" y="${py + 3.5}" font-size="8.5">${X(pn.name)}</text>`;
-        b += isGnd ? `<line x1="${bx - 24}" y1="${py}" x2="${bx - 24}" y2="${py + 10}" stroke="#222"/><line x1="${bx - 31}" y1="${py + 10}" x2="${bx - 17}" y2="${py + 10}" stroke="#222"/><line x1="${bx - 28}" y1="${py + 13}" x2="${bx - 20}" y2="${py + 13}" stroke="#222"/>` : `<text x="${bx - 27}" y="${py + 3.5}" text-anchor="end" font-size="8" fill="${isPwr ? "#B00020" : "#1A4D8F"}" ${isPwr ? 'font-weight="700"' : ""}>${X(net)}</text>`; }
-      else { b += `<line x1="${bx + w}" y1="${py}" x2="${bx + w + 24}" y2="${py}" stroke="#222"/><text x="${bx + w - 4}" y="${py + 3.5}" text-anchor="end" font-size="8.5">${X(pn.name)}</text>`;
-        b += isGnd ? `<line x1="${bx + w + 24}" y1="${py}" x2="${bx + w + 24}" y2="${py + 10}" stroke="#222"/><line x1="${bx + w + 17}" y1="${py + 10}" x2="${bx + w + 31}" y2="${py + 10}" stroke="#222"/><line x1="${bx + w + 20}" y1="${py + 13}" x2="${bx + w + 28}" y2="${py + 13}" stroke="#222"/>` : `<text x="${bx + w + 27}" y="${py + 3.5}" font-size="8" fill="${isPwr ? "#B00020" : "#1A4D8F"}" ${isPwr ? 'font-weight="700"' : ""}>${X(net)}</text>`; } };
+      const dn = net === "NC" ? "" : ` data-net="${X(net)}" data-pin="${X(p.ref)}.${X(pn.name)}" style="cursor:pointer"`;
+      if (side === "L") { b += `<line${dn} x1="${bx - 24}" y1="${py}" x2="${bx}" y2="${py}" stroke="#222"/><text x="${bx + 4}" y="${py + 3.5}" font-size="8.5">${X(pn.name)}</text>`;
+        b += isGnd ? `<line x1="${bx - 24}" y1="${py}" x2="${bx - 24}" y2="${py + 10}" stroke="#222"/><line x1="${bx - 31}" y1="${py + 10}" x2="${bx - 17}" y2="${py + 10}" stroke="#222"/><line x1="${bx - 28}" y1="${py + 13}" x2="${bx - 20}" y2="${py + 13}" stroke="#222"/>` : `<text${dn} x="${bx - 27}" y="${py + 3.5}" text-anchor="end" font-size="8" fill="${net === "NC" ? "#999" : isPwr ? "#B00020" : "#1A4D8F"}" ${isPwr ? 'font-weight="700"' : ""}>${X(net)}</text>`; }
+      else { b += `<line${dn} x1="${bx + w}" y1="${py}" x2="${bx + w + 24}" y2="${py}" stroke="#222"/><text x="${bx + w - 4}" y="${py + 3.5}" text-anchor="end" font-size="8.5">${X(pn.name)}</text>`;
+        b += isGnd ? `<line x1="${bx + w + 24}" y1="${py}" x2="${bx + w + 24}" y2="${py + 10}" stroke="#222"/><line x1="${bx + w + 17}" y1="${py + 10}" x2="${bx + w + 31}" y2="${py + 10}" stroke="#222"/><line x1="${bx + w + 20}" y1="${py + 13}" x2="${bx + w + 28}" y2="${py + 13}" stroke="#222"/>` : `<text${dn} x="${bx + w + 27}" y="${py + 3.5}" font-size="8" fill="${net === "NC" ? "#999" : isPwr ? "#B00020" : "#1A4D8F"}" ${isPwr ? 'font-weight="700"' : ""}>${X(net)}</text>`; } };
     L.forEach((pn, k) => pinRow(pn, k, "L")); Rr.forEach((pn, k) => pinRow(pn, k, "R"));
-    rowH = Math.max(rowH, h + 24); x += colW; W = Math.max(W, x + 40);
+    rowH = Math.max(rowH, h + 24); x += Math.max(colW, w + 180); W = Math.max(W, x + 40);
   });
-  const H = y + rowH + 60;
-  b += `<text x="${left}" y="${H - 30}" font-size="9" fill="#555">넷 라벨 방식 회로도 — 같은 이름의 라벨은 서로 연결됨(빨강: 전원 넷, 파랑: 신호 넷, 기호: GND). 부품 PN은 후보(BOM 참조). 넷 ${hd.nets.length}개 · 부품 ${parts.length}개 · 연결 ${hd.conns.length}</text>`;
+  // 넷 연결 목록 — 라벨 방식에서 '어디와 어디가 이어지는지'를 글로 보여 준다
+  const members = {}; hd.conns.filter(c => c.net && c.net !== "NC").forEach(c => { const p = parts.find(q => q.ref === c.ref); const pn = p?.pins.find(q => q.num === c.pin || q.name === c.pin); (members[c.net] = members[c.net] || []).push(`${c.ref}.${pn ? pn.name : c.pin}`); });
+  const st = hdPinStats(hd);
+  let ly = y + rowH + 20;
+  b += `<text x="${left}" y="${ly}" font-weight="700" font-size="10.5">넷 연결 목록 — 같은 이름의 라벨은 전선으로 이어진 것과 같습니다 (연결된 핀 ${st.con} / 전체 ${st.total})</text>`;
+  if (!st.con) { ly += 18; b += `<text x="${left}" y="${ly}" font-size="10" fill="#B00020">⚠ 이 블록은 아직 연결(넷)이 없습니다 — 모든 핀이 NC입니다. HWE.2 화면의 [🔗 연결 생성]으로 부품은 그대로 두고 연결만 만드세요.</text>`; }
+  const netRows = Object.entries(members).sort((p, q) => (/GND/.test(p[0]) ? 1 : 0) - (/GND/.test(q[0]) ? 1 : 0) || q[1].length - p[1].length);
+  netRows.slice(0, 80).forEach(([n, ms]) => { ly += 13; const lone = ms.length < 2; b += `<text x="${left}" y="${ly}" font-size="9" fill="${lone ? "#C77700" : "#333"}" data-net="${X(n)}" style="cursor:pointer"><tspan font-weight="700" font-family="monospace">${X(n)}</tspan>  (${ms.length}핀) ${X(ms.slice(0, 18).join(", "))}${ms.length > 18 ? " …" : ""}${lone ? "  ⚠ 한 핀만 연결 — 상대 연결 확인 필요" : ""}</text>`; });
+  if (netRows.length > 80) { ly += 13; b += `<text x="${left}" y="${ly}" font-size="9" fill="#555">… 외 ${netRows.length - 80}개 넷 (BOM·넷 표 참조)</text>`; }
+  const H = ly + 44;
+  b += `<text x="${left}" y="${H - 18}" font-size="9" fill="#555">넷 라벨 방식 회로도 — 같은 이름의 라벨은 서로 연결됨(빨강: 전원 넷, 파랑: 신호 넷, 회색 NC: 미연결, 기호: GND). 부품 PN은 후보(BOM 참조). 넷 ${hd.nets.length}개 · 부품 ${parts.length}개 · 연결 ${hd.conns.length}</text>`;
   return svgWrap(W, H, b, `${comp.id} ${comp.name} — 회로도 (04-54, ${hdSettings(m).schematicFmt} 내보내기 기준)`);
 }
 

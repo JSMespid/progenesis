@@ -8016,14 +8016,24 @@ function svgFit(svg, zoom = "fit") {
 const ZOOM_STEPS = ["fit", 0.5, 0.75, 1, 1.5, 2];
 function SvgView({ svg, zoom, setZoom, maxHeight = 520 }) {
   const z = zoom ?? "fit";
+  const [hl, setHl] = useState(null);   // 강조할 넷 (회로도의 넷 라벨·핀을 누르면)
+  useEffect(() => { setHl(null); }, [svg]);
+  const hasNets = /data-net="/.test(svg || "");
+  const pins = hl ? [...new Set([...(svg || "").matchAll(new RegExp(`data-net="${hl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" data-pin="([^"]+)"`, "g"))].map(m => m[1]))] : [];
+  const cssNet = hl ? hl.replace(/["\\]/g, "") : "";
   return (
     <div>
+      {hl && <style>{`.svgv [data-net="${cssNet}"]{fill:#E65100!important;stroke:#E65100!important;font-weight:700} .svgv line[data-net="${cssNet}"]{stroke-width:3!important}`}</style>}
+      {hasNets && <div style={{ padding: "4px 8px", fontSize: 10.5, background: hl ? "#FFF3E0" : T.bg, color: hl ? "#7A3E00" : T.muted, borderBottom: `1px solid ${T.border}` }}>
+        {hl ? <>🔗 넷 <b>{hl}</b> — 연결된 핀 {pins.length}개: {pins.join(", ") || "-"} <button onClick={() => setHl(null)} style={{ marginLeft: 6, border: "1px solid #E6510066", background: "none", color: "#7A3E00", borderRadius: 5, cursor: "pointer", fontSize: 10 }}>지우기</button></>
+          : "넷 라벨(파랑·빨강 글씨)이나 핀 선을 누르면 같은 넷으로 이어진 핀이 모두 주황색으로 표시됩니다 — 같은 이름의 라벨은 전선으로 이어진 것과 같습니다."}
+      </div>}
       <div style={{ display: "flex", gap: 3, alignItems: "center", padding: "4px 8px", background: T.bg, borderBottom: `1px solid ${T.border}`, fontSize: 10.5 }}>
         <span style={{ color: T.muted, marginRight: 4 }}>배율</span>
         {ZOOM_STEPS.map(st => <button key={String(st)} onClick={() => setZoom(st)} style={{ background: z === st ? T.accent : "none", color: z === st ? "#fff" : T.muted, border: `1px solid ${z === st ? T.accent : T.border}`, borderRadius: 5, padding: "1px 7px", cursor: "pointer", fontSize: 10.5, fontFamily: "inherit" }}>{st === "fit" ? "창에 맞춤" : `${Math.round(st * 100)}%`}</button>)}
         <span style={{ color: T.muted, marginLeft: "auto" }}>{z === "fit" ? "전체가 보이도록 축소 — 글씨가 작으면 100% 이상을 고르세요(가로 스크롤)" : "가로·세로 스크롤로 이동"}</span>
       </div>
-      <div style={{ background: "#fff", overflow: "auto", maxHeight, padding: 6 }} dangerouslySetInnerHTML={{ __html: svgFit(svg, z) }} />
+      <div className="svgv" onClick={e => { const el = e.target?.closest ? e.target.closest("[data-net]") : null; if (el) setHl(h => (h === el.getAttribute("data-net") ? null : el.getAttribute("data-net"))); }} style={{ background: "#fff", overflow: "auto", maxHeight, padding: 6 }} dangerouslySetInnerHTML={{ __html: svgFit(svg, z) }} />
     </div>);
 }
 // ── 산출물 보기용 미리보기: 생성한 docx/xlsx 바이트를 HTML로 (외부 라이브러리 없이 문단·표·시트만) ──
@@ -9552,9 +9562,15 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         if (n.useAI) {
           try {
             const a = await callClaudeJson(AE.promptHDCircuit({ comp: c, model: n }), 5000);
-            const circuit = AE.normalizeHD(a, c, n, seed);
+            let circuit = AE.normalizeHD(a, c, n, seed);
+            // 넷(연결)은 따로 받는다 — 부품이 많은 블록에서 한 번에 받으면 응답이 잘려 연결이 통째로 사라졌음
+            if (!AE.hdPinStats(circuit).con || AE.hdPinStats(circuit).con < AE.hdPinStats(circuit).total * 0.6) {
+              try { const nr = await callClaudeJson(AE.promptHDNets({ comp: c, model: n, circuit }), 6000); const w = AE.applyHDNets(circuit, nr); if (AE.hdPinStats(w).con) circuit = w; } catch (_) { /* 아래 규칙 보강 */ }
+            }
+            if (!AE.hdPinStats(circuit).con) circuit = AE.rulePowerNets(circuit);
             let b = {}; try { b = await callClaudeJson(AE.promptHDAnalysis({ comp: c, model: n, circuit }), 5000); } catch (_) { b = {}; }
-            hd = AE.normalizeHD({ ...(a || {}), ...(b || {}) }, c, n, seed); aiOk++;
+            hd = AE.normalizeHD({ ...(a || {}), ...(b || {}) }, c, n, seed);
+            hd = { ...hd, nets: circuit.nets, conns: circuit.conns }; aiOk++;
           } catch (_) { hd = null; }
         }
         if (!hd) hd = AE.ruleHD(c, n, seed);
@@ -9567,6 +9583,29 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       setModel(n);
       if (targets.length === 1) setHdView({ comp: targets[0].id, kind: "schematic" });
       return `HW 블록 ${done}개 회로 설계 완료 (AI ${aiOk} · 규칙 ${done - aiOk}) — 부품 PN은 후보입니다. 회로도·BOM·특별 특성·분석 결과는 ZIP의 HW 상세설계서(04-53)·BOM(14-54)·특별 특성(17-57)·분석 결과(15-51)로 생성됩니다.`;
+    });
+  }
+  // 부품은 그대로 두고 연결(넷)만 다시 만든다 — 연결이 비어 있는 블록 보정용
+  function genHDNets(compIds) {
+    const targets = (model.comps.HW || []).filter(c => c.hd?.parts?.length && compIds.includes(c.id));
+    return run(`HW 연결(넷) 생성 (${targets.length}개 블록)`, async () => {
+      if (!targets.length) throw new Error("부품이 있는 HW 블록이 없습니다.");
+      const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
+      let done = 0, aiOk = 0, ruleN = 0;
+      const one = async (c) => {
+        const idx = n.comps.HW.findIndex(x => x.id === c.id); if (idx < 0) return;
+        const hd0 = n.comps.HW[idx].hd;
+        let hd = null;
+        if (n.useAI) { try { const nr = await callClaudeJson(AE.promptHDNets({ comp: c, model: n, circuit: hd0 }), 6000); const w = AE.applyHDNets(hd0, nr); if (AE.hdPinStats(w).con) { hd = w; aiOk++; } } catch (_) { hd = null; } }
+        if (!hd) { hd = AE.rulePowerNets({ ...hd0, nets: [], conns: [] }); ruleN++; }
+        const stt = AE.hdPinStats(hd);
+        n.comps.HW[idx] = { ...n.comps.HW[idx], hd: { ...hd, summary: hd0.summary } };
+        done++;
+        setProg({ percent: 5 + (done / targets.length) * 90, label: `연결 ${done}/${targets.length} — ${c.id} ${c.name} (핀 ${stt.con}/${stt.total})` });
+      };
+      for (let i = 0; i < targets.length; i += 3) await Promise.all(targets.slice(i, i + 3).map(one));
+      setModel(n);
+      return `HW 블록 ${done}개 연결 생성 (AI ${aiOk}${ruleN ? ` · 전원/GND만 규칙 보강 ${ruleN}` : ""}) — 회로도에서 넷 라벨을 누르면 같은 넷의 핀이 함께 표시됩니다. 저장을 눌러야 남습니다.`;
     });
   }
   function derive(level, only = null) {
@@ -10387,11 +10426,13 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </AeSec>); })()}
             {lv === "HW" && (!sub || sub === "arch") && (() => {
               const S = AE.hdSettings(model); const missing = AE.hdMissingComps(model); const have = model.comps.HW.filter(c => c.hd?.parts?.length);
+              const noNets = have.filter(c => AE.hdNeedsNets(c.hd));
               const vc = hdView.comp ? model.comps.HW.find(c => c.id === hdView.comp) : null;
               const dlSvgH = (c, k) => { const svg = AE.hdSvg(k, c, model); const blob = new Blob([svg], { type: "image/svg+xml" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${c ? c.id : "HW"}_${k}.svg`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
               return (
               <AeSec title={`HWE.2 회로 설계 — 회로도·BOM·특별 특성·분석 (설계 ${have.length}/${model.comps.HW.length} 블록)`}
                 right={<div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {noNets.length > 0 && <Btn onClick={() => genHDNets(noNets.map(c => c.id))} disabled={busy} title="부품은 그대로 두고 핀 연결(넷)만 만듭니다" style={{ fontSize: 11, padding: "4px 10px" }}>🔗 연결 없는 {noNets.length}개 블록 연결 생성</Btn>}
                   {missing.length > 0 && have.length > 0 && <Btn onClick={() => genHD(missing.map(c => c.id))} disabled={busy} style={{ fontSize: 11, padding: "4px 10px" }}>{model.useAI ? "🤖" : "⚙"} 빠진 {missing.length}개만 설계</Btn>}
                   <Btn variant={have.length ? "outline" : undefined} onClick={() => { if (have.length && !window.confirm(`HW 블록 ${model.comps.HW.length}개의 회로 설계를 모두 다시 만듭니다. 기존 부품·넷·분석은 교체됩니다.`)) return; genHD(); }} disabled={busy || !model.comps.HW.length} style={{ fontSize: 11, padding: "4px 10px" }}>{model.useAI ? "🤖 AI 회로 설계 생성 (전체)" : "⚙ 규칙 회로 설계 생성 (전체)"}</Btn>
                 </div>}>
@@ -10402,7 +10443,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     <div key={c.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr auto auto auto", gap: 8, alignItems: "center", fontSize: 11, padding: "5px 8px", border: `1px solid ${on ? T.accent : T.border}`, borderRadius: 7, background: on ? T.accent + "12" : T.bg }}>
                       <span style={{ fontFamily: "monospace", color: T.accent }}>{c.id}</span>
                       <span><b>{c.name}</b>{h?.parts?.length ? <span style={{ color: T.muted }}> — 부품 {h.parts.length} · 넷 {h.nets.length} · 연결 {h.conns.length} · 특별특성 {h.specials.length} · 분석 {h.analysis.derating.length + h.analysis.thermal.length + h.analysis.timing.length + h.analysis.worstCase.length}{h.analysis.derating.concat(h.analysis.thermal, h.analysis.worstCase).some(x => x.ok === false) ? <span style={{ color: T.red }}> · NG 있음</span> : null}</span> : <span style={{ color: T.amber }}> — 회로 설계 없음</span>}</span>
-                      <span style={{ fontSize: 9.5, color: h ? (h.origin === "ai" ? T.green : T.muted) : T.muted }}>{h ? (h.origin === "ai" ? "AI 설계" : "규칙 설계") : ""}</span>
+                      <span style={{ fontSize: 9.5, color: h ? (AE.hdNeedsNets(h) ? T.amber : h.origin === "ai" ? T.green : T.muted) : T.muted }}>{h ? (AE.hdNeedsNets(h) ? <button onClick={() => genHDNets([c.id])} disabled={busy} title="모든 핀이 NC(미연결)입니다 — 부품은 그대로 두고 연결만 만듭니다" style={{ ...small, padding: "1px 7px", color: T.amber, borderColor: T.amber }}>⚠ 연결 없음 · 🔗 연결 생성</button> : `${h.origin === "ai" ? "AI 설계" : "규칙 설계"} · 핀 연결 ${AE.hdPinStats(h).con}/${AE.hdPinStats(h).total}`) : ""}</span>
                       {h?.parts?.length ? <button onClick={() => setHdView(v => ({ comp: on ? null : c.id, kind: v.kind }))} style={{ ...small, padding: "2px 8px" }}>{on ? "접기" : "회로도"}</button> : <span />}
                       <button onClick={() => genHD([c.id])} disabled={busy} style={{ ...small, padding: "2px 8px" }}>{h?.parts?.length ? "재설계" : (model.useAI ? "🤖 설계" : "⚙ 설계")}</button>
                     </div>); })}
