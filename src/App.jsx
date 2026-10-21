@@ -9529,11 +9529,17 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       Object.keys(byPath).filter(p => /^xl\/worksheets\/sheet\d+\.xml$/.test(p)).forEach(p => {
         const sd = /<sheetData>([\s\S]*?)<\/sheetData>/.exec(read(p))?.[1] || "";
         const rows = [...sd.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)].map(m => { const cells = {}; [...(m[2] || "").matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)].forEach(c => { const ref = /r="([A-Z]+\d+)"/.exec(c[1])?.[1]; if (ref) cells[colIdx(ref)] = String(cellText(c[1], c[2]) || "").trim(); }); return cells; });
-        const hi = rows.findIndex(r => Object.values(r).some(v => /ID$/.test(v) && /(테스트 케이스|검증 수단)/.test(v)) && Object.values(r).some(v => /^결과/.test(v)));
+        // SPIDer 생성 양식(테스트 케이스·검증 수단 ID)과 OSSP 템플릿(검증 ID · 실행일 · 버전 · 재검증) 모두 인식
+        const hi = rows.findIndex(r => Object.values(r).some(v => /(테스트 케이스|검증 수단|검증) ?ID$/.test(v)) && Object.values(r).some(v => /^결과/.test(v)));
         if (hi < 0) return;
         const H = rows[hi]; const col = re => { const e = Object.entries(H).find(([, v]) => re.test(v)); return e ? Number(e[0]) : -1; };
-        const c = { id: col(/(테스트 케이스|검증 수단) ID$/), state: col(/^결과/), date: col(/수행일/), by: col(/수행자/), config: col(/형상/), defect: col(/결함/), note: col(/^비고/) };
-        rows.slice(hi + 1).forEach(r => { const id = r[c.id]; if (!id) return; out.push({ id, state: r[c.state], date: c.date >= 0 ? r[c.date] : "", by: c.by >= 0 ? r[c.by] : "", config: c.config >= 0 ? r[c.config] : "", defect: c.defect >= 0 ? r[c.defect] : "", note: c.note >= 0 ? r[c.note] : "" }); });
+        const c = { id: col(/(테스트 케이스|검증 수단|검증) ?ID$/), state: col(/^결과/), re: col(/^재검증/), date: col(/수행일|실행일/), by: col(/수행자|실행자/), config: col(/형상|버전/), defect: col(/결함/), note: col(/^비고/), dev: col(/편차/) };
+        const g = (r, k) => (c[k] >= 0 ? r[c[k]] || "" : "");
+        rows.slice(hi + 1).forEach(r => { const id = r[c.id]; if (!id) return;
+          // 재검증 결과가 있으면 그것이 최종 결과, 최초 결과는 비고에 남긴다
+          const reV = g(r, "re"), first = r[c.state]; const useRe = reV && AE.normResult(reV);
+          const note = [g(r, "note"), g(r, "dev") ? `편차: ${g(r, "dev")}` : "", useRe && first ? `최초 결과 ${first} → 재검증` : ""].filter(Boolean).join(" · ");
+          out.push({ id, state: useRe ? reV : first, date: g(r, "date"), by: g(r, "by"), config: g(r, "config"), defect: g(r, "defect"), note }); });
       });
       if (!out.length) throw new Error("결과 열이 있는 시트를 찾지 못했습니다 — SPIDer에서 내려받은 검증 결과서(또는 명세서)인지 확인하세요.");
       const r = AE.importResultRows(model, out);
