@@ -809,9 +809,15 @@ export function generateRuleTests(model, onlyLevels) {
       });
     }
   });
-  // 레벨별 채번 — 기존 ID와 충돌하지 않게 이어서 부여
+  // 다시 만들어도 대상·제목이 같은 시험은 이전 ID·검증 결과·회귀 지정을 이어받는다(교차검토·결과 기록 보존)
+  const keyOf = t => `${t.level}|${(t.targets || []).join(",")}|${t.title}`;
+  const oldBy = new Map(); (model.tests || []).filter(t => t.origin !== "manual" && levels.includes(t.level)).forEach(o => { if (!oldBy.has(keyOf(o))) oldBy.set(keyOf(o), o); });
+  const used = new Set(kept.map(t => t.id));
   const all = [...kept];
-  fresh.forEach(t => { const p = TEST_LEVELS[t.level].prefix; all.push({ ...t, id: nextId(p, all.filter(x => x.level === t.level), 4) }); });
+  const rest = [];
+  fresh.map(({ id, ...t }) => t).forEach(t => { const o = oldBy.get(keyOf(t)); if (o && o.id && !used.has(o.id)) { used.add(o.id); all.push({ ...t, id: o.id, ...(o.result ? { result: o.result } : {}), ...(o.resultLog ? { resultLog: o.resultLog } : {}), regression: o.regression }); } else rest.push(t); });
+  // 나머지는 레벨별로 기존 ID와 충돌하지 않게 이어서 채번
+  rest.forEach(t => { const p = TEST_LEVELS[t.level].prefix; all.push({ ...t, id: nextId(p, all.filter(x => x.level === t.level), 4) }); });
   return all;
 }
 

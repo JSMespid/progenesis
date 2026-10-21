@@ -9525,6 +9525,17 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       setNote(`실행 결과 반영: 유닛 ${us.length}개 (Pass ${us.filter(x => x.result === "Pass").length} · Fail ${us.filter(x => x.result === "Fail").length}) · 케이스 ${r.cases.length}건 중 통과 ${r.cases.filter(c => c.result === "pass").length} — SW 유닛 검증 결과서(SW4106)에 반영됩니다.`);
     } catch (e) { setErr(`실행 결과 가져오기 실패: ${e.message}`); }
   }
+  async function downloadResultForm(level) {
+    const kind = Object.keys(AE.ASPICE_DOCS).find(k => AE.ASPICE_DOCS[k].result && AE.ASPICE_DOCS[k].test === level);
+    if (!kind) return;
+    try {
+      const of = await buildVmodelDoc(kind, form || {}, { ossp, tailoring, requirements: { ...(requirements || {}), items, aspice: model } });
+      if (!of) { setErr("만들 결과서가 없습니다 — 먼저 시험을 만드세요."); return; }
+      const D = AE.ASPICE_DOCS[kind]; const blob = new Blob([of.bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${D.code}_${String(D.title).replace(/[\\/:*?"<>|]/g, "_")}.${of.ext}`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1500);
+      setNote(`${D.title}를 내려받았습니다 — 결과 열(목록 선택)·수행 정보를 적어 [⬆ 결과 엑셀 가져오기]로 올리면 시험별로 반영됩니다.`);
+    } catch (e) { setErr(`결과서 내려받기 실패: ${e.message}`); }
+  }
   // ── 검증 결과 엑셀(결과서 '검증 결과' 시트 또는 명세서 '검증 명세' 시트의 결과 열) 가져오기 ──
   async function importResultXlsx(file) {
     if (!file) return;
@@ -10559,8 +10570,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 {(() => { const mt = AE.missingTestTargets(model, lvKeys); return mt > 0 && model.tests.length > 0
                   ? <Btn onClick={() => { const x = AE.addMissingTests(model, lvKeys); set(n => { n.tests = x.tests; }); setNote(`시험 ${x.added.length}건(${x.added.slice(0, 8).join(", ")}${x.added.length > 8 ? " …" : ""})을 추가했습니다 — 기존 시험은 그대로입니다. 새 시험의 기대 결과·합격 기준을 다듬으세요.`); }} disabled={busy} title="시험이 하나도 없는 요구·인터페이스·유닛에만 규칙 시험을 추가합니다. 기존 시험의 ID·내용·교차검토 기록은 그대로입니다" style={{ fontSize: 11, padding: "4px 12px" }}>＋ 빠진 시험만 추가 (대상 {mt}개)</Btn>
                   : null; })()}
-                <Btn variant="outline" onClick={() => { if (model.tests.some(t => t.level === cur && t.origin !== "manual") && !window.confirm(`${AE.TEST_LEVELS[cur].proc} ${AE.TEST_LEVELS[cur].label} 시험을 다시 만듭니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.\n빠진 것만 채우려면 [빠진 시험만 추가]를 쓰세요.\n\n계속할까요?`)) return; genTests([cur]); }} disabled={busy} title={`${AE.TEST_LEVELS[cur].proc} ${AE.TEST_LEVELS[cur].label}의 시험만 규칙${model.useAI ? "+AI" : ""}로 새로 만듭니다 — 직접 작성·수정한 시험(✎)은 보존`} style={{ fontSize: 11, padding: "4px 10px" }}>{model.tests.some(t => t.level === cur) ? `↻ ${AE.TEST_LEVELS[cur].proc} 시험 다시 만들기` : `${AE.TEST_LEVELS[cur].proc} 시험 만들기`}</Btn>
-                <Btn variant={model.tests.length ? "outline" : undefined} onClick={() => { if (model.tests.some(t => t.origin !== "manual") && !window.confirm(`모든 검증 단계(${lvKeys.map(k => AE.TEST_LEVELS[k].proc).join("·")})의 시험을 다시 만듭니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.\n빠진 것만 채우려면 [빠진 시험만 추가]를 쓰세요.\n\n계속할까요?`)) return; genTests(lvKeys); }} disabled={busy} title={`${lvKeys.map(k => AE.TEST_LEVELS[k].proc).join("·")} 전체를 규칙${model.useAI ? "(경계값·결함 주입·인터페이스) + AI(정상 시나리오 서술)" : ""}로 만듭니다 — 직접 작성·수정한 시험(✎)은 보존`} style={{ fontSize: 11, padding: "4px 12px" }}>{model.tests.length ? `↻ 모든 검증 단계 시험 다시 만들기 (${lvKeys.length}단계)` : `모든 검증 단계 시험 만들기 (${lvKeys.length}단계)`}</Btn>
+                <Btn variant="outline" onClick={() => { if (model.tests.some(t => t.level === cur && t.origin !== "manual") && !window.confirm(`${AE.TEST_LEVELS[cur].proc} ${AE.TEST_LEVELS[cur].label} 시험을 다시 만듭니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.${(() => { const n = model.tests.filter(t => t.level === cur && t.origin !== "manual" && t.result?.state).length; return n ? `\nⓘ 입력한 검증 결과 ${n}건: 대상·제목이 그대로인 시험은 번호·결과가 유지되고, 내용이 바뀐 시험의 결과만 사라집니다 — 필요하면 먼저 [⬇ 결과 기록 양식]으로 보관하세요.` : ""; })()}\n빠진 것만 채우려면 [빠진 시험만 추가]를 쓰세요.\n\n계속할까요?`)) return; genTests([cur]); }} disabled={busy} title={`${AE.TEST_LEVELS[cur].proc} ${AE.TEST_LEVELS[cur].label}의 시험만 규칙${model.useAI ? "+AI" : ""}로 새로 만듭니다 — 직접 작성·수정한 시험(✎)은 보존`} style={{ fontSize: 11, padding: "4px 10px" }}>{model.tests.some(t => t.level === cur) ? `↻ ${AE.TEST_LEVELS[cur].proc} 시험 다시 만들기` : `${AE.TEST_LEVELS[cur].proc} 시험 만들기`}</Btn>
+                <Btn variant={model.tests.length ? "outline" : undefined} onClick={() => { if (model.tests.some(t => t.origin !== "manual") && !window.confirm(`모든 검증 단계(${lvKeys.map(k => AE.TEST_LEVELS[k].proc).join("·")})의 시험을 다시 만듭니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.${(() => { const n = model.tests.filter(t => t.origin !== "manual" && t.result?.state).length; return n ? `\nⓘ 입력한 검증 결과 ${n}건: 대상·제목이 그대로인 시험은 번호·결과가 유지되고, 내용이 바뀐 시험의 결과만 사라집니다 — 필요하면 먼저 단계별 [⬇ 결과 기록 양식]으로 보관하세요.` : ""; })()}\n빠진 것만 채우려면 [빠진 시험만 추가]를 쓰세요.\n\n계속할까요?`)) return; genTests(lvKeys); }} disabled={busy} title={`${lvKeys.map(k => AE.TEST_LEVELS[k].proc).join("·")} 전체를 규칙${model.useAI ? "(경계값·결함 주입·인터페이스) + AI(정상 시나리오 서술)" : ""}로 만듭니다 — 직접 작성·수정한 시험(✎)은 보존`} style={{ fontSize: 11, padding: "4px 12px" }}>{model.tests.length ? `↻ 모든 검증 단계 시험 다시 만들기 (${lvKeys.length}단계)` : `모든 검증 단계 시험 만들기 (${lvKeys.length}단계)`}</Btn>
               </div>
               {runCtx.anchor === "verif-bar" && (busy || prog) && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
               {runCtx.anchor === "verif-bar" && runErr && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{runErr}</div>}
@@ -10661,6 +10672,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       <span><b style={{ color: T.green }}>Pass {S.pass}</b> · <b style={{ color: S.fail ? T.red : T.muted }}>Fail {S.fail}</b> · <span style={{ color: S.blocked ? T.amber : T.muted }}>Blocked {S.blocked}</span> · <span style={{ color: T.muted }}>미수행 {S.none}</span> / {S.total}건</span>
                       <span className="ae-hint" style={{ color: T.muted, fontSize: 10 }}>— 시험마다 오른쪽 [결과]에서 고르거나, 내려받은 결과서 엑셀에 적어 올리세요. 결과는 {AE.TEST_LEVELS[cur].proc} 검증 결과서·명세서에 그대로 기록됩니다.</span>
                       <span style={{ flex: 1 }} />
+                      <button onClick={() => downloadResultForm(cur)} title={`${AE.TEST_LEVELS[cur].proc} 검증 결과서를 지금까지의 결과로 채워 내려받습니다 — 현장에서 결과를 적은 뒤 다시 가져오기`} style={{ ...small, padding: "3px 10px" }}>⬇ 결과 기록 양식</button>
                       <label style={{ ...small, padding: "3px 10px" }} title="SPIDer에서 내려받은 검증 결과서(검증 결과 시트) 또는 명세서(검증 명세 시트)의 결과 열을 시험 ID로 읽어 반영">⬆ 결과 엑셀 가져오기<input type="file" accept=".xlsx" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; importResultXlsx(f); }} /></label>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 6, color: T.muted, fontSize: 10.5 }}>
@@ -10669,7 +10681,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       <input value={runInfo.by} onChange={e => setRunInfo(v => ({ ...v, by: e.target.value }))} placeholder="수행자" style={{ ...ri, width: 90 }} />
                       <input value={runInfo.config} onChange={e => setRunInfo(v => ({ ...v, config: e.target.value }))} placeholder="형상 (예: SW v1.2 / HW B샘플)" style={{ ...ri, width: 200 }} />
                       <span style={{ flex: 1 }} />
-                      {open_.length > 0 && <button onClick={() => { if (window.confirm(`결과가 없는 시험 ${open_.length}건을 모두 Pass로 기록합니다 (수행일 ${runInfo.date}${runInfo.by ? ` · 수행자 ${runInfo.by}` : ""}${runInfo.config ? ` · 형상 ${runInfo.config}` : ""}).\n실제로 모두 통과한 경우에만 쓰세요.\n\n계속할까요?`)) setModel(m => AE.setTestResults(m, open_.map(t => t.id), { state: "pass", date: runInfo.date, by: runInfo.by, config: runInfo.config })); }} style={{ ...small, color: T.green }}>결과 없는 {open_.length}건 모두 Pass</button>}
+                      {open_.length > 0 && <button onClick={() => { if (window.confirm(`결과가 없는 시험 ${open_.length}건을 모두 Pass로 기록합니다 (수행일 ${runInfo.date}${runInfo.by ? ` · 수행자 ${runInfo.by}` : ""}${runInfo.config ? ` · 형상 ${runInfo.config}` : ""}).\n실제로 모두 통과한 경우에만 쓰세요.\n\n계속할까요?`)) setModel(m => AE.setTestResults(m, open_.map(t => t.id), { state: "pass", date: runInfo.date, by: runInfo.by, config: runInfo.config })); }} title="실제로 모두 통과한 경우에만 쓰세요 — 수행 정보(수행일·수행자·형상)와 함께 기록됩니다" style={{ ...small, color: T.muted }}>일괄 기록: 결과 없는 {open_.length}건 → Pass</button>}
                     </div>
                   </div>);
               })()}
@@ -10681,9 +10693,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     <span title={AE.REGRESSION_ABOUT}>회귀 시험 대상 <b>{regN}</b> / {ts.length}건 <span style={{ color: T.muted, cursor: "help" }}>ⓘ</span></span>
                     <span className="ae-hint" style={{ color: T.muted, fontSize: 10 }}>— 설계·코드가 바뀐 뒤 다시 수행할 시험 (검증 명세서의 '선택 세트·회귀 대상'에 그대로 기록)</span>
                     <span style={{ flex: 1 }} />
-                    <button onClick={() => setReg(() => true)} style={small}>모두 선택</button>
-                    <button onClick={() => setReg(() => false)} style={small}>모두 해제</button>
-                    <button onClick={() => setReg(t => AE.defaultRegression(model, t))} title={AE.REGRESSION_ABOUT} style={small}>기본값으로</button>
+                    <button onClick={() => setReg(() => true)} style={small}>회귀 모두 지정</button>
+                    <button onClick={() => setReg(() => false)} style={small}>회귀 모두 해제</button>
+                    <button onClick={() => setReg(t => AE.defaultRegression(model, t))} title={AE.REGRESSION_ABOUT} style={small}>회귀 기본값으로</button>
                   </div>);
               })()}
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
