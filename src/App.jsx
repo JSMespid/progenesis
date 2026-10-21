@@ -9001,7 +9001,7 @@ const AE_GUIDE = {
     todo: ["[AI 요구 파생] 또는 [빠진 N건만 파생]으로 HW 요구를 만듭니다.", "요구마다 담당 HW 컴포넌트를 지정합니다.", "전원·열·접지 같은 HW 인터페이스를 채웁니다."],
     done: "HW 담당 시스템 요구가 모두 HW 요구로 내려가고 컴포넌트가 지정되면 끝." },
   verif: { why: "요구마다 '어떻게 확인할 것인가'(시험)를 미리 정해야 요구가 검증 가능해집니다. 시스템·SW·HW 요구 시험, 인터페이스 통합 시험, 유닛 시험을 한 모델에서 만들어 추적성을 닫습니다.",
-    todo: ["[전체 생성]으로 규칙(+AI) 시험을 만듭니다. 이미 있으면 [빠진 시험만 생성]을 쓰세요.", "레벨 탭(SYS.5·SWE.6 …)을 돌며 기대 결과·합격 기준이 판정 가능한지 봅니다.", "TBD로 남은 합격 기준은 코드·사양 확정 후 채웁니다."],
+    todo: ["[모든 검증 단계 시험 만들기]로 규칙(+AI) 시험을 만듭니다. 이미 있으면 [빠진 시험만 추가]를 쓰세요.", "검증 단계 탭(SYS.5·SWE.6 …)을 돌며 기대 결과·합격 기준이 판정 가능한지 봅니다.", "TBD로 남은 합격 기준은 코드·사양 확정 후 채웁니다."],
     done: "'빠진 곳 점검'에서 '요구마다 시험이 있나' 등 검증 항목이 모두 100%면 끝." },
   trace: { why: "V-모델이 어디에서 끊겼는지 한눈에 봅니다. 커버리지 막대가 100%가 아니면 그 줄의 [빠짐 →]으로 가서 처리하고, 일관성 점검의 오류는 반드시 해소합니다.",
     todo: ["커버리지의 [빠짐 N건 →]을 눌러 해당 탭에서 처리합니다(처리 방법 💡가 함께 표시됨).", "'변경 영향 검토'가 있으면 하위 연결마다 '영향 없음' 또는 '하위 수정 필요'로 판정합니다.", "일관성 점검의 줄을 눌러 처리 방법을 보고 ✎로 바로 고칩니다. WP 특성 충족도의 누락은 사유를 적거나 N/A로 정리합니다."],
@@ -10177,7 +10177,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             const tip = /Alloc$/.test(k) && /^(sw|hw)/.test(k) ? "처리: 아래 요구의 '할당 →'에서 담당 컴포넌트 칩을 눌러 지정하세요(여러 개 가능, 다시 누르면 해제). 'AI 컴포넌트 설계·할당'은 전체를 다시 만들므로 누르지 마세요."
               : k === "swUnit" ? "처리: 먼저 이 요구에 담당 컴포넌트를 할당한 뒤, 아래 'SW 유닛 분해'의 [빠진 유닛만 추가]를 누르세요. 기존 유닛은 그대로 둡니다."
               : /Derive$/.test(k) && k !== "stkDerive" ? "처리: 아래 주황 상자의 [이 요구에서 파생]을 누르세요. 기존 하위 요구·할당은 그대로 둡니다."
-              : focusOn.tab === "verif" ? "처리: 위의 [빠진 시험만 생성]을 누르세요. 기존 시험의 ID·내용·검토 기록은 그대로 둡니다. 생성 후 기대 결과·합격 기준을 다듬으세요."
+              : focusOn.tab === "verif" ? "처리: 위의 [빠진 시험만 추가]를 누르세요. 기존 시험의 ID·내용·검토 기록은 그대로 둡니다. 생성 후 기대 결과·합격 기준을 다듬으세요."
               : "";
             return tip ? <div style={{ fontSize: 11, color: T.text, padding: "6px 10px", background: T.green + "10", border: `1px solid ${T.green}44`, borderRadius: 8, marginTop: -4, marginBottom: 10 }}>💡 {tip}</div> : null;
           })()}
@@ -10321,7 +10321,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 right={<div style={{ display: "flex", gap: 6 }}>
                   <label title="헤더 파일을 이 섹션으로 끌어다 놓아도 됩니다" style={{ ...small, display: "inline-block", padding: "4px 10px" }}>📎 .h 헤더 가져오기 (끌어다 놓기 가능)<input type="file" accept=".h,.hpp,.txt" multiple onChange={onHeaders} style={{ display: "none" }} /></label>
                   {(() => { const r = AE.addMissingUnits(model); return model.units.SW.length > 0 && r.added.length > 0
-                    ? <Btn onClick={() => { const x = AE.addMissingUnits(model); set(n => { n.units.SW = x.units; }); setNote(`유닛 ${x.added.join(", ")}을(를) 추가했습니다 — 기존 유닛은 그대로입니다. SWE.4 유닛 시험은 SWE.4 유닛 검증 탭의 [빠진 시험만 생성]으로 추가하세요.`); }} disabled={busy} title="기존 유닛(수정·헤더 반영분 포함)은 그대로 두고, 유닛이 없는 SW 요구에만 골격을 추가합니다" style={{ fontSize: 11, padding: "4px 12px" }}>빠진 유닛만 추가 ({r.added.length})</Btn>
+                    ? <Btn onClick={() => { const x = AE.addMissingUnits(model); set(n => { n.units.SW = x.units; }); setNote(`유닛 ${x.added.join(", ")}을(를) 추가했습니다 — 기존 유닛은 그대로입니다. SWE.4 유닛 시험은 SWE.4 유닛 검증 탭의 [빠진 시험만 추가]로 추가하세요.`); }} disabled={busy} title="기존 유닛(수정·헤더 반영분 포함)은 그대로 두고, 유닛이 없는 SW 요구에만 골격을 추가합니다" style={{ fontSize: 11, padding: "4px 12px" }}>빠진 유닛만 추가 ({r.added.length})</Btn>
                     : null; })()}
                   <Btn variant={model.units.SW.length ? "outline" : undefined} onClick={() => { if (model.units.SW.some(u => u.origin === "rule") && !window.confirm("규칙으로 만든 유닛을 모두 다시 만들고 유닛 번호를 다시 매깁니다.\n이 화면이나 교차검토에서 고친 유닛 설계, SWE.4 유닛 시험, 유닛 교차검토 기록이 바뀔 수 있습니다(헤더로 가져온 유닛은 유지).\n빠진 것만 채우려면 [빠진 유닛만 추가]를 쓰세요.\n\n계속할까요?")) return; genUnits(); }} disabled={busy || !model.comps.SW.length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.units.SW.length ? "⚙ 골격 다시 생성" : "⚙ 규칙 골격 생성"}</Btn>
                 </div>}>
@@ -10478,10 +10478,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 {!sub && lvKeys.map(k => <button key={k} onClick={() => setVFilter(k)} style={{ ...small, padding: "5px 10px", color: cur === k ? "#fff" : T.muted, background: cur === k ? T.accent : "transparent", borderColor: cur === k ? T.accent : T.border }}>{AE.TEST_LEVELS[k].proc} {AE.TEST_LEVELS[k].label} ({model.tests.filter(t => t.level === k).length})</button>)}
                 <div style={{ flex: 1 }} />
                 {(() => { const mt = AE.missingTestTargets(model, lvKeys); return mt > 0 && model.tests.length > 0
-                  ? <Btn onClick={() => { const x = AE.addMissingTests(model, lvKeys); set(n => { n.tests = x.tests; }); setNote(`시험 ${x.added.length}건(${x.added.slice(0, 8).join(", ")}${x.added.length > 8 ? " …" : ""})을 추가했습니다 — 기존 시험은 그대로입니다. 새 시험의 기대 결과·합격 기준을 다듬으세요.`); }} disabled={busy} title="시험이 하나도 없는 요구·인터페이스·유닛에만 규칙 시험을 추가합니다. 기존 시험의 ID·내용·교차검토 기록은 그대로입니다" style={{ fontSize: 11, padding: "4px 12px" }}>빠진 시험만 생성 ({mt}개 대상)</Btn>
+                  ? <Btn onClick={() => { const x = AE.addMissingTests(model, lvKeys); set(n => { n.tests = x.tests; }); setNote(`시험 ${x.added.length}건(${x.added.slice(0, 8).join(", ")}${x.added.length > 8 ? " …" : ""})을 추가했습니다 — 기존 시험은 그대로입니다. 새 시험의 기대 결과·합격 기준을 다듬으세요.`); }} disabled={busy} title="시험이 하나도 없는 요구·인터페이스·유닛에만 규칙 시험을 추가합니다. 기존 시험의 ID·내용·교차검토 기록은 그대로입니다" style={{ fontSize: 11, padding: "4px 12px" }}>＋ 빠진 시험만 추가 (대상 {mt}개)</Btn>
                   : null; })()}
-                <Btn variant="outline" onClick={() => { if (model.tests.some(t => t.level === cur && t.origin !== "manual") && !window.confirm(`${AE.TEST_LEVELS[cur].proc} 시험을 다시 생성합니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.\n\n계속할까요?`)) return; genTests([cur]); }} disabled={busy} style={{ fontSize: 11, padding: "4px 10px" }}>이 레벨 다시 생성</Btn>
-                <Btn variant={model.tests.length ? "outline" : undefined} onClick={() => { if (model.tests.some(t => t.origin !== "manual") && !window.confirm("모든 레벨의 시험을 다시 생성합니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.\n빠진 것만 채우려면 [빠진 시험만 생성]을 쓰세요.\n\n계속할까요?")) return; genTests(lvKeys); }} disabled={busy} style={{ fontSize: 11, padding: "4px 12px" }}>{model.useAI ? "⚡ 규칙+AI" : "⚙ 규칙"} 전체 {model.tests.length ? "다시 " : ""}생성</Btn>
+                <Btn variant="outline" onClick={() => { if (model.tests.some(t => t.level === cur && t.origin !== "manual") && !window.confirm(`${AE.TEST_LEVELS[cur].proc} ${AE.TEST_LEVELS[cur].label} 시험을 다시 만듭니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.\n빠진 것만 채우려면 [빠진 시험만 추가]를 쓰세요.\n\n계속할까요?`)) return; genTests([cur]); }} disabled={busy} title={`${AE.TEST_LEVELS[cur].proc} ${AE.TEST_LEVELS[cur].label}의 시험만 규칙${model.useAI ? "+AI" : ""}로 새로 만듭니다 — 직접 작성·수정한 시험(✎)은 보존`} style={{ fontSize: 11, padding: "4px 10px" }}>{model.tests.some(t => t.level === cur) ? `↻ ${AE.TEST_LEVELS[cur].proc} 시험 다시 만들기` : `${AE.TEST_LEVELS[cur].proc} 시험 만들기`}</Btn>
+                <Btn variant={model.tests.length ? "outline" : undefined} onClick={() => { if (model.tests.some(t => t.origin !== "manual") && !window.confirm(`모든 검증 단계(${lvKeys.map(k => AE.TEST_LEVELS[k].proc).join("·")})의 시험을 다시 만듭니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.\n빠진 것만 채우려면 [빠진 시험만 추가]를 쓰세요.\n\n계속할까요?`)) return; genTests(lvKeys); }} disabled={busy} title={`${lvKeys.map(k => AE.TEST_LEVELS[k].proc).join("·")} 전체를 규칙${model.useAI ? "(경계값·결함 주입·인터페이스) + AI(정상 시나리오 서술)" : ""}로 만듭니다 — 직접 작성·수정한 시험(✎)은 보존`} style={{ fontSize: 11, padding: "4px 12px" }}>{model.tests.length ? `↻ 모든 검증 단계 시험 다시 만들기 (${lvKeys.length}단계)` : `모든 검증 단계 시험 만들기 (${lvKeys.length}단계)`}</Btn>
               </div>
               {runCtx.anchor === "verif-bar" && (busy || prog) && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
               {runCtx.anchor === "verif-bar" && runErr && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{runErr}</div>}
