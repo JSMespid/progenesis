@@ -8560,7 +8560,7 @@ function packReqSource(text, files) {
   });
   return { text: String(text || "").slice(0, SRC_FILE_CAP), files: out, updatedAt: new Date().toISOString() };
 }
-function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, embedded = false, onEmbeddedConfirm, previewAspice, seedItems, onSourceChange, focusIds = null, part = null, onGoPart }) {
+function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, embedded = false, onEmbeddedConfirm, previewAspice, seedItems, onSourceChange, focusIds = null, part = null, onGoPart, draft = null, onDraftChange }) {
   // part(V-모델 안): "STK" = SYS.1 원문·이해관계자 요구 / "SYS" = SYS.2 시스템 요구 / null = 둘 다 (기능·상태는 공유, 표시만 나눔)
   // OSSP별 문구·AI 역할 — 가이드에 reqGen이 없으면 기존(정보공학) 문구 사용
   const RG = getGuideForOSSP(ossp || {})?.reqGen || {};
@@ -8576,10 +8576,12 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, 
   // V-모델 안(embedded)에서는 원문이 바뀔 때마다 상위에 알려 저장(확정 전이라도 '저장'에 포함)
   useEffect(() => { if (embedded && onSourceChange) onSourceChange(srcPack()); }, [srcText, srcFiles]);
   const [srcDrag, setSrcDrag] = useState(false);  // 드래그앤드롭 하이라이트
-  const [items, setItems] = useState(() => { const src = seedItems || requirements?.items; return src ? src.map(x => ({ ...x })) : []; });
+  const [items, setItems] = useState(() => { const src = draft?.items || seedItems || requirements?.items; return src ? src.map(x => ({ ...x })) : []; });
   // ASPICE: 이해관계자 요구(SYS.1) 층 — 원문 그대로의 요구 문장. 시스템 요구(SYS.2)는 여기서 도출되고 stkIds로 연결된다.
   const STK_ON = getGuideForOSSP(ossp || {})?.id === "aspice";
-  const [stk, setStk] = useState(() => ((requirements?.stk?.items) || []).map(x => ({ ...x })));
+  const [stk, setStk] = useState(() => (draft?.stk || (requirements?.stk?.items) || []).map(x => ({ ...x })));
+  // V-모델 안: 확정 전 편집 내용을 상위에 알린다(탭 이동·닫기 경고·하단 표시용)
+  useEffect(() => { if (embedded && onDraftChange) onDraftChange({ items, stk }); }, [items, stk]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState(null);
   const [error, setError] = useState(null);
@@ -8737,12 +8739,12 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
       newId = next[next.length - 1]?.id || "";
       return next;
     });
-    setTimeout(() => setStkMsg(`${k.id} → 새 시스템 요구 ${newId || ""}를 원문으로 초안 작성했습니다. 아래 시스템 요구 목록 맨 끝에서 [상세]를 열어 요구사항명·검증 기준을 다듬은 뒤 '요구사항 확정'을 누르세요.`), 0);
+    setTimeout(() => setStkMsg(`${k.id} → 새 시스템 요구 ${newId || ""}를 원문으로 초안 작성했습니다. 아래 시스템 요구 목록 맨 끝에서 [상세]를 열어 요구사항명·검증 기준을 다듬은 뒤 '확정·V-모델 반영'을 누르세요.`), 0);
   }
   function linkStk(k, reqId) {
     if (!reqId) return;
     setItems(list => list.map(it => it.id === reqId ? { ...it, stkIds: [...new Set([...(it.stkIds || []), k.id])] } : it));
-    setStkMsg(`${k.id}를 ${reqId}의 근거로 연결했습니다. ${reqId}의 본문·검증 기준에 이 조건(${String(k.text || "").slice(0, 30)}…)이 실제로 들어 있는지 [상세]에서 확인한 뒤 '요구사항 확정'을 누르세요.`);
+    setStkMsg(`${k.id}를 ${reqId}의 근거로 연결했습니다. ${reqId}의 본문·검증 기준에 이 조건(${String(k.text || "").slice(0, 30)}…)이 실제로 들어 있는지 [상세]에서 확인한 뒤 '확정·V-모델 반영'을 누르세요.`);
   }
   function confirmSave() {
     const valid = items.filter(it => String(it.name || "").trim());
@@ -8796,7 +8798,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                 <span style={{ fontSize:10, color:T.green }}>✓ 첨부됨 · AI 생성 시 함께 분석되며, {embedded ? "V-모델 저장" : "확정 저장"} 시 원문과 함께 프로젝트에 보관됩니다</span>
               )}
               <div style={{ flex:1 }} />
-              <Btn onClick={generate} disabled={busy} style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ AI 재생성" : "⚡ AI 도출·명세"}</Btn>
+              <Btn onClick={() => { if (items.length && !window.confirm(`원문에서 요구를 다시 도출하면 지금 목록(${STK_ON && stk.length ? `이해관계자 ${stk.length}건 · ` : ""}시스템 ${items.length}건)이 AI 결과로 바뀝니다.\n직접 고친 내용도 바뀝니다. 확정하기 전까지 V-모델에는 반영되지 않습니다.\n\n계속할까요?`)) return; generate(); }} disabled={busy} title="첨부 원문(사양서·회의록 등)에서 이해관계자 요구를 발췌하고 시스템 요구를 도출합니다" style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ 원문에서 다시 도출" : "⚡ 원문에서 요구 도출"}</Btn>
             </div>
           </div>)}
           {(busy || prog) && <GenProgressBar progress={prog || { percent:3, label:"요구사항 분석 준비 중…" }} subText="원문 분량·요구사항 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
@@ -8814,7 +8816,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
               </WhyBox></div>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
                 <div style={{ fontSize:12, fontWeight:600 }}>이해관계자 요구 (SYS.1) <span style={{ color:T.accent }}>{stk.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 원문 그대로. 합의 {stk.filter(k => k.status === "합의").length} · 검토 중 {stk.filter(k => !["합의", "보류", "해당 없음"].includes(k.status)).length} · 보류 {stk.filter(k => k.status === "보류").length}{stk.some(k => k.status === "해당 없음") ? ` · 해당 없음 ${stk.filter(k => k.status === "해당 없음").length}` : ""} · 시스템 요구 미도출 {stk.filter(k => !sysCount[k.id] && !AE.stkClosed(k)).length}</span></div>
-                <button onClick={addS} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>+ 행 추가</button>
+                <button onClick={addS} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>＋ 이해관계자 요구 추가</button>
               </div>
               <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:14 }}>
                 <div style={{ display:"grid", gridTemplateColumns:"72px 1fr 130px 92px 90px 84px 150px 24px", gap:6, fontSize:10, color:T.muted, padding:"0 4px" }}>
@@ -8850,7 +8852,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                       </div>)}
                   </div>
                 ))}
-                {!stk.length && <div style={{ fontSize:11, color:T.muted, padding:6 }}>AI 도출을 실행하면 원문에서 이해관계자 요구가 먼저 발췌됩니다. 직접 입력하려면 '+ 행 추가'.</div>}
+                {!stk.length && <div style={{ fontSize:11, color:T.muted, padding:6 }}>AI 도출을 실행하면 원문에서 이해관계자 요구가 먼저 발췌됩니다. 직접 입력하려면 '＋ 이해관계자 요구 추가'.</div>}
               </div>
             </div>); })()}
           {part === "STK" && items.length > 0 && (
@@ -8860,7 +8862,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
             </div>)}
           {part === "SYS" && !items.length && (
             <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:11, color:T.muted, padding:"10px 12px", border:`1px dashed ${T.border}`, borderRadius:8 }}>
-              <span style={{ flex:1 }}>아직 시스템 요구가 없습니다. SYS.1에서 고객 사양서를 올리고 [AI 도출·명세]를 누르면 이해관계자 요구와 시스템 요구가 함께 만들어집니다.</span>
+              <span style={{ flex:1 }}>아직 시스템 요구가 없습니다. SYS.1에서 고객 사양서를 올리고 [원문에서 요구 도출]을 누르면 이해관계자 요구와 시스템 요구가 함께 만들어집니다.</span>
               {onGoPart && <button onClick={() => onGoPart("STK")} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:10.5, padding:"3px 9px" }}>← SYS.1 고객 요구</button>}
             </div>)}
           {part !== "STK" && items.length > 0 && (
@@ -8928,7 +8930,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
           </span>); })()}
           <div style={{ display:"flex", gap:8, flexShrink:0 }}>
             {!embedded && <Btn variant="outline" onClick={onClose} style={{ fontSize:12, padding:"7px 14px" }}>취소</Btn>}
-            <Btn onClick={confirmSave} disabled={busy || !items.length} title="이해관계자 요구(SYS.1)와 시스템 요구(SYS.2)를 V-모델 추적 모델에 반영합니다" style={{ fontSize:12, padding:"7px 14px" }}>{embedded ? `✓ 요구사항 확정 (${STK_ON && stk.length ? `이해관계자 ${stk.length} · ` : ""}시스템 ${items.length}건)` : `✓ 확정 저장 (${items.length}건)`}</Btn>
+            <Btn onClick={confirmSave} disabled={busy || !items.length} title="이해관계자 요구(SYS.1)와 시스템 요구(SYS.2)를 확정해 V-모델 추적 모델에 반영합니다(내용이 바뀐 요구의 하위 연결은 '변경 검토 필요'로 표시). 반영 후 하단 [✓ 저장]으로 프로젝트에 저장합니다" style={{ fontSize:12, padding:"7px 14px" }}>{embedded ? `✓ 확정·V-모델 반영 (${STK_ON && stk.length ? `이해관계자 ${stk.length} · ` : ""}시스템 ${items.length}건)` : `✓ 확정 저장 (${items.length}건)`}</Btn>
           </div>
         </div>
   );
@@ -9014,7 +9016,7 @@ const AE_GUIDE = {
     todo: ["ASPICE 버전(3.1 / 4.0 / 겸용)과 개발 범위(SYS + SW / SYS + SW + HW)를 고릅니다.", "확보한 입력자료(고객 사양서·DBC·회의록 등)를 체크합니다. 없는 자료는 TBD로 남겨도 됩니다.", "통신 DB(DBC)가 있으면 끌어다 놓아 인터페이스 요구를 자동으로 만듭니다."],
     done: "버전·범위를 정하고 저장하면 끝. 입력자료는 나중에 추가해도 됩니다." },
   req: { why: "고객(OEM)이 말한 문장(이해관계자 요구)을 그대로 남기고, 그것을 우리 시스템이 검증할 수 있는 문장(시스템 요구)으로 다시 씁니다. 둘을 연결해 두어야 '고객 요구를 빠짐없이 분석했다'는 근거가 됩니다.",
-    todo: ["고객 사양서·RFQ 등을 붙여넣거나 파일을 올리고 [AI 도출·명세]를 누릅니다.", "이해관계자 요구마다 시스템 요구가 연결됐는지(SYS 칸) 확인하고, 0건이면 [＋ 도출]·[연결…]·'해당 없음'으로 처리합니다.", "시스템 요구의 [상세]에서 검증 기준(합격·불합격을 가를 수치)을 확인한 뒤 [요구사항 확정]을 누릅니다."],
+    todo: ["고객 사양서·RFQ 등을 붙여넣거나 파일을 올리고 [원문에서 요구 도출]을 누릅니다.", "이해관계자 요구마다 시스템 요구가 연결됐는지(SYS 칸) 확인하고, 0건이면 [＋ 도출]·[연결…]·'해당 없음'으로 처리합니다.", "시스템 요구의 [상세]에서 검증 기준(합격·불합격을 가를 수치)을 확인한 뒤 [확정·V-모델 반영]을 누릅니다."],
     done: "모든 이해관계자 요구가 시스템 요구에 연결되거나 '해당 없음'(사유)이고, 확정을 눌렀으면 끝." },
   SYS: { why: "시스템을 요소(센서부·MCU·통신부 등)로 나누고, 각 시스템 요구를 담당 요소에 할당합니다. 이 할당이 다음 단계에서 SW/HW 요구를 내리는 기준이 됩니다.",
     todo: ["[AI 요소 설계·할당]으로 초안을 만들거나 직접 요소를 추가합니다. 요소 구분(SW·HW·HW+SW)이 중요합니다 — SW가 포함된 요소의 요구만 SW로 내려갑니다.", "요구마다 담당 요소 칩을 확인합니다.", "인터페이스(누가 → 누구에게, 무엇을, 얼마나 자주)와 운영 모드(startup·normal·sleep…)를 채웁니다."],
@@ -9094,7 +9096,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [sub, setSub] = useState(() => aeInitSub(initTab || aeNextTab(model, !!requirements?.aspice), model));
   // 내부 탭 이동: s를 주면 그 섹션(프로세스), null이면 탭 전체, 생략하면 비어 있는 첫 프로세스
   const setTab = (id, s) => { setTabRaw(id); setSub(s === undefined ? aeInitSub(id, model) : s); };
-  const [itemsVer, setItemsVer] = useState(0);   // V-모델 쪽에서 요구 목록이 바뀌면(DBC 등) ① 탭 패널을 새 목록으로 다시 연다
+  const [itemsVer, setItemsVer] = useState(0);
+  const [reqDraft, setReqDraft] = useState(null);   // SYS.1·SYS.2 확정 전 편집 내용 (탭을 옮겨도 유지)
+  useEffect(() => { setReqDraft(null); }, [itemsVer]);   // V-모델 쪽에서 요구 목록이 바뀌면(DBC 등) ① 탭 패널을 새 목록으로 다시 연다
   const srcRef = useRef(requirements?.source || null);   // ② 탭의 원문·파일 (확정 전이라도 저장에 포함)
   const [srcSig, setSrcSig] = useState(() => ((requirements?.source?.files) || []).map(f => f.name).join("|"));   // 파일명 변경 감지용
   // 첨부 파일명으로 입력자료 자동 감지 ('확보(자동)'로 표시 — 사용자가 눌러 확정해야 WP 충족도에 반영)
@@ -9929,6 +9933,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const savedSig = useRef(null);
   if (savedSig.current === null) savedSig.current = aeSig(model, items);
   const dirty = React.useMemo(() => aeSig(model, items) !== savedSig.current, [model, items]);
+  // 확정 전 요구 편집 여부 — 확정본(items·이해관계자 요구)과 비교
+  const reqDirty = React.useMemo(() => { if (!reqDraft) return false; try { return JSON.stringify(reqDraft.items || []) !== JSON.stringify(items || []) || JSON.stringify(reqDraft.stk || []) !== JSON.stringify(requirements?.stk?.items || []); } catch (_) { return false; } }, [reqDraft, items, requirements]);
   // 저장 안 된 변경이 있으면 새로고침·탭 닫기 전에 브라우저가 확인을 묻는다
   useEffect(() => {
     if (!dirty) return;
@@ -9940,6 +9946,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   function requestClose() {
     // 진행 중인 작업·저장 안 된 변경·아직 처리하지 않은 수정안(저장 대상이 아닌 임시 결과)이 있으면 확인
     const warn = [];
+    if (reqDirty) warn.push("· SYS.1·SYS.2 요구 편집 내용을 아직 [확정·V-모델 반영]하지 않았습니다 (닫으면 사라집니다)");
     if (busy || brBusy || rvRunning) warn.push("· 지금 실행 중인 작업이 있습니다 (닫으면 중단되고 결과가 반영되지 않습니다)");
     if (dirty) warn.push("· 저장하지 않은 변경 내용이 있습니다");
     const pendFix = fixQ ? fixQ.cards.filter(c => c.status === "pending").length : 0;
@@ -10176,7 +10183,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             <div style={{ flex: 1 }} />
             <button onClick={() => setTab("setup")} title="준비 — ASPICE 버전·개발 범위·입력자료(DBC 등). 눌러서 확인·변경"
               style={{ ...small, padding: "5px 10px", color: tab === "setup" ? "#fff" : T.text, background: tab === "setup" ? T.accent : "transparent", borderColor: tab === "setup" ? T.accent : T.border }}>
-              ⚙ {AE.ASPICE_VERSIONS.find(v => v.id === V)?.label || V} · SYS + SW{model.scope.HW ? " + HW" : ""} ✎</button>
+              ⚙ 적용 기준: {AE.ASPICE_VERSIONS.find(v => v.id === V)?.label || V} · SYS + SW{model.scope.HW ? " + HW" : ""} ✎</button>
           </div>
           {activeGrp && (
             <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "wrap" }}>
@@ -10255,7 +10262,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           {/* ② 요구 도출·명세 (SYS.1·2) — 탭을 옮겨도 작성 중인 내용이 유지되도록 항상 마운트하고 숨김 처리 */}
           <div style={{ display: tab === "req" ? "block" : "none" }}>
             <ReqGenModal key={itemsVer} embedded part={sub === "STK" || sub === "SYS" ? sub : null} onGoPart={pt => setTab("req", pt)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={ossp}
-              previewAspice={model} seedItems={itemsVer ? items : undefined} onEmbeddedConfirm={confirmReqs} onClose={() => {}} onSourceChange={src => { srcRef.current = src; const sig = (src.files || []).map(f => f.name).join("|"); setSrcSig(v => v === sig ? v : sig); }} focusIds={focusOn ? focusOn.ids : null} />
+              previewAspice={model} seedItems={itemsVer ? items : undefined} onEmbeddedConfirm={m => { confirmReqs(m); setReqDraft(null); }} draft={reqDraft} onDraftChange={setReqDraft} onClose={() => {}} onSourceChange={src => { srcRef.current = src; const sig = (src.files || []).map(f => f.name).join("|"); setSrcSig(v => v === sig ? v : sig); }} focusIds={focusOn ? focusOn.ids : null} />
           </div>
 
           {tab === "setup" && (<>
@@ -11531,6 +11538,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="이해관계자 요구 목록·시스템 요구사항 명세서·아키텍처·하위 요구·상세설계·검증 명세·추적 매트릭스를 한 번에 내려받습니다 (저장 전 편집 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 산출물 ZIP</Btn>
+            {reqDirty && <button onClick={() => setTab("req", "STK")} title="SYS.1·SYS.2에서 고친 요구를 아직 확정하지 않았습니다 — [확정·V-모델 반영]을 눌러야 V-모델과 저장에 포함됩니다" style={{ alignSelf: "center", fontSize: 10.5, color: T.amber, background: "none", border: `1px solid ${T.amber}88`, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>● 요구 확정 안 됨 →</button>}
             <span style={{ alignSelf: "center", fontSize: 10.5, color: dirty ? T.amber : T.green, whiteSpace: "nowrap" }}>{dirty ? "● 저장 안 된 변경 있음" : "✓ 저장됨"}</span>
             <Btn variant="outline" onClick={requestClose} style={{ fontSize: 12, padding: "7px 14px" }}>닫기</Btn>
             <Btn onClick={() => save()} disabled={busy} title="작업 내용을 프로젝트에 반영하고 브라우저 임시저장본에도 보관합니다. 창은 닫히지 않습니다." style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
