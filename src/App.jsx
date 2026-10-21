@@ -12140,9 +12140,11 @@ function folderPathsOf(files, category) {
   files.filter(f => f.category === category).forEach(f => { const parts = String(f.file_name).split("/"); parts.pop(); for (let i = 1; i <= parts.length; i++) set.add(parts.slice(0, i).join("/")); });
   return [...set].sort((a, b) => a.localeCompare(b, "ko"));
 }
-function AssetMoveDialog({ req, files, categories, onClose, onApply }) {
+function AssetMoveDialog({ req, files, categories, onClose, onApply, onSwitch }) {
   const curCat = req.type === "file" ? req.file.category : req.type === "folder" ? req.category : (req.files[0] || {}).category;
-  const curFolder = req.type === "file" ? String(req.file.file_name).split("/").slice(0, -1).join("/") : req.type === "folder" ? req.path.split("/").slice(0, -1).join("/") : "";
+  const parentOf = f => String(f.file_name).split("/").slice(0, -1).join("/");
+  // 여러 파일: 모두 같은 폴더에 있으면 그 폴더를 기본값으로
+  const curFolder = req.type === "file" ? parentOf(req.file) : req.type === "folder" ? req.path.split("/").slice(0, -1).join("/") : (new Set(req.files.map(parentOf)).size === 1 ? parentOf(req.files[0]) : "");
   const [cat, setCat] = useState(curCat);
   const [folder, setFolder] = useState(curFolder);
   const [newSub, setNewSub] = useState("");
@@ -12164,6 +12166,7 @@ function AssetMoveDialog({ req, files, categories, onClose, onApply }) {
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.55)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
       <div onClick={e=>e.stopPropagation()} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, padding:18, width:"100%", maxWidth:560 }}>
         <div style={{ fontSize:14, fontWeight:700, marginBottom:4 }}>{title}</div>
+        {req.type === "selection" && req.single && <div style={{ fontSize:11, marginBottom:8, padding:"6px 8px", background:T.accent + "14", borderRadius:6 }}>체크한 파일 {req.files.length}개를 함께 옮깁니다. <span onClick={() => onSwitch && onSwitch({ type: "file", file: req.single })} style={{ color:T.accent, cursor:"pointer", textDecoration:"underline" }}>누른 파일({req.single.file_name.split("/").pop()})만 옮기거나 이름 바꾸기</span></div>}
         <div style={{ fontSize:11, color:T.muted, marginBottom:12 }}>파일을 다시 올리지 않고 위치(경로)만 바꿉니다. 같은 위치에 같은 이름의 파일이 있으면 이동하지 않습니다.{req.type === "selection" ? " 선택한 파일은 대상 폴더 바로 아래로 옮겨집니다(폴더 구조를 유지하려면 폴더 옆 ⇄를 쓰세요)." : ""}</div>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
           <div><div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>자산 분류</div>
@@ -12499,7 +12502,7 @@ function OSSPAssets({ osspId, osspLabel }) {
 
   return (
     <div style={{ marginTop:14, paddingTop:14, borderTop:`1px solid ${T.border}` }}>
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, ...(selectedFiles.length ? { position:"sticky", top:0, zIndex:6, background:T.surface, padding:"6px 0", borderBottom:`1px solid ${T.border}` } : {}) }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <div style={{ fontSize:12, fontWeight:700, color:T.muted }}>표준 프로세스 자산 (8종)</div>
           <Btn variant="outline" disabled={!!zipState || !files.length} onClick={()=>zipDownload(files, "")} title="이 방법론의 모든 자산을 분류·폴더 구조 그대로 ZIP으로 내려받습니다"
@@ -12517,7 +12520,7 @@ function OSSPAssets({ osspId, osspLabel }) {
       </div>
       {err && <div style={{ color:T.red, fontSize:11, marginBottom:8 }}>{err}</div>}
       {zipMsg && <div style={{ color:zipMsg.includes("실패") ? T.amber : T.green, fontSize:11, marginBottom:8 }}>{zipMsg}</div>}
-      {moveReq && <AssetMoveDialog req={moveReq} files={files} categories={OSSP_ASSET_CATEGORIES} onClose={()=>setMoveReq(null)} onApply={applyMoves} />}
+      {moveReq && <AssetMoveDialog key={moveReq.type + (moveReq.file?.id || moveReq.files?.length || moveReq.path || "")} req={moveReq} files={files} categories={OSSP_ASSET_CATEGORIES} onClose={()=>setMoveReq(null)} onApply={applyMoves} onSwitch={r => setMoveReq(r)} />}
       {loading ? <Spinner text="자산 불러오는 중…" /> : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10 }}>
           {OSSP_ASSET_CATEGORIES.map(cat => (
@@ -12570,7 +12573,14 @@ function OSSPAssets({ osspId, osspLabel }) {
                   onToggleSelect={toggleSelect}
                   onBulkSelect={setSelectBulk}
                   pathKey={cat}
-                  onMove={r => setMoveReq(r.type === "folder" ? { ...r, category: cat } : r)}
+                  onMove={r => {
+                    if (r.type === "folder") { setMoveReq({ ...r, category: cat }); return; }
+                    const sel = selectedFiles.filter(f => f.category === r.file.category);
+                    if (selected[r.file.id] && sel.length > 1) {
+                      if (selectedFiles.length !== sel.length) setErr(`다른 자산 분류에서 선택한 ${selectedFiles.length - sel.length}개는 제외하고 '${r.file.category}' 분류의 ${sel.length}개만 옮깁니다.`);
+                      setMoveReq({ type: "selection", files: sel, single: r.file }); return; }
+                    setMoveReq(r);
+                  }}
                 />
               )}
             </div>
