@@ -9481,6 +9481,63 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       setNote(`실행 결과 반영: 유닛 ${us.length}개 (Pass ${us.filter(x => x.result === "Pass").length} · Fail ${us.filter(x => x.result === "Fail").length}) · 케이스 ${r.cases.length}건 중 통과 ${r.cases.filter(c => c.result === "pass").length} — SW 유닛 검증 결과서(SW4106)에 반영됩니다.`);
     } catch (e) { setErr(`실행 결과 가져오기 실패: ${e.message}`); }
   }
+  // ── 브라우저 안 실행(설치 불필요): clang(WebAssembly)을 CDN에서 받아 같은 시험 소스를 컴파일·실행 — 코드는 브라우저 밖으로 나가지 않음 ──
+  const clangRef = useRef(null);
+  const brStop = useRef(false);
+  const [brBusy, setBrBusy] = useState(false);
+  const [brLoad, setBrLoad] = useState(null);      // { pct, label } 컴파일러 내려받기 진행
+  const [brLog, setBrLog] = useState([]);          // [{ kind, unit, text }]
+  const [brPick, setBrPick] = useState("all");
+  const brLogRef = useRef(null);
+  useEffect(() => { if (brLogRef.current) brLogRef.current.scrollTop = brLogRef.current.scrollHeight; }, [brLog]);
+  async function loadBrowserCC() {
+    if (clangRef.current) return clangRef.current;
+    const P = AE.BROWSER_CC;
+    const bases = [`https://cdn.jsdelivr.net/npm/${P.pkg}@${P.ver}/gen/`, `https://unpkg.com/${P.pkg}@${P.ver}/gen/`];
+    let last = null;
+    for (const b of bases) {
+      try {
+        setBrLoad({ pct: 0, label: `컴파일러 확인 중 — ${new URL(b).host}` });
+        const h = await fetch(b + "llvm.core.wasm", { method: "HEAD" });
+        if (!h.ok) throw new Error(`${new URL(b).host} 응답 ${h.status}`);
+        const mod = await import(/* @vite-ignore */ b + "bundle.js");
+        const rc = (args, files, opts = {}) => mod.runClang(args, files, { ...opts, fetchProgress: ev => { const p = ev?.totalLength ? Math.round(ev.doneLength / ev.totalLength * 100) : 0; setBrLoad(p >= 100 ? null : { pct: p, label: `컴파일러 내려받는 중 ${p}% (${Math.round((ev?.doneLength || 0) / 1048576)} / ${Math.round((ev?.totalLength || 0) / 1048576)} MB) — 처음 한 번만` }); } });
+        // 예열: 실제 내려받기·컴파일 확인
+        await rc(["clang", "--target=wasm32-wasip1", "-O0", "w.c", "-o", "w.wasm"], { "w.c": "int main(void) { return 0; }\n" });
+        clangRef.current = { runClang: rc, host: new URL(b).host };
+        setBrLoad(null);
+        return clangRef.current;
+      } catch (e) { last = e; }
+    }
+    setBrLoad(null);
+    throw new Error(`컴파일러를 불러오지 못했습니다 (${last?.message || last}). 사내 방화벽에서 cdn.jsdelivr.net · unpkg.com 접근이 막혀 있으면 gcc 실행 패키지(📦)를 쓰세요.`);
+  }
+  async function runInBrowser() {
+    if (brBusy) return;
+    brStop.current = false; setBrBusy(true); setErr(null);
+    const push = (x) => setBrLog(l => [...l.slice(-1500), x]);
+    setBrLog([{ kind: "info", text: `SPIDer SWE.4 호스트 시험 — 브라우저 안 실행 (${AE.BROWSER_CC.label})` }]);
+    try {
+      if (!clangRef.current) push({ kind: "info", text: "컴파일러(clang WebAssembly, 약 100MB)를 불러옵니다 — 처음 한 번만 받고 이후에는 브라우저 캐시를 씁니다." });
+      const cc = await loadBrowserCC();
+      push({ kind: "info", text: `컴파일러 준비 완료 (${cc.host}) — 시험 대상 코드는 이 브라우저 밖으로 전송되지 않습니다.` });
+      const S = AE.ddSettings(model);
+      const parsed = await AE.runUnitTestsInBrowser(model, form, S, cc.runClang, {
+        only: brPick === "all" ? null : [brPick],
+        shouldStop: () => brStop.current,
+        onLog: l => push(l),
+        onProgress: p => setProg({ percent: Math.round(((p.i + (p.phase === "run" ? 0.6 : 0.1)) / p.n) * 100), label: `브라우저 실행 ${p.i + 1}/${p.n} — ${p.unit} ${p.phase === "run" ? "실행" : "컴파일"}` }),
+      });
+      setProg(null);
+      if (!parsed.cases.length && !parsed.builds.length) { push({ kind: "info", text: "실행된 유닛이 없습니다." }); return; }
+      const { model: nm, run: r } = AE.applyUtResults(model, parsed, parsed.stopped ? "브라우저 실행(중지됨)" : "브라우저 실행");
+      setModel(nm);
+      const us = Object.values(r.units);
+      const pc = r.cases.filter(c => c.result === "pass").length;
+      push({ kind: "summary", text: `${parsed.stopped ? "■ 중지됨 — 실행한 유닛만 반영. " : ""}유닛 ${us.length}개 (Pass ${us.filter(x => x.result === "Pass").length} · Fail ${us.filter(x => x.result === "Fail").length}) · 케이스 ${r.cases.length}건 중 통과 ${pc} — SW 유닛 검증 결과서(SW4106)에 반영했습니다.` });
+    } catch (e) { push({ kind: "error", text: e.message }); setProg(null); }
+    finally { setBrBusy(false); }
+  }
   // ── HWE.2 HW 회로 설계(HD): 블록별 A 회로(부품·넷·연결) → B 특별 특성·분석·근거, 실패·AI 미사용 시 규칙 생성 ──
   function genHD(compIds = null) {
     const targets = (model.comps.HW || []).filter(c => !compIds || compIds.includes(c.id));
@@ -10410,6 +10467,28 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       RTE는 시험용 스텁으로 바꾸고, 외부 다운로드 없이 동작합니다. AI 초안 케이스는 소스가 아니라 <b>요구·상세설계</b>만 보고 만들며, 기대값이 원문에 없으면 버립니다.
                       <span style={{ color: T.amber }}> 호스트 실행(SIL)은 로직 검증이며 타깃 MCU의 타이밍·메모리·인터럽트 동작은 보증하지 않습니다 — 결과서에도 그렇게 표기됩니다.</span>
                     </div>
+                    {ok && dUnits.length > 0 && (
+                      <div style={{ border: `1px solid ${T.accent}55`, borderRadius: 8, padding: "8px 10px", marginBottom: 10, background: T.accent + "0d" }}>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                          <b style={{ fontSize: 11.5, flex: 1, minWidth: 220 }}>▶ 브라우저에서 바로 실행 <span style={{ fontWeight: 400, color: T.muted, fontSize: 10.5 }}>— 설치 불필요 · 같은 시험 소스를 clang(WebAssembly)으로 컴파일·실행 · 코드는 브라우저 밖으로 나가지 않음</span></b>
+                          {!clangRef.current && <button disabled={brBusy || !!brLoad} onClick={async () => { try { await loadBrowserCC(); setBrLog(l => [...l, { kind: "info", text: `컴파일러 준비 완료 (${clangRef.current.host}) — 이제 [▶ 실행]이 바로 시작됩니다.` }]); } catch (e) { setBrLog(l => [...l, { kind: "error", text: e.message }]); } }} style={{ ...small, fontSize: 10.5 }} title="데모 전에 눌러 두면 실행할 때 기다리지 않습니다 (약 100MB, 처음 1회)">⬇ 컴파일러 미리 불러오기</button>}
+                          {clangRef.current && <span style={{ fontSize: 10, color: T.green }}>✓ 컴파일러 준비됨</span>}
+                          <select value={brPick} onChange={e => setBrPick(e.target.value)} disabled={brBusy} style={{ ...small, color: T.text, background: T.bg, maxWidth: 220 }}>
+                            <option value="all">전체 유닛 ({dUnits.length})</option>
+                            {dUnits.map(u => <option key={u.id} value={u.id}>{u.id} {u.name}</option>)}
+                          </select>
+                          {!brBusy ? <Btn disabled={busy || !!brLoad} onClick={runInBrowser} style={{ fontSize: 11, padding: "4px 14px" }}>▶ 실행</Btn>
+                            : <button onClick={() => { brStop.current = true; }} style={{ ...small, color: T.red, borderColor: T.red }}>■ 중지 (지금 유닛까지)</button>}
+                        </div>
+                        {brLoad && <div style={{ marginTop: 6 }}><GenProgressBar progress={{ percent: Math.max(2, brLoad.pct), label: brLoad.label }} subText="내려받은 컴파일러는 브라우저 캐시에 남아 다음부터는 바로 시작합니다." /></div>}
+                        {brLog.length > 0 && (
+                          <div ref={brLogRef} style={{ marginTop: 6, background: "#0b1020", color: "#d6deeb", fontFamily: "Consolas, 'D2Coding', monospace", fontSize: 11, lineHeight: 1.5, padding: "8px 10px", borderRadius: 6, maxHeight: 300, overflowY: "auto", whiteSpace: "pre-wrap" }}>
+                            {brLog.map((l, k) => <div key={k} style={{ color: l.kind === "cmd" ? "#82aaff" : l.kind === "error" || l.kind === "build-fail" ? "#ff6b6b" : l.kind === "summary" ? "#ffd166" : l.kind === "info" ? "#8892b0" : l.kind === "build-ok" ? "#7fdbca" : "#d6deeb", fontWeight: l.kind === "summary" ? 700 : 400 }}>
+                              {l.kind === "run" ? String(l.text).split("\n").map((s, j) => <div key={j} style={{ color: /\[FAIL\]/.test(s) ? "#ff6b6b" : /\[PASS\]/.test(s) ? "#addb67" : undefined }}>{s}</div>) : l.text}
+                            </div>)}
+                          </div>)}
+                        <div style={{ fontSize: 10, color: T.muted, marginTop: 5 }}>gcc 실행과 같은 시험·같은 판정입니다. 차이: 컴파일러가 clang(wasm32)이고 커버리지는 측정하지 않습니다(커버리지는 gcc 패키지의 <code>COVERAGE=1</code>). 결과는 실행이 끝나면 자동으로 아래 표와 결과서에 반영됩니다.</div>
+                      </div>)}
                     {!ok && <div style={{ fontSize: 11, color: T.amber, marginBottom: 8 }}>현재 코드 대상이 {AE.DD_TARGETS[S.target]?.label}입니다. 호스트 실행은 AUTOSAR Classic(C)만 지원합니다 — Adaptive(C++)는 2단계로 예정되어 있습니다.</div>}
                     {ok && !dUnits.length && <div style={{ fontSize: 11, color: T.muted, marginBottom: 8 }}>상세설계가 있는 유닛이 없습니다. SWE.3에서 상세설계·코드를 먼저 생성하세요.</div>}
                     {dropped.length > 0 && <details style={{ fontSize: 10.5, marginBottom: 8 }}><summary style={{ cursor: "pointer", color: T.muted }}>근거 불충분으로 버린 AI 케이스 {dropped.length}건 (규칙 검사)</summary>{dropped.slice(0, 40).map((d, k) => <div key={k} style={{ paddingLeft: 8, borderLeft: `2px solid ${T.border}`, marginTop: 3 }}><span style={{ fontFamily: "monospace", color: T.accent }}>{d.unit}</span> {d.title} — <span style={{ color: T.amber }}>{d.reason}</span></div>)}</details>}

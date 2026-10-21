@@ -3271,8 +3271,12 @@ static void js(FILE *f, const char *s) { fputc('"', f); for (; s && *s; s++) { u
 static void cp(char *d, size_t n, const char *s) { strncpy(d, s ? s : "", n - 1); d[n - 1] = '\\0'; }
 int st_num_eq(double a, double b) { double t = 1e-4 * (fabs(b) > 1.0 ? fabs(b) : 1.0); return fabs(a - b) <= t; }
 void st_start(const char *unit, const char *name, const char *hash) {
-  const char *p = getenv("SPIDER_RESULTS"); g_unit = unit; g_hash = hash;
-  g_out = fopen(p ? p : "swe4_results.jsonl", "a");
+  g_unit = unit; g_hash = hash;
+#ifdef SPIDER_STDOUT_JSON
+  g_out = stdout;   /* in-browser run: JSON lines on stdout, prefixed with @@J */
+#else
+  { const char *p = getenv("SPIDER_RESULTS"); g_out = fopen(p ? p : "swe4_results.jsonl", "a"); }
+#endif
   printf("== %s %s ==\\n", unit, name);
 }
 void st_begin(const char *id, const char *title, const char *reqs, const char *origin) { cp(g_id, sizeof g_id, id); cp(g_title, sizeof g_title, title); cp(g_reqs, sizeof g_reqs, reqs); cp(g_origin, sizeof g_origin, origin); g_checks = 0; g_failed = 0; g_fail[0] = '\\0'; }
@@ -3284,6 +3288,7 @@ void st_end(void) {
   g_cases++; if (g_failed) g_case_fail++;
   printf("  [%s] %s %s%s%s\\n", g_failed ? "FAIL" : "PASS", g_id, g_title, g_failed ? " -- " : "", g_failed ? g_fail : "");
   if (g_out) {
+    if (g_out == stdout) { fputs("@@J ", g_out); }
     fputs("{\\"type\\":\\"case\\",\\"unit\\":", g_out); js(g_out, g_unit); fputs(",\\"code\\":", g_out); js(g_out, g_hash);
     fputs(",\\"case\\":", g_out); js(g_out, g_id); fputs(",\\"origin\\":", g_out); js(g_out, g_origin); fputs(",\\"reqs\\":", g_out); js(g_out, g_reqs);
     fprintf(g_out, ",\\"result\\":\\"%s\\",\\"checks\\":%d,\\"failed\\":%d,\\"detail\\":", g_failed ? "fail" : "pass", g_checks, g_failed); js(g_out, g_fail); fputs("}\\n", g_out);
@@ -3291,7 +3296,8 @@ void st_end(void) {
 }
 int st_finish(void) {
   printf("  %d case(s), %d failed\\n", g_cases, g_case_fail);
-  if (g_out) { fclose(g_out); g_out = NULL; }
+  if (g_out && g_out != stdout) { fclose(g_out); } g_out = NULL;
+  fflush(stdout);
   return g_case_fail ? 1 : 0;
 }
 `;
@@ -3385,7 +3391,10 @@ export function buildHostTestPackage(model, meta, settings, folder = "SW4106_유
     `SWE.4 유닛 시험 — 호스트 실행 패키지 (${UT_VER}) · ${meta?.name || ""}`, ``,
     `무엇인가`, `  SWE.3에서 생성한 C 소스를 PC에서 빌드·실행해 유닛별로 검증합니다. RTE는 시험용 스텁(가짜 버퍼)으로 바꿔 입력을 넣고 출력을 확인합니다.`,
     `  케이스: 규칙(초기화·출력 갱신·견고성) + AI 초안(할당 요구 근거의 입력→기대 출력, 기대값은 요구·설계 원문 수치만 사용).`, ``,
-    `필요한 것`, `  gcc (Linux 기본 / Windows는 MinGW-w64 또는 MSYS2). 외부 다운로드 없음.`, ``,
+    `필요한 것`, `  gcc (Linux 기본 / Windows는 MSYS2 또는 MinGW-w64). 패키지 자체는 외부 다운로드 없음.`,
+    `  Windows 설치 예(MSYS2): https://www.msys2.org 에서 설치 → 'MSYS2 UCRT64' 창에서  pacman -S mingw-w64-ucrt-x86_64-gcc`,
+    `                          → 시스템 PATH에 C:\\msys64\\ucrt64\\bin 추가 → 새 명령 프롬프트에서  gcc --version  확인`,
+    `  설치 없이 보려면 SPIDer 화면의 [▶ 브라우저에서 실행]을 쓰세요(같은 시험 소스, clang WebAssembly).`, ``,
     `실행`, `  Linux·macOS·Git Bash·WSL : sh run_tests.sh        (커버리지 포함: COVERAGE=1 sh run_tests.sh)`, `  Windows 명령 프롬프트     : run_tests.bat          (커버리지는 run_tests.sh 사용)`, ``,
     `결과`, `  swe4_results.jsonl 이 만들어집니다. SPIDer V-모델 › SWE.4 › [실행 결과 가져오기]로 올리면 SW 유닛 검증 결과서(SW4106)에 반영됩니다.`,
     `  빌드 실패는 build/<유닛>/build.log 를 보세요 — 실패도 결과로 기록됩니다.`, ``,
@@ -3433,4 +3442,83 @@ export function utLatest(model) {
   const stale = {};
   (m.units.SW || []).forEach(u => { const r = run.units[u.id]; if (!r) return; const h = utCodeHash(u.dd?.code); stale[u.id] = !!(r.code && h && r.code !== h); });
   return { run, stale };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 16) 브라우저 안 실행 (설치 없이) — Clang을 WebAssembly로 돌려 시험 파일을 wasm32-wasi로 컴파일하고,
+//     최소 WASI 셈(shim)으로 실행한다. 코드는 브라우저 밖으로 나가지 않는다(컴파일러만 CDN에서 받음).
+//     runClang은 화면에서 주입(@yowasp/clang). 결과 형식은 parseUtResults와 같다 → applyUtResults로 반영.
+//     gcc 호스트 실행과 같은 시험 소스·같은 판정 — 차이: 컴파일러가 clang(wasm32), 커버리지 측정 없음.
+// ═══════════════════════════════════════════════════════════════════════════
+export const BROWSER_CC = { pkg: "@yowasp/clang", ver: "22.0.0-git20542-10", label: "clang 22 (WebAssembly · 브라우저 안 실행)" };
+class WasiExit { constructor(code) { this.code = code; } }
+function wasiShim(getMem, out) {
+  const dec = new TextDecoder();
+  const u32 = (p, v) => new DataView(getMem().buffer).setUint32(p, v, true);
+  const imp = {
+    args_sizes_get: (a, b) => { u32(a, 0); u32(b, 0); return 0; }, args_get: () => 0,
+    environ_sizes_get: (a, b) => { u32(a, 0); u32(b, 0); return 0; }, environ_get: () => 0,
+    fd_write: (fd, iovs, n, nw) => {
+      const dv = new DataView(getMem().buffer); let tot = 0;
+      for (let i = 0; i < n; i++) { const p = dv.getUint32(iovs + i * 8, true), l = dv.getUint32(iovs + i * 8 + 4, true); const s = dec.decode(new Uint8Array(getMem().buffer, p, l)); if (fd === 2) out.err += s; else out.out += s; tot += l; }
+      u32(nw, tot); return 0;
+    },
+    fd_fdstat_get: (fd, p) => { const dv = new DataView(getMem().buffer); dv.setUint8(p, 2); dv.setUint16(p + 2, 0, true); dv.setBigUint64(p + 8, 0xffffffffffffffffn, true); dv.setBigUint64(p + 16, 0xffffffffffffffffn, true); return 0; },
+    fd_prestat_get: () => 8, fd_prestat_dir_name: () => 8, fd_close: () => 0, fd_seek: () => 70, fd_read: (fd, iovs, n, nr) => { u32(nr, 0); return 0; },
+    path_open: () => 44, proc_exit: c => { throw new WasiExit(c); },
+    clock_time_get: (id, prec, p) => { new DataView(getMem().buffer).setBigUint64(p, BigInt(Date.now()) * 1000000n, true); return 0; },
+    random_get: (p, l) => { const b = new Uint8Array(getMem().buffer, p, l); for (let i = 0; i < l; i++) b[i] = (Math.random() * 256) | 0; return 0; },
+  };
+  return new Proxy(imp, { get: (t, k) => (k in t ? t[k] : () => 52) });   // 그 밖의 호출은 ENOSYS
+}
+// 실행 패키지 파일 → 유닛별 묶음
+function groupPkgByUnit(files) {
+  const common = { stubs: {}, framework: {} }, units = {};
+  files.forEach(f => {
+    const m = f.path.match(/\/(stubs|framework)\/([^/]+)$/); if (m) { common[m[1]][m[2]] = f.content; return; }
+    const u = f.path.match(/\/units\/([^/]+)\/([^/]+)$/); if (u) { (units[u[1]] = units[u[1]] || {})[u[2]] = f.content; }
+  });
+  return { common, units };
+}
+const tick = (ms = 16) => new Promise(r => setTimeout(r, ms));   // 화면이 로그를 그릴 틈
+export async function runUnitTestsInBrowser(model, meta, settings, runClang, { onProgress, onLog, only, shouldStop } = {}) {
+  const pkg = buildHostTestPackage(model, meta, settings);
+  if (!pkg.units.length) throw new Error(pkg.note || "상세설계가 있는 유닛이 없습니다.");
+  const { common, units } = groupPkgByUnit(pkg.files);
+  const parsed = { run: { type: "run", ver: UT_VER, at: new Date().toISOString(), cc: BROWSER_CC.label, os: "Browser (WASI)", coverage: false }, cases: [], builds: [], coverage: [], bad: 0 };
+  const list = pkg.units.filter(u => !only || only.includes(u.id));
+  for (let i = 0; i < list.length; i++) {
+    if (shouldStop && shouldStop()) { parsed.stopped = true; break; }
+    const uid = list[i].id, dir = uid.replace(/[^A-Za-z0-9_-]/g, "_"), uf = units[dir] || {};
+    const test = Object.keys(uf).find(n => /^test_.*\.c$/.test(n));
+    onProgress && onProgress({ i, n: list.length, unit: uid, phase: "compile" });
+    onLog && onLog({ unit: uid, kind: "cmd", text: `$ clang --target=wasm32-wasip1 -std=c99 -O1 -Wall -Wextra -I stubs -I framework units/${dir}/${test} framework/spider_test.c -o ${dir}.wasm` });
+    await tick(30);
+    let err = "", wasm = null;
+    try {
+      const outTree = await runClang(["clang", "--target=wasm32-wasip1", "-std=c99", "-O1", "-DSPIDER_STDOUT_JSON", "-Wall", "-Wextra", "-Wno-unused-function", "-Wno-unused-variable", "-Wno-unused-parameter",
+        "-Istubs", "-Iframework", "-Iu", `u/${test}`, "framework/spider_test.c", "-o", "t.wasm"], { stubs: common.stubs, framework: common.framework, u: uf },
+        { stderr: b => { if (b) err += new TextDecoder().decode(b); } });
+      wasm = outTree && outTree["t.wasm"];
+    } catch (e) { err += (err ? "\n" : "") + String(e?.message || e); }
+    const warnings = (err.match(/warning:/g) || []).length;
+    if (!wasm) { parsed.builds.push({ type: "build", unit: uid, result: "fail", log: err.slice(0, 4000) }); onLog && onLog({ unit: uid, kind: "build-fail", text: err.slice(0, 4000) }); continue; }
+    parsed.builds.push({ type: "build", unit: uid, result: "ok", warnings });
+    onLog && onLog({ unit: uid, kind: "build-ok", text: `빌드 성공${warnings ? ` (경고 ${warnings})` : ""}` });
+    onProgress && onProgress({ i, n: list.length, unit: uid, phase: "run" });
+    onLog && onLog({ unit: uid, kind: "cmd", text: `$ ./${dir}.wasm` });
+    await tick(16);
+    const out = { out: "", err: "" }; let mem = null;
+    try {
+      const { instance } = await WebAssembly.instantiate(wasm, { wasi_snapshot_preview1: wasiShim(() => mem, out) });
+      mem = instance.exports.memory;
+      instance.exports._start();
+    } catch (e) { if (!(e instanceof WasiExit)) out.err += `\n[runtime] ${e?.message || e}`; }
+    const lines = out.out.split("\n");
+    lines.filter(l => l.startsWith("@@J ")).forEach(l => { try { const o = JSON.parse(l.slice(4)); if (o.type === "case") parsed.cases.push(o); } catch (_) { parsed.bad++; } });
+    onLog && onLog({ unit: uid, kind: "run", text: lines.filter(l => l && !l.startsWith("@@J ")).join("\n") + (out.err ? `\n${out.err}` : "") });
+    if (/\[runtime\]/.test(out.err) && !parsed.cases.some(c => c.unit === uid)) parsed.builds[parsed.builds.length - 1] = { type: "build", unit: uid, result: "fail", log: out.err.slice(0, 2000) };
+    await tick(16);
+  }
+  return parsed;
 }
