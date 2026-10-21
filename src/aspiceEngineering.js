@@ -423,6 +423,19 @@ const OP_SYMS_AFTER = [
   { re: /^\s*(≤|<=)/, op: ">=" }, { re: /^\s*</, op: ">" },
   { re: /^\s*(≥|>=)/, op: "<=" }, { re: /^\s*>/, op: "<" },
 ];
+// 정확도·오차·분해능 절(clause)의 수치는 '입력 조건'이 아니라 허용오차 — 경계값 시험 대상이 아니다.
+// 그 절 안의 범위(예: 정확도 ±5 mV (15~45 ℃))는 '운용 조건'으로 표시한다.
+const TOL_RE = /정확도|오차|분해능|허용\s*편차|accuracy|tolerance|resolution/i;
+function clauseOf(s, idx) {
+  const before = s.slice(0, idx), after = s.slice(idx);
+  const b = Math.max(...[",", ";", ".", "이며", "하고", "하며", "\n"].map(d => before.lastIndexOf(d)));
+  const ends = [",", ";", ". ", "이며", "하고", "하며", "\n"].map(d => after.indexOf(d)).filter(x => x > 0);
+  let c = s.slice(b < 0 ? 0 : b, idx + (ends.length ? Math.min(...ends) : after.length));
+  // 괄호 안 조건은 괄호 앞 절의 성격을 따른다: "정확도 ±5 mV(셀 온도 15~45 ℃)"
+  const open = before.lastIndexOf("("), close = before.lastIndexOf(")");
+  if (open > close) c = s.slice(Math.max(0, before.lastIndexOf(",", open) + 1), idx + 1) + c;
+  return c;
+}
 export function extractBounds(text) {
   const s = String(text || "");
   const out = [];
@@ -435,13 +448,20 @@ export function extractBounds(text) {
     const a = Number(m[1]), b = Number(m[3]);
     const key = `R${a}-${b}${unit}`;
     if (seen.has(key)) continue; seen.add(key);
-    out.push({ kind: "range", min: Math.min(a, b), max: Math.max(a, b), unit, raw: m[0].trim() });
+    const cond = TOL_RE.test(clauseOf(s, m.index));
+    out.push({ kind: cond ? "cond" : "range", min: Math.min(a, b), max: Math.max(a, b), unit, raw: m[0].trim() });
   }
   // 단일 값 + 비교 연산 (앞: ≥ 100ms / 뒤: 100ms 이내)
   const re = new RegExp(NUM_RE.source, "gi");
   while ((m = re.exec(s))) {
     const val = Number(m[1]); const unit = m[2].toLowerCase();
-    if (out.some(o => o.kind === "range" && o.unit === unit && (o.min === val || o.max === val))) continue;
+    if (out.some(o => (o.kind === "range" || o.kind === "cond") && o.unit === unit && (o.min === val || o.max === val))) continue;
+    const pm = /[±]\s*$|\+\/-\s*$/.test(s.slice(Math.max(0, m.index - 3), m.index));
+    // '±500 A 범위'는 측정·입력 범위(-500~+500)
+    if (pm && /^\s*(의\s*)?(범위|range)/i.test(s.slice(re.lastIndex, re.lastIndex + 6)) && !TOL_RE.test(clauseOf(s, m.index))) {
+      const key = `R${-val}-${val}${unit}`; if (!seen.has(key)) { seen.add(key); out.push({ kind: "range", min: -val, max: val, unit, raw: `±${m[1]} ${m[2]}` }); } continue; }
+    // 허용오차(±값, 정확도·오차·분해능 절)는 경계 조건이 아니다
+    if (pm || TOL_RE.test(clauseOf(s, m.index))) continue;
     const after = s.slice(re.lastIndex, re.lastIndex + 14);
     const before = s.slice(Math.max(0, m.index - 4), m.index);
     let op = null;
@@ -451,7 +471,7 @@ export function extractBounds(text) {
     if (!op) { if (/(≥|>=)\s*$/.test(before)) op = ">="; else if (/(≤|<=)\s*$/.test(before)) op = "<="; else if (/>\s*$/.test(before)) op = ">"; else if (/<\s*$/.test(before)) op = "<"; }
     const key = `S${val}${unit}`;
     const dup = out.findIndex(o => o.kind === "single" && `S${o.value}${o.unit}` === key);
-    if (dup >= 0) { if (!out[dup].op && op) out[dup] = { ...out[dup], op, raw: `${m[0].trim()} ${op}` }; continue; }
+    if (dup >= 0) { if (!out[dup].op && op) { const sy = { ">=": "≥", ">": ">", "<=": "≤", "<": "<" }[op]; out[dup] = { ...out[dup], op, raw: `x ${sy} ${m[1]} ${m[2]}` }; } continue; }
     if (seen.has(key + op)) continue; seen.add(key + op);
     const sym = { ">=": "≥", ">": ">", "<=": "≤", "<": "<" }[op];
     out.push({ kind: "single", value: val, unit, op, raw: op ? `x ${sym} ${m[1]} ${m[2]}` : m[0].trim() });
@@ -470,6 +490,9 @@ function stepOf(val, unit) {
 const fmt = (v, step) => { const d = String(step).includes(".") ? String(step).split(".")[1].length : 0; return Number(v).toFixed(d); };
 
 // 요구 1건 → 규칙 기반 검증 수단 목록 (id는 나중에 채번)
+// 단위 표기(내부 비교는 소문자) — 시험 문장에는 일반 표기로
+const UNIT_DISP = { v: "V", mv: "mV", kv: "kV", a: "A", ma: "mA", ua: "µA", "µa": "µA", w: "W", kw: "kW", hz: "Hz", khz: "kHz", mhz: "MHz", kbps: "kbps", mbps: "Mbps", bps: "bps", kb: "KB", mb: "MB", "°c": "℃", n: "N", nm: "N·m", kpa: "kPa", db: "dB" };
+const U = u => UNIT_DISP[String(u || "").toLowerCase()] || u;
 export function ruleTestsForReq(req, testLevel) {
   const tl = TEST_LEVELS[testLevel];
   const method = req.verifMethod || defaultVerifMethod(req);
@@ -490,6 +513,17 @@ export function ruleTestsForReq(req, testLevel) {
     expected: crit || req.text || name, passCriteria: crit || "기대 결과와 일치" });
   const bounds = extractBounds(`${req.text || ""} ${crit}`);
   // 비교 조건이 없는 단일 수치(예: "6000RPM 지령")는 조건이 아니라 설정값이므로 경계값 TC를 만들지 않는다
+  // 온도 범위인데 요구 주제가 온도가 아니면 '입력'이 아니라 '운용 조건'
+  const subjTemp = /온도|temp/i.test(`${req.title || ""}`);
+  bounds.forEach(b => { if (b.kind === "range" && /^(℃|°c|도)$/.test(b.unit) && !subjTemp) b.kind = "cond"; });
+  const condSeen = new Set();
+  bounds.filter(b => b.kind === "cond").forEach(b => {
+    const k = `${b.min}~${b.max}${U(b.unit)}`; if (condSeen.has(k)) return; condSeen.add(k);
+    tests.push({ ...base, title: `${name} — 운용 조건 경계 (${b.min}~${b.max} ${U(b.unit)})`, technique: "운용(환경) 조건 경계 시험",
+      precondition: `조건(${U(b.unit)})을 정밀 설정할 수 있는 환경(챔버·전원 등)`,
+      steps: `1) 조건을 ${b.min} ${U(b.unit)}로 설정한 뒤 요구 '${name}'의 동작·정확도를 확인한다; 2) 조건을 ${b.max} ${U(b.unit)}로 설정한 뒤 같은 확인을 한다`,
+      expected: `${b.min} ${U(b.unit)}와 ${b.max} ${U(b.unit)} 두 조건 모두에서 요구(허용오차 포함)를 충족`, passCriteria: "두 조건점 모두 기대 결과와 일치" });
+  });
   bounds.filter(b => b.kind === "range" || b.op).forEach(b => {
     const isTime = TIME_UNITS.includes(b.unit);
     if (b.kind === "range") {
@@ -497,8 +531,8 @@ export function ruleTestsForReq(req, testLevel) {
       const pts = [b.min - st, b.min, b.max, b.max + st];
       tests.push({ ...base, title: `${name} — 범위 경계값 (${b.raw})`, technique: "동치분할·경계값 분석",
         precondition: "입력 값을 정밀 인가할 수 있는 계측·시뮬레이션 환경",
-        steps: pts.map((p, i) => `${i + 1}) 입력 ${fmt(p, st)} ${b.unit} 인가 후 응답 관측`).join("; "),
-        expected: `${fmt(b.min, st)}~${fmt(b.max, st)} ${b.unit} 구간: 요구 동작 수행 / 구간 밖(${fmt(pts[0], st)}, ${fmt(pts[3], st)} ${b.unit}): 요구 동작 미수행 또는 정의된 이탈 처리`,
+        steps: pts.map((p, i) => `${i + 1}) 입력 ${fmt(p, st)} ${U(b.unit)} 인가 후 응답 관측`).join("; "),
+        expected: `${fmt(b.min, st)}~${fmt(b.max, st)} ${U(b.unit)} 구간: 요구 동작 수행 / 구간 밖(${fmt(pts[0], st)}, ${fmt(pts[3], st)} ${U(b.unit)}): 요구 동작 미수행 또는 정의된 이탈 처리`,
         passCriteria: "4개 경계점 모두 기대 결과와 일치" });
       return;
     }
@@ -506,16 +540,16 @@ export function ruleTestsForReq(req, testLevel) {
       tests.push({ ...base, title: `${name} — 타이밍 측정 (${b.raw})`, technique: "타이밍 측정(반복 측정·최악값)",
         precondition: "타임스탬프 계측 장비(오실로스코프·CAN 로거 등) 준비",
         steps: `1) 트리거 조건을 인가하고 응답까지 시간을 측정한다; 2) 최소 30회 반복 측정한다; 3) 최대값(최악값)을 기록한다`,
-        expected: `측정 최대값 ${b.op === "<" ? "<" : "≤"} ${b.value} ${b.unit}`, passCriteria: `전 회차 ${b.op === "<" ? "<" : "≤"} ${b.value} ${b.unit}` });
+        expected: `측정 최대값 ${b.op === "<" ? "<" : "≤"} ${b.value} ${U(b.unit)}`, passCriteria: `전 회차 ${b.op === "<" ? "<" : "≤"} ${b.value} ${U(b.unit)}` });
       return;
     }
     const st = stepOf(b.value, b.unit);
     const pts = [b.value - st, b.value, b.value + st];
     const on = v => b.op === ">=" ? v >= b.value : b.op === ">" ? v > b.value : b.op === "<=" ? v <= b.value : b.op === "<" ? v < b.value : null;
-    const exp = pts.map(p => { const r = on(p); return `${fmt(p, st)} ${b.unit}: ${r === null ? "판정 조건 확인 필요" : r ? "조건 충족 → 요구 동작 수행" : "조건 미충족 → 요구 동작 미수행"}`; }).join(" / ");
+    const exp = pts.map(p => { const r = on(p); return `${fmt(p, st)} ${U(b.unit)}: ${r === null ? "판정 조건 확인 필요" : r ? "조건 충족 → 요구 동작 수행" : "조건 미충족 → 요구 동작 미수행"}`; }).join(" / ");
     tests.push({ ...base, title: `${name} — 경계값 (${b.raw})`, technique: "경계값 분석",
       precondition: "입력 값을 정밀 인가할 수 있는 계측·시뮬레이션 환경",
-      steps: pts.map((p, i) => `${i + 1}) 입력 ${fmt(p, st)} ${b.unit} 인가 후 응답 관측`).join("; "),
+      steps: pts.map((p, i) => `${i + 1}) 입력 ${fmt(p, st)} ${U(b.unit)} 인가 후 응답 관측`).join("; "),
       expected: exp, passCriteria: "3개 경계점 모두 기대 결과와 일치" });
   });
   const t = `${req.title || ""} ${req.text || ""}`;
