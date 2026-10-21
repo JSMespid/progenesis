@@ -7018,7 +7018,8 @@ function makeXlsxBook(sheets, opts = {}) {
     const merges = (sh.merges || []).length ? `<mergeCells count="${sh.merges.length}">${sh.merges.map(m => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>` : "";
     const print = `<pageMargins left="0.6" right="0.6" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="${sh.cover ? "portrait" : "landscape"}" fitToWidth="1" fitToHeight="0"/>` +
       ((opts.header || opts.footer) && !sh.cover ? `<headerFooter>${opts.header ? `<oddHeader>${xesc(opts.header)}</oddHeader>` : ""}${opts.footer ? `<oddFooter>${xesc(opts.footer)}</oddFooter>` : ""}</headerFooter>` : "");
-    return XMLH + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>${pane}${cols}<sheetData>${rows}</sheetData>${merges}${print}</worksheet>`;
+    const dv = (sh.validations || []).length ? `<dataValidations count="${sh.validations.length}">${sh.validations.map(v => `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" errorTitle="입력값 확인" error="${xesc(v.error || "목록에서 고르세요")}" promptTitle="${xesc(v.title || "")}" prompt="${xesc(v.prompt || "")}" sqref="${v.sqref}"><formula1>"${xesc(v.list.join(","))}"</formula1></dataValidation>`).join("")}</dataValidations>` : "";
+    return XMLH + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>${pane}${cols}<sheetData>${rows}</sheetData>${merges}${dv}${print}</worksheet>`;
   };
   const safeName = (n, i) => (String(n || `Sheet${i + 1}`).replace(/[\\/?*\[\]:]/g, " ").slice(0, 30).trim() || `Sheet${i + 1}`);
   const names = sheets.map((sh, i) => safeName(sh.name, i));
@@ -7592,10 +7593,13 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
     // SWE.4 — 호스트 실행(SIL) 결과 반영
     const R = utL.run;
     const rows = [...head, ["No", `${term} ID`, "검증 대상", "제목", "결과(Pass/Fail/Not executed)", "수행일", "수행자", "형상(SW/HW 버전)", "결함·문제 ID", "비고"]];
-    const resOf = t => { const ru = (t.targets || []).map(x => ({ id: x, r: R.units[x], st: utL.stale[x] })).filter(x => x.r); if (!ru.length) return { res: "Not executed", note: "호스트 실행 결과 없음" }; if (ru.some(x => x.st)) return { res: "Not executed", note: "실행 후 코드가 바뀜 — 재실행 필요" }; const r = ru[0].r; return { res: ru.some(x => x.r.result === "Fail") ? "Fail" : ru.every(x => x.r.result === "Pass") ? "Pass" : "Not executed", note: `${r.build === "fail" ? "빌드 실패 · " : ""}케이스 ${r.pass}/${r.cases} 통과${r.coverage ? ` · 문장 커버리지 ${r.coverage.stmt}%${r.coverage.branchN ? ` · 분기 ${r.coverage.branch}%` : ""}` : ""}` }; };
+    const resOf = t => { if (t.result?.state) return { res: AE.RESULT_STATES[t.result.state], note: t.result.note || "", man: t.result };
+      const ru = (t.targets || []).map(x => ({ id: x, r: R.units[x], st: utL.stale[x] })).filter(x => x.r); if (!ru.length) return { res: "Not executed", note: "호스트 실행 결과 없음" }; if (ru.some(x => x.st)) return { res: "Not executed", note: "실행 후 코드가 바뀜 — 재실행 필요" }; const r = ru[0].r; return { res: ru.some(x => x.r.result === "Fail") ? "Fail" : ru.every(x => x.r.result === "Pass") ? "Pass" : "Not executed", note: `${r.build === "fail" ? "빌드 실패 · " : ""}케이스 ${r.pass}/${r.cases} 통과${r.coverage ? ` · 문장 커버리지 ${r.coverage.stmt}%${r.coverage.branchN ? ` · 분기 ${r.coverage.branch}%` : ""}` : ""}` }; };
     const runDate = String(R.ranAt || R.at).slice(0, 10);
     const res = tests.map(t => ({ t, ...resOf(t) }));
-    res.forEach((x, i) => { const ur = R.units[(x.t.targets || [])[0]] || {}; const ne = x.res === "Not executed"; rows.push([String(i + 1), x.t.id, (x.t.targets || []).join(", "), x.t.title || "", x.res, ne ? "" : String(ur.ranAt || ur.at || runDate).slice(0, 10), ne ? "" : "SPIDer 호스트 실행(자동)", ne ? "" : `호스트 SIL · ${ur.cc || R.cc || "gcc"} · 코드 ${ur.code || "-"}`, "", x.note]); });
+    res.forEach((x, i) => { const ur = R.units[(x.t.targets || [])[0]] || {}; const ne = x.res === "Not executed"; const mn = x.man;
+      rows.push(mn ? [String(i + 1), x.t.id, (x.t.targets || []).join(", "), x.t.title || "", x.res, mn.date || "", mn.by || "", mn.config || "", mn.defect || "", x.note]
+        : [String(i + 1), x.t.id, (x.t.targets || []).join(", "), x.t.title || "", x.res, ne ? "" : String(ur.ranAt || ur.at || runDate).slice(0, 10), ne ? "" : "SPIDer 호스트 실행(자동)", ne ? "" : `호스트 SIL · ${ur.cc || R.cc || "gcc"} · 코드 ${ur.code || "-"}`, "", x.note]); });
     const nOf = k => res.filter(x => x.res === k).length;
     const cs = R.cases;
     const uName = Object.fromEntries((model.units.SW || []).map(u => [u.id, u]));
@@ -7608,24 +7612,35 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
       [], ["※ 4.0 15-52: 통과·미통과·미수행, 수행 정보(일자·수행자), 결과 요약을 포함해야 한다. 3.1 13-50과 동일 목적."]];
     return makeXlsxBook([
       std.cover,
-      { name: "검증 결과", rows, widths: [5, 13, 18, 36, 20, 11, 18, 30, 12, 34], headerRows: [3], titleRows: [0], freezeRow: 4 },
+      { name: "검증 결과", rows, widths: [5, 13, 18, 36, 20, 11, 18, 30, 12, 34], headerRows: [3], titleRows: [0], freezeRow: 4, validations: tests.length ? [{ sqref: `E5:E${4 + tests.length}`, list: AE.RESULT_LIST, title: "결과", prompt: "Pass · Fail · Not executed · Blocked 중 선택" }] : [] },
       { name: "케이스별 결과", rows: caseRows, widths: [5, 18, 11, 22, 18, 36, 8, 8, 44], headerRows: [2], titleRows: [0], freezeRow: 3 },
       { name: "결과 요약", rows: sum, widths: [22, 80], headerRows: [2], titleRows: [0] },
     ], std.opts);
   }
   if (D.result) {
-    const rows = [...head, ["No", `${term} ID`, "검증 대상", "제목", "결과(Pass/Fail/Not executed)", "수행일", "수행자", "형상(SW/HW 버전)", "결함·문제 ID", "비고"]];
-    tests.forEach((t, i) => rows.push([String(i + 1), t.id, (t.targets || []).join(", "), t.title || "", "Not executed", "", "", "", "", ""]));
-    const sum = [[`${tl.label} 결과 요약`], [], ["구분", "건수"], ["전체", String(tests.length)], ["Pass", "(결과 입력 후 집계)"], ["Fail", "(결과 입력 후 집계)"], ["Not executed", String(tests.length)],
-      [], ["※ 4.0 15-52: 통과·미통과·미수행, 수행 정보(일자·수행자), 결과 요약을 포함해야 한다. 3.1 13-50과 동일 목적."]];
+    // 시험마다 화면(검증 탭)에서 입력했거나 결과 엑셀로 가져온 결과 — 비어 있으면 'Not executed'로 두고 이 양식에 직접 적어 다시 가져올 수 있다
+    const rows = [...head, ["No", `${term} ID`, "검증 대상", "제목", "결과(Pass/Fail/Not executed/Blocked)", "수행일", "수행자", "형상(SW/HW 버전)", "결함·문제 ID", "비고"]];
+    tests.forEach((t, i) => { const r = t.result || {}; rows.push([String(i + 1), t.id, (t.targets || []).join(", "), t.title || "", AE.RESULT_STATES[r.state || "none"], r.date || "", r.by || "", r.config || "", r.defect || "", r.note || ""]); });
+    const S = AE.resultSummary(tests);
+    const done = tests.filter(t => t.result?.state && t.result.state !== "none");
+    const dates = [...new Set(done.map(t => t.result.date).filter(Boolean))].sort();
+    const fails = tests.filter(t => t.result?.state === "fail" || t.result?.state === "blocked");
+    const sum = [[`${tl.label} 결과 요약`], [], ["구분", "건수"], ["전체", String(S.total)], ["Pass", String(S.pass)], ["Fail", String(S.fail)], ["Blocked (수행 불가)", String(S.blocked)], ["Not executed", String(S.none)],
+      ["수행률", S.total ? `${Math.round((S.total - S.none) / S.total * 100)}%` : "-"], ["합격률(수행 기준)", S.total - S.none ? `${Math.round(S.pass / (S.total - S.none) * 100)}%` : "-"],
+      ["수행 기간", dates.length ? `${dates[0]} ~ ${dates[dates.length - 1]}` : "-"], ["형상(SW/HW 버전)", [...new Set(done.map(t => t.result.config).filter(Boolean))].join(", ") || "-"],
+      [], ["불합격·수행 불가 항목"], ["ID", "결과 · 결함·문제 ID · 비고"], ...(fails.length ? fails.map(t => [t.id, `${AE.RESULT_STATES[t.result.state]} · ${t.result.defect || "결함 ID 없음"}${t.result.note ? " · " + t.result.note : ""}`]) : [["-", "없음"]]),
+      [], ["※ 4.0 15-52: 통과·미통과·미수행, 수행 정보(일자·수행자), 결과 요약을 포함해야 한다. 3.1 13-50과 동일 목적."],
+      ["※ 결과 열은 목록(Pass · Fail · Not executed · Blocked)에서 고르고, 이 파일을 SPIDer V-모델 › 검증 탭 [⬆ 결과 엑셀 가져오기]로 올리면 결과가 시험별로 반영됩니다."]];
     return makeXlsxBook([
       std.cover,
-      { name: "검증 결과", rows, widths: [5, 13, 18, 36, 20, 11, 10, 16, 12, 18], headerRows: [3], titleRows: [0], freezeRow: 4 },
-      { name: "결과 요약", rows: sum, widths: [22, 30], headerRows: [2], titleRows: [0] },
+      { name: "검증 결과", rows, widths: [5, 13, 18, 36, 20, 11, 12, 18, 14, 26], headerRows: [3], titleRows: [0], freezeRow: 4, validations: tests.length ? [{ sqref: `E5:E${4 + tests.length}`, list: AE.RESULT_LIST, title: "결과", prompt: "Pass · Fail · Not executed · Blocked 중 선택" }] : [] },
+      { name: "결과 요약", rows: sum, widths: [24, 70], headerRows: [2], titleRows: [0] },
     ], std.opts);
   }
-  const spec = [...head, ["No", `${term} ID`, "검증 대상(ID)", "대상명", "제목", "기법", "사전조건(진입 기준)", "절차", "기대 결과", "합격 기준", "환경", "회귀 대상", "출처"]];
-  tests.forEach((t, i) => spec.push([String(i + 1), t.id, (t.targets || []).join(", "), (t.targets || []).map(x => tgtName[x] || "").join(", "), t.title || "", t.technique || "", t.precondition || "", String(t.steps || "").replace(/;\s*/g, "\n"), t.expected || "", t.passCriteria || "", t.env || "", t.regression ? "Y" : "", t.origin === "rule" ? "규칙" : t.origin === "ai" ? "AI 초안" : "수동"]));
+  const spec = [...head, ["No", `${term} ID`, "검증 대상(ID)", "대상명", "제목", "기법", "사전조건(진입 기준)", "절차", "기대 결과", "합격 기준", "환경", "회귀 대상", "출처", "결과(Pass/Fail/Not executed/Blocked)", "수행일", "수행자", "형상(SW/HW 버전)", "결함·문제 ID"]];
+  const utRunV = D.test === "SWE4" ? AE.utLatest(ctx?.requirements?.aspice)?.run : null;
+  tests.forEach((t, i) => { const r = AE.effectiveResult(t, utRunV) || {}; spec.push([String(i + 1), t.id, (t.targets || []).join(", "), (t.targets || []).map(x => tgtName[x] || "").join(", "), t.title || "", t.technique || "", t.precondition || "", String(t.steps || "").replace(/;\s*/g, "\n"), t.expected || "", t.passCriteria || "", t.env || "", t.regression ? "Y" : "", t.origin === "rule" ? "규칙" : t.origin === "ai" ? "AI 초안" : "수동",
+    AE.RESULT_STATES[r.state || "none"], r.date || "", r.by || "", r.config || "", r.defect || ""]); });
   const techs = [...new Set(tests.map(t => t.technique).filter(Boolean))];
   const strategy = [[`${tl.label} 전략`], [],
     ["항목", "내용", "근거(3.1 / 4.0)"],
@@ -7654,7 +7669,7 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
   })();
   return makeXlsxBook([
     std.cover,
-    { name: "검증 명세", rows: spec, widths: [5, 13, 14, 20, 30, 18, 24, 40, 32, 24, 10, 8, 8], headerRows: [3], titleRows: [0], freezeRow: 4 },
+    { name: "검증 명세", rows: spec, widths: [5, 13, 14, 20, 30, 18, 24, 40, 32, 24, 10, 8, 8, 18, 11, 10, 16, 12], headerRows: [3], titleRows: [0], freezeRow: 4, validations: tests.length ? [{ sqref: `N5:N${4 + tests.length}`, list: AE.RESULT_LIST, title: "결과", prompt: "시험 수행 후 Pass · Fail · Not executed · Blocked 중 선택" }] : [] },
     ...(utSheet ? [utSheet] : []),
     { name: "검증 전략", rows: strategy, widths: [16, 70, 30], headerRows: [2], titleRows: [0] },
     { name: model.version === "3.1" ? "테스트 선택" : "선택 세트(08-58)", rows: sel, widths: [5, 13, 36, 8, 40, 9], headerRows: [2], titleRows: [0], freezeRow: 3 },
@@ -9090,7 +9105,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [tplGroup, setTplGroup] = useState("SYS_RS");
   const [vFilter, setVFilter] = useState("SYS5");
   const [ddView, setDdView] = useState({ unit: null, kind: "component", mode: "diagram", file: 0 });
-  const [hdView, setHdView] = useState({ comp: null, kind: "wired" });   // HWE.2 회로 설계 보기
+  const [hdView, setHdView] = useState({ comp: null, kind: "wired" });
+  const [runInfo, setRunInfo] = useState(() => ({ date: new Date().toISOString().slice(0, 10), by: "", config: "" }));   // 검증 결과 입력 시 기본 수행 정보   // HWE.2 회로 설계 보기
   const [artSel, setArtSel] = useState(null);   // 산출물 보기: 선택 항목 { type: doc|svg|code|text|table, ... }
   const [artQ, setArtQ] = useState("");         // 산출물 보기 필터
   const zipAllBusy = useRef(false);
@@ -9498,6 +9514,32 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       const us = Object.values(r.units);
       setNote(`실행 결과 반영: 유닛 ${us.length}개 (Pass ${us.filter(x => x.result === "Pass").length} · Fail ${us.filter(x => x.result === "Fail").length}) · 케이스 ${r.cases.length}건 중 통과 ${r.cases.filter(c => c.result === "pass").length} — SW 유닛 검증 결과서(SW4106)에 반영됩니다.`);
     } catch (e) { setErr(`실행 결과 가져오기 실패: ${e.message}`); }
+  }
+  // ── 검증 결과 엑셀(결과서 '검증 결과' 시트 또는 명세서 '검증 명세' 시트의 결과 열) 가져오기 ──
+  async function importResultXlsx(file) {
+    if (!file) return;
+    try {
+      const files = await unzipBytes(new Uint8Array(await file.arrayBuffer())); const td = new TextDecoder(); const byPath = {}; files.forEach(f => { byPath[f.path] = f; });
+      const read = p => { const f = byPath[p]; return f ? (typeof f.content === "string" ? f.content : td.decode(f.content)) : ""; };
+      const un = PV_UNESC;
+      const sst = [...read("xl/sharedStrings.xml").matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => un([...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("")));
+      const colIdx = ref => { const L = /^[A-Z]+/.exec(ref)?.[0] || "A"; let n = 0; for (const ch of L) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
+      const cellText = (attrs, inner) => { if (/t="s"/.test(attrs)) { const v = /<v>([\s\S]*?)<\/v>/.exec(inner || ""); return v ? (sst[Number(v[1])] || "") : ""; } if (/t="inlineStr"/.test(attrs)) return un([...(inner || "").matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join("")); const v = /<v>([\s\S]*?)<\/v>/.exec(inner || ""); return v ? un(v[1]) : ""; };
+      const out = [];
+      Object.keys(byPath).filter(p => /^xl\/worksheets\/sheet\d+\.xml$/.test(p)).forEach(p => {
+        const sd = /<sheetData>([\s\S]*?)<\/sheetData>/.exec(read(p))?.[1] || "";
+        const rows = [...sd.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)].map(m => { const cells = {}; [...(m[2] || "").matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)].forEach(c => { const ref = /r="([A-Z]+\d+)"/.exec(c[1])?.[1]; if (ref) cells[colIdx(ref)] = String(cellText(c[1], c[2]) || "").trim(); }); return cells; });
+        const hi = rows.findIndex(r => Object.values(r).some(v => /ID$/.test(v) && /(테스트 케이스|검증 수단)/.test(v)) && Object.values(r).some(v => /^결과/.test(v)));
+        if (hi < 0) return;
+        const H = rows[hi]; const col = re => { const e = Object.entries(H).find(([, v]) => re.test(v)); return e ? Number(e[0]) : -1; };
+        const c = { id: col(/(테스트 케이스|검증 수단) ID$/), state: col(/^결과/), date: col(/수행일/), by: col(/수행자/), config: col(/형상/), defect: col(/결함/), note: col(/^비고/) };
+        rows.slice(hi + 1).forEach(r => { const id = r[c.id]; if (!id) return; out.push({ id, state: r[c.state], date: c.date >= 0 ? r[c.date] : "", by: c.by >= 0 ? r[c.by] : "", config: c.config >= 0 ? r[c.config] : "", defect: c.defect >= 0 ? r[c.defect] : "", note: c.note >= 0 ? r[c.note] : "" }); });
+      });
+      if (!out.length) throw new Error("결과 열이 있는 시트를 찾지 못했습니다 — SPIDer에서 내려받은 검증 결과서(또는 명세서)인지 확인하세요.");
+      const r = AE.importResultRows(model, out);
+      setModel(r.model);
+      setNote(`결과 가져오기: 시험 ${r.updated}건 반영${r.skipped ? ` · 결과 칸이 비었거나 알 수 없는 값 ${r.skipped}건 건너뜀` : ""}${r.unknown ? ` · 이 프로젝트에 없는 시험 ID ${r.unknown}건` : ""} — [✓ 저장]을 눌러야 남습니다.`);
+    } catch (e) { setErr(`결과 엑셀 가져오기 실패: ${e.message}`); }
   }
   // ── 브라우저 안 실행(설치 불필요): clang(WebAssembly)을 CDN에서 받아 같은 시험 소스를 컴파일·실행 — 코드는 브라우저 밖으로 나가지 않음 ──
   const clangRef = useRef(null);
@@ -10586,6 +10628,30 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   </AeSec>);
               })()}
               {ts.length > 0 && (() => {
+                const utR = cur === "SWE4" ? AE.utLatest(model)?.run : null;
+                const S = AE.resultSummary(ts, utR);
+                const open_ = ts.filter(t => !AE.effectiveResult(t, utR) || AE.effectiveResult(t, utR).state === "none");
+                const ri = { fontSize: 11, padding: "2px 6px", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 5, color: T.text, fontFamily: "inherit" };
+                return (
+                  <div style={{ fontSize: 11, padding: "7px 10px", marginBottom: 6, background: T.bg, border: `1px solid ${T.accent}55`, borderRadius: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <b>검증 결과</b>
+                      <span><b style={{ color: T.green }}>Pass {S.pass}</b> · <b style={{ color: S.fail ? T.red : T.muted }}>Fail {S.fail}</b> · <span style={{ color: S.blocked ? T.amber : T.muted }}>Blocked {S.blocked}</span> · <span style={{ color: T.muted }}>미수행 {S.none}</span> / {S.total}건</span>
+                      <span style={{ color: T.muted, fontSize: 10 }}>— 시험마다 오른쪽 [결과]에서 고르거나, 내려받은 결과서 엑셀에 적어 올리세요. 결과는 {AE.TEST_LEVELS[cur].proc} 검증 결과서·명세서에 그대로 기록됩니다.</span>
+                      <span style={{ flex: 1 }} />
+                      <label style={{ ...small, padding: "3px 10px" }} title="SPIDer에서 내려받은 검증 결과서(검증 결과 시트) 또는 명세서(검증 명세 시트)의 결과 열을 시험 ID로 읽어 반영">⬆ 결과 엑셀 가져오기<input type="file" accept=".xlsx" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; importResultXlsx(f); }} /></label>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 6, color: T.muted, fontSize: 10.5 }}>
+                      <span title="결과를 고를 때 비어 있는 수행일·수행자·형상에 자동으로 들어갑니다">이번 수행 정보</span>
+                      <input type="date" value={runInfo.date} onChange={e => setRunInfo(v => ({ ...v, date: e.target.value }))} style={ri} />
+                      <input value={runInfo.by} onChange={e => setRunInfo(v => ({ ...v, by: e.target.value }))} placeholder="수행자" style={{ ...ri, width: 90 }} />
+                      <input value={runInfo.config} onChange={e => setRunInfo(v => ({ ...v, config: e.target.value }))} placeholder="형상 (예: SW v1.2 / HW B샘플)" style={{ ...ri, width: 200 }} />
+                      <span style={{ flex: 1 }} />
+                      {open_.length > 0 && <button onClick={() => { if (window.confirm(`결과가 없는 시험 ${open_.length}건을 모두 Pass로 기록합니다 (수행일 ${runInfo.date}${runInfo.by ? ` · 수행자 ${runInfo.by}` : ""}${runInfo.config ? ` · 형상 ${runInfo.config}` : ""}).\n실제로 모두 통과한 경우에만 쓰세요.\n\n계속할까요?`)) setModel(m => AE.setTestResults(m, open_.map(t => t.id), { state: "pass", date: runInfo.date, by: runInfo.by, config: runInfo.config })); }} style={{ ...small, color: T.green }}>결과 없는 {open_.length}건 모두 Pass</button>}
+                    </div>
+                  </div>);
+              })()}
+              {ts.length > 0 && (() => {
                 const regN = ts.filter(t => t.regression).length;
                 const setReg = fn => set(n => { n.tests = n.tests.map(t => ts.some(x => x.id === t.id) ? { ...t, regression: fn(t) } : t); });
                 return (
@@ -10600,13 +10666,13 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               })()}
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {ts.length > 0 && (
-                  <div style={{ display: "grid", gridTemplateColumns: "84px 110px 1fr 170px 64px 60px", gap: 6, alignItems: "center", fontSize: 10, color: T.muted, padding: "0 9px" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "84px 110px 1fr 150px 56px 112px 52px", gap: 6, alignItems: "center", fontSize: 10, color: T.muted, padding: "0 9px" }}>
                     <span>시험 ID</span><span>검증 대상</span><span>제목</span><span>기법</span>
-                    <span title={AE.REGRESSION_ABOUT} style={{ textAlign: "center", cursor: "help" }}>회귀 대상 ⓘ</span><span />
+                    <span title={AE.REGRESSION_ABOUT} style={{ textAlign: "center", cursor: "help" }}>회귀 대상 ⓘ</span><span title="Pass · Fail · Not executed · Blocked — 수행일·수행자·형상·결함 ID는 [상세]">결과 ⓘ</span><span />
                   </div>)}
                 {ts.map(t => { const i = model.tests.indexOf(t); return (
                   <div key={t.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", background: T.bg }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "84px 110px 1fr 170px 64px 60px", gap: 6, alignItems: "center" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "84px 110px 1fr 150px 56px 112px 52px", gap: 6, alignItems: "center" }}>
                       <span style={{ fontFamily: "monospace", fontSize: 10, color: T.accent }}>{t.id}</span>
                       <span style={{ fontSize: 9.5, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={(t.targets || []).join(", ")}>{(t.targets || []).join(", ")}</span>
                       <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -10615,12 +10681,28 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       </div>
                       <span style={{ fontSize: 9.5, color: T.muted }}>{t.technique}</span>
                       <span style={{ textAlign: "center" }}><input type="checkbox" checked={!!t.regression} title={t.regression ? "회귀 시험 대상 — 변경 시 다시 수행" : "회귀 대상 아님"} onChange={e => set(n => { n.tests[i] = { ...n.tests[i], regression: e.target.checked }; })} /></span>
+                      {(() => { const auto = !t.result?.state ? AE.effectiveResult(t, cur === "SWE4" ? AE.utLatest(model)?.run : null) : null; const st = t.result?.state || "";
+                        const cl = { pass: T.green, fail: T.red, blocked: T.amber, none: T.muted }[st || auto?.state] || T.muted;
+                        return <select value={st} title={auto ? `호스트 실행 결과 ${AE.RESULT_STATES[auto.state]} (자동) — 고르면 수동 결과가 우선` : t.result?.date ? `${t.result.date}${t.result.by ? " · " + t.result.by : ""}${t.result.config ? " · " + t.result.config : ""}` : "결과 입력"}
+                          onChange={e => { const v = e.target.value; setModel(m => AE.setTestResults(m, [t.id], v ? { state: v, date: t.result?.date || runInfo.date, by: t.result?.by || runInfo.by, config: t.result?.config || runInfo.config } : { state: "" })); if (v === "fail" || v === "blocked") setOpen(o => ({ ...o, [t.id]: true })); }}
+                          style={{ fontSize: 10.5, padding: "2px 4px", borderRadius: 5, border: `1px solid ${cl}88`, background: T.surface, color: cl, fontWeight: st ? 700 : 400, fontFamily: "inherit" }}>
+                          <option value="">{auto ? `${AE.RESULT_STATES[auto.state]} (자동)` : "— 결과"}</option>
+                          <option value="pass">Pass</option><option value="fail">Fail</option><option value="blocked">Blocked</option><option value="none">Not executed</option>
+                        </select>; })()}
                       <button onClick={() => setOpen(o => ({ ...o, [t.id]: !o[t.id] }))} style={{ ...small, color: T.muted, padding: "2px 0" }}>{open[t.id] ? "접기" : "상세"}</button>
                     </div>
                     {open[t.id] && (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 6 }}>
                         {[["precondition", "사전조건(진입 기준)"], ["steps", "절차 (';' 구분)"], ["expected", "기대 결과"], ["passCriteria", "합격 기준"], ["env", "검증 환경"]].map(([k, l]) => (
                           <div key={k}><div style={{ fontSize: 10, color: T.muted }}>{l}</div><textarea value={t[k] || ""} onChange={e => set(n => { n.tests[i] = { ...n.tests[i], [k]: e.target.value, origin: "manual" }; })} style={ta} /></div>))}
+                        <div style={{ gridColumn: "1 / -1", border: `1px dashed ${T.border}`, borderRadius: 7, padding: "6px 8px" }}>
+                          <div style={{ fontSize: 10, color: T.muted, marginBottom: 4 }}>검증 결과 기록 (3.1 13-50 / 4.0 15-52){t.result?.state ? ` — ${AE.RESULT_STATES[t.result.state]}` : " — 위 [결과]에서 먼저 고르세요"}{(t.resultLog || []).length ? ` · 이전 결과 ${t.resultLog.length}회: ${t.resultLog.slice(-3).map(x => `${AE.RESULT_STATES[x.state] || "-"}(${x.date || "-"})`).join(" → ")}` : ""}</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "120px 110px 1fr 140px", gap: 6 }}>
+                            {[["date", "수행일", "date"], ["by", "수행자", "text"], ["config", "형상(SW/HW 버전)", "text"], ["defect", t.result?.state === "fail" ? "결함·문제 ID (필수)" : "결함·문제 ID", "text"]].map(([k, l, ty]) => (
+                              <div key={k}><div style={{ fontSize: 9.5, color: k === "defect" && t.result?.state === "fail" && !t.result?.defect ? T.red : T.muted }}>{l}</div><input type={ty} disabled={!t.result?.state} value={t.result?.[k] || ""} onChange={e => setModel(m => AE.setTestResults(m, [t.id], { [k]: e.target.value }))} style={inp} /></div>))}
+                          </div>
+                          <div style={{ marginTop: 5 }}><div style={{ fontSize: 9.5, color: t.result?.state === "blocked" && !t.result?.note ? T.amber : T.muted }}>비고{t.result?.state === "blocked" ? " (수행 불가 사유)" : t.result?.state === "fail" ? " (불합격 내용)" : ""}</div><input disabled={!t.result?.state} value={t.result?.note || ""} onChange={e => setModel(m => AE.setTestResults(m, [t.id], { note: e.target.value }))} style={inp} /></div>
+                        </div>
                         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 6 }}>
                           <span style={{ fontSize: 10, color: T.muted }}>만든 방식: <b style={{ color: t.origin === "manual" ? T.amber : t.origin === "ai" ? T.accent : T.green }}>{t.origin === "rule" ? "규칙(요구·인터페이스 조건에서 결정적으로 도출)" : t.origin === "ai" ? "AI 초안" : "직접 작성·수정 (재생성 시 보존)"}</b></span>
                           <button onClick={() => set(n => { n.tests.splice(i, 1); })} style={{ ...small, color: T.red }}>삭제</button>

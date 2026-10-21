@@ -537,6 +537,51 @@ export function defaultRegression(model, t) {
   if (tl.targetKind === "if") return (m.interfaces[tl.level] || []).some(i => tg.includes(i.id));
   return (m.reqs[tl.level] || []).some(r => tg.includes(r.id) && (r.priority === "상" || !!r.safety));
 }
+// ── 검증 결과 기록 (3.1 13-50 / 4.0 15-52·03-50) — 시험마다 t.result = { state, date, by, config, defect, note, at }, 이전 값은 t.resultLog ──
+export const RESULT_STATES = { pass: "Pass", fail: "Fail", blocked: "Blocked", none: "Not executed" };
+export const RESULT_KO = { pass: "통과", fail: "불합격", blocked: "수행 불가", none: "미수행" };
+export const RESULT_LIST = ["Pass", "Fail", "Not executed", "Blocked"];
+export function normResult(v) {
+  const s = String(v == null ? "" : v).trim().toLowerCase(); if (!s) return "";
+  if (/^(pass|passed|ok|통과|합격|p|o)$/.test(s)) return "pass";
+  if (/^(fail|failed|ng|불합격|실패|f|x)$/.test(s)) return "fail";
+  if (/block|차단|수행 ?불가|보류/.test(s)) return "blocked";
+  if (/not ?executed|미수행|미실시|n\/?a|^-$/.test(s)) return "none";
+  return "";
+}
+export function setTestResults(model, ids, patch) {
+  const m = normalizeModel(model); const want = new Set(ids); const at = new Date().toISOString();
+  m.tests = m.tests.map(t => { if (!want.has(t.id)) return t;
+    const prev = t.result || null; const next = { ...(prev || {}), ...patch, at };
+    if (!next.state) return { ...t, result: null, resultLog: prev ? [...(t.resultLog || []), prev].slice(-20) : t.resultLog };
+    const changed = prev && prev.state && prev.state !== next.state;
+    return { ...t, result: next, resultLog: changed ? [...(t.resultLog || []), prev].slice(-20) : (t.resultLog || []) }; });
+  return m;
+}
+export function resultSummary(tests, utRun = null) {
+  const s = { pass: 0, fail: 0, blocked: 0, none: 0, total: (tests || []).length };
+  (tests || []).forEach(t => { const st = effectiveResult(t, utRun)?.state || "none"; s[st] = (s[st] || 0) + 1; });
+  return s;
+}
+// 화면 입력 결과가 있으면 그것, 없으면(SWE.4) 호스트 실행 결과
+export function effectiveResult(t, utRun) {
+  if (t?.result?.state) return { ...t.result, src: "manual" };
+  if (utRun && t?.level === "SWE4") { const r = (t.targets || []).map(x => utRun.units?.[x]).find(Boolean); if (r && r.result && r.result !== "Not executed") return { state: r.result === "Pass" ? "pass" : "fail", date: String(r.ranAt || r.at || "").slice(0, 10), by: "SPIDer 호스트 실행(자동)", config: `호스트 SIL · ${r.cc || ""}`.trim(), defect: "", note: `케이스 ${r.pass}/${r.cases} 통과`, src: "auto" }; }
+  return null;
+}
+// 결과 엑셀(결과서·명세서의 결과 열) 가져오기 — rows: [{ id, state, date, by, config, defect, note }]
+export function importResultRows(model, rows) {
+  let m = normalizeModel(model); const ids = new Set(m.tests.map(t => t.id));
+  let updated = 0, unknown = 0, skipped = 0;
+  rows.forEach(r => { const id = String(r.id || "").trim(); if (!id) return; if (!ids.has(id)) { unknown++; return; }
+    const st = normResult(r.state); if (!st) { skipped++; return; }
+    const patch = { state: st }; ["date", "by", "config", "defect", "note"].forEach(k => { if (String(r[k] || "").trim()) patch[k] = String(r[k]).trim().slice(0, 200); });
+    // 엑셀에서 날짜로 입력하면 일련번호(예: 46316)로 저장된다 → YYYY-MM-DD
+    if (patch.date && /^\d{5}(\.\d+)?$/.test(patch.date)) { const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(Number(patch.date)) * 86400000); patch.date = d.toISOString().slice(0, 10); }
+    else if (patch.date) patch.date = patch.date.replace(/[./]/g, "-").replace(/^(\d{4})-(\d)-/, "$1-0$2-").replace(/-(\d)$/, "-0$1");
+    m = setTestResults(m, [id], { ...patch, src: "import" }); updated++; });
+  return { model: m, updated, unknown, skipped };
+}
 export const REGRESSION_ABOUT = "회귀 시험 대상 — 설계·코드가 바뀐 뒤 다시 수행할 시험 (3.1 08-50 회귀 전략 / 4.0 08-58 검증 수단 선택 세트). 기본값: 인터페이스 통합·결함 주입 시험은 체크, 요구 기반은 우선순위 '상'·안전 관련일 때 체크, 유닛·컴포넌트 거동 시험은 해제.";
 // 인터페이스(요소 간 관계) → 통합 검증 수단 (SYS.4 / SWE.5 / HWE.3)
 export function ruleTestsForInterface(itf, testLevel, compName = {}) {
@@ -787,6 +832,7 @@ const BP = {
   T_SWE6: { "3.1": "SWE.6.BP5·BP6", "4.0": "SWE.6.BP4" }, T_SWE5: { "3.1": "SWE.5.BP7·BP8", "4.0": "SWE.5.BP6" },
   T_HWE4: { "3.1": "HWE.4 (PAM 확장)", "4.0": "HWE.4.BP5" }, T_HWE3: { "3.1": "HWE.3 (PAM 확장)", "4.0": "HWE.3.BP5" },
   REVIEW: { "3.1": "GP 2.2.4 (13-19)", "4.0": "GP 2.2.4 · 13-52" },
+  VERIF_RESULT: { "3.1": "검증 결과 기록 BP (13-50)", "4.0": "검증 결과 기록 BP (15-52)" },
   CHANGE: { "3.1": "SUP.10 변경 영향 분석 · 추적 일관성", "4.0": "SUP.10 변경 영향 분석 · 추적 일관성" },
   STK_TRACE: { "3.1": "SYS.2.BP6 (이해관계자 요구 ↔ 시스템 요구)", "4.0": "SYS.2.BP5 (이해관계자 요구 ↔ 시스템 요구)" },
   SW_UNIT: { "3.1": "SWE.3.BP1·BP5", "4.0": "SWE.3.BP1·BP3" },
@@ -901,6 +947,16 @@ export function checkConsistency(model) {
   // 리뷰·합의 증적
   const drafts = [...m.reqs.SYS, ...(scope.SW ? m.reqs.SW : []), ...(scope.HW ? m.reqs.HW : [])].filter(r => (r.status || "Draft") === "Draft").length;
   if (drafts) add("info", "REVIEW", `상태가 Draft인 요구 ${drafts}건 — 검토·합의 후 Reviewed/Agreed로 전환하고 검토 기록(QA1102)을 남기세요.`);
+  // 검증 결과 기록 — Fail은 결함(문제) ID로 추적(SUP.9), 결과 없는 시험은 수행 전 상태
+  const ut = (typeof utLatest === "function" ? utLatest(m) : null)?.run || null;
+  const scopedTests = m.tests.filter(t => TEST_LEVELS[t.level] && m.scope[TEST_LEVELS[t.level].level]);
+  const er = scopedTests.map(t => [t, effectiveResult(t, ut)]);
+  const failNoDef = er.filter(([, r]) => r?.state === "fail" && r.src !== "auto" && !String(r.defect || "").trim()).map(([t]) => t.id);
+  if (failNoDef.length) add("warn", "VERIF_RESULT", `불합격(Fail)인데 결함·문제 ID가 없는 시험 ${failNoDef.length}건 — 문제 보고(SUP.9)를 등록하고 ID를 기록`, failNoDef);
+  const blkNoNote = er.filter(([, r]) => r?.state === "blocked" && !String(r.note || "").trim()).map(([t]) => t.id);
+  if (blkNoNote.length) add("info", "VERIF_RESULT", `수행 불가(Blocked) 사유가 없는 시험 ${blkNoNote.length}건`, blkNoNote);
+  const noRes = er.filter(([, r]) => !r || r.state === "none").map(([t]) => t.id);
+  if (scopedTests.length && noRes.length) add("info", "VERIF_RESULT", `검증 결과가 아직 없는 시험 ${noRes.length}건 / ${scopedTests.length}건 — 시험 수행 후 결과를 입력(검증 탭 또는 결과서 엑셀 가져오기)`, noRes);
   return F;
 }
 
