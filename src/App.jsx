@@ -9047,7 +9047,7 @@ const AE_GUIDE = {
     todo: ["커버리지의 [빠짐 N건 →]을 눌러 해당 탭에서 처리합니다(처리 방법 💡가 함께 표시됨).", "'변경 영향 검토'가 있으면 하위 연결마다 '영향 없음' 또는 '하위 수정 필요'로 판정합니다.", "일관성 점검의 줄을 눌러 처리 방법을 보고 ✎로 바로 고칩니다. WP 특성 충족도의 누락은 사유를 적거나 N/A로 정리합니다."],
     done: "오류 0, 변경 영향 확인 대기 0, 사유 없는 누락 0이면 끝. 경고·정보는 사유가 있으면 남아 있어도 됩니다." },
   review: { why: "작성한 산출물을 생성 AI와 다른 검토 AI가 보고 의견을 내고, QA 담당자가 그 의견이 맞는지 판정합니다. 판정 기록이 SUP.1 QA 증적이 됩니다.",
-    todo: ["검토 AI를 고르고 [전체 산출물 변경분 검토] 또는 표에서 산출물을 골라 검토합니다(시스템 요구부터 권장).", "②-b [✦ 수정안 생성]으로 수정안을 만들고 카드마다 승인·편집·반려합니다. 승인 전에는 아무것도 바뀌지 않습니다.", "남은 의견은 ③에서 '맞음 → 고침 / 틀림 / 보류'로 판정하고, 끝나면 [변경분 검토]로 수정 결과를 재검토합니다."],
+    todo: ["검토 AI를 고르고 [전체 산출물 변경분 검토] 또는 표에서 산출물을 골라 검토합니다(시스템 요구부터 권장).", "③ [✦ 수정안 생성]으로 수정안을 만들고 카드마다 승인·편집·반려합니다. 승인 전에는 아무것도 바뀌지 않습니다.", "남은 의견은 ④에서 '맞음 → 고침 / 틀림 / 보류'로 판정하고, 끝나면 [변경분 검토]로 수정 결과를 재검토합니다."],
     done: "현황표의 모든 산출물이 '완료'(검토됨 100%, 미판정 0)면 끝. \'빠진 곳 점검\'에서 [교차검토 끝난 요구 → Reviewed]로 상태를 올립니다." },
 };
 const AE_LS_HINTS = "spiderqa_ae_hints";
@@ -9064,15 +9064,16 @@ const aeSecKey = t => String(typeof t === "string" ? t : "").replace(/\d+/g, "#"
 function AeFoldBtn({ open, onClick, title }) {
   return <button type="button" onClick={onClick} title={title || (open ? "접기" : "펼치기")} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 11, padding: "0 4px", lineHeight: 1, flexShrink: 0 }}>{open ? "▾" : "▸"}</button>;
 }
-function AeSec({ title, right, children }) {
+function AeSec({ title, right, children, open: openProp, onToggle, accent }) {
   const uid = React.useId();
   const rc = React.useContext(AeRunCtx);
   const here = !!rc && rc.anchor === uid;
   const fk = aeSecKey(title);
-  const [open, setOpen] = useState(() => !(fk && AE_SEC_FOLD.get(fk) === false));
-  const toggle = () => setOpen(o => { const n = !o; if (fk) AE_SEC_FOLD.set(fk, n); return n; });
+  const [openSelf, setOpen] = useState(() => !(fk && AE_SEC_FOLD.get(fk) === false));
+  const open = openProp !== undefined ? openProp : openSelf;
+  const toggle = () => { if (onToggle) { onToggle(!open); return; } setOpen(o => { const n = !o; if (fk) AE_SEC_FOLD.set(fk, n); return n; }); };
   return (
-    <div data-aesec={uid} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+    <div data-aesec={uid} style={{ background: T.bg, border: `1px solid ${accent ? T.accent + "88" : T.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: open ? 8 : 0 }}>
         <AeFoldBtn open={open} onClick={toggle} />
         <div onClick={toggle} title={open ? "눌러서 접기" : "눌러서 펼치기"} style={{ fontSize: 12, fontWeight: 700, flex: 1, cursor: "pointer", userSelect: "none" }}>{title}</div>{right}
@@ -9193,7 +9194,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [cardOpen, setCardOpen] = useState({});      // 승인 큐·판정 카드 펼침 — 키가 없으면 기본값(처리 대기는 펼침, 처리 끝난 것은 접힘)
   const isCardOpen = (k, dflt) => (k in cardOpen ? cardOpen[k] : dflt);
   const setCardsOpen = (keys, v) => setCardOpen(o => { const n = { ...o }; keys.forEach(k => { n[k] = v; }); return n; });
-  const [rvSort, setRvSort] = useState("sev");       // 정렬: sev(중대 먼저) | id
+  const [rvSort, setRvSort] = useState("sev");
+  const [rvStepOpen, setRvStepOpen] = useState(null);   // 교차검토 단계 아코디언: rule | ai | fix | judge (null이면 '다음 할 일' 단계)       // 정렬: sev(중대 먼저) | id
   const [rvPick, setRvPick] = useState([]);          // 선택 검토할 산출물(검토 범위 key)
   const [rvRunning, setRvRunning] = useState(false);  // 검토 AI 호출 진행 중 (중지 버튼 표시)
   const rvStop = useRef(false);
@@ -10787,6 +10789,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             const ruleHere = findings.filter(f => (f.ids || []).some(id => itemIds.has(id)));
             const sevN = k => findings.filter(f => f.sev === k).length;
             const RC = AE.reviewCriteriaFor(rvLevel, V);
+
             const critLabel = Object.fromEntries(RC.all.map(c => [c.code, c.label]));
             const sevColor = { major: T.red, minor: T.amber, info: T.muted };
             const jColor = { valid: T.green, invalid: T.muted, opinion: T.accent };
@@ -10794,6 +10797,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             const list = v.list.filter(f => f.level === rvLevel).filter(f => rvBy === "all" || (f.reviewer || f.provider || "검토 AI") === rvBy).filter(f => rvFilter === "all" ? true : rvFilter === "open" ? !f.judge : rvFilter === "edited" ? f.edits.length > 0 : rvFilter === "validTodo" ? f.judge?.state === "valid" && !f.edits.length && !f.removed : f.judge?.state === rvFilter);
             const lastRun = [...v.runs].reverse().find(r => r.level === rvLevel && (!rvSel || r.provider === rvSel.id));
             const changedN = rvSel ? AE.reviewTargets(model, rvLevel, "changed", rvSel.id).length : lvItems.length;
+            const rvNextStep = changedN ? "ai" : AE.fixQueueTargets(model, rvLevel).length ? "fix" : cnt.open ? "judge" : null;
+            const rvCur = rvStepOpen || rvNextStep || "judge";
+            const stepSec = k => ({ open: rvCur === k, onToggle: o => setRvStepOpen(o ? k : (rvCur === k ? "none" : rvCur)), accent: rvCur === k });
             const chOf = Object.fromEntries(scopes.map(x => [x.key, rvSel ? AE.reviewTargets(model, x.key, "changed", rvSel.id).length : 0]));
             const allChangedN = scopes.reduce((a, x) => a + chOf[x.key], 0);
             const pick = rvPick.filter(k => covOf[k]);
@@ -10860,7 +10866,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   </table>
                 </div>
                 <div className="ae-hint" style={{ fontSize: 10, color: T.muted, marginTop: 6, lineHeight: 1.6 }}>
-                  '검토됨'은 어느 검토 AI든 <b>지금 내용 그대로</b> 검토한 항목 수입니다. 검토 후 내용이 바뀌면 다시 '검토 필요'가 됩니다. 행을 누르면 아래 ②·③이 그 산출물로 바뀝니다.<br />
+                  '검토됨'은 어느 검토 AI든 <b>지금 내용 그대로</b> 검토한 항목 수입니다. 검토 후 내용이 바뀌면 다시 '검토 필요'가 됩니다. 행을 누르면 아래 ①~④가 그 산출물로 바뀝니다.<br />
                   AI 검토 대상이 아닌 산출물: {AE.REVIEW_EXCLUDED.map(x => `${x.doc ? AE.ASPICE_DOCS[x.doc].title : x.label}(${x.why})`).join(" · ")}
                 </div>
               </AeSec>
@@ -10875,40 +10881,40 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 const validTodo = fsL.filter(f => f.judge?.state === "valid" && !f.edits.length).length;
                 const fixT = AE.fixQueueTargets(model, rvLevel);
                 const fixOps = fixT.reduce((a, t) => a + t.findings.length, 0);
-                const go = id => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-                const step = (no, title, big, unit, sub, id, hint, warn) => (
-                  <button onClick={() => go(id)} title={hint} style={{ flex: "1 1 160px", textAlign: "left", background: T.bg, border: `1px solid ${warn ? T.amber + "88" : T.border}`, borderRadius: 8, padding: "7px 9px", cursor: "pointer", fontFamily: "inherit", color: T.text }}>
-                    <div style={{ fontSize: 10, color: T.muted }}>{no} {title}</div>
-                    <div style={{ fontSize: 17, fontWeight: 800, lineHeight: 1.25, color: warn ? T.amber : T.text }}>{big}<span style={{ fontSize: 10.5, fontWeight: 500, color: T.muted, marginLeft: 3 }}>{unit}</span></div>
-                    <div style={{ fontSize: 10, color: T.muted, lineHeight: 1.45 }}>{sub}</div>
-                  </button>);
-                const next = changedN ? ["②", `검토 AI로 [변경분 검토] — ${K.noun} ${changedN}건`, "rv-ai"] : fixT.length ? ["②-b", `[✦ 수정안 생성] — ${K.noun} ${fixT.length}건`, "rv-fix"] : cnt.open ? ["③", `남은 의견 ${cnt.open}건 판정`, "rv-judge"] : null;
+                const go = id => setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 30);
+                const curStep = rvStepOpen || rvNextStep;
+                const open_ = (k, id) => { setRvStepOpen(k); go(id); };
+                const step = (k, no, title, big, unit, sub, id, hint, warn) => { const on = curStep === k; return (
+                  <button onClick={() => open_(k, id)} title={hint} style={{ flex: "1 1 150px", textAlign: "left", background: on ? T.accent + "18" : T.bg, border: `1.5px solid ${on ? T.accent : warn ? T.amber + "88" : T.border}`, borderRadius: 9, padding: "7px 10px", cursor: "pointer", fontFamily: "inherit", color: T.text }}>
+                    <div style={{ fontSize: 10.5, color: on ? T.accent : T.muted, fontWeight: on ? 700 : 400 }}>{no} {title}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.25, color: warn ? T.amber : T.text }}>{big}<span style={{ fontSize: 10.5, fontWeight: 500, color: T.muted, marginLeft: 3 }}>{unit}</span></div>
+                    <div className="ae-hint" style={{ fontSize: 10, color: T.muted, lineHeight: 1.45 }}>{sub}</div>
+                  </button>); };
+                const ruleN = ruleHere.length + qf;
+                const nextTxt = { ai: `검토 AI로 변경분 ${changedN}건 검토`, fix: `수정안 만들기 — ${K.noun} ${fixT.length}건`, judge: `남은 의견 ${cnt.open}건 판정` }[rvNextStep];
                 return (
-                  <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: "8px 10px", marginBottom: 10, background: T.surface }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-                      <b style={{ fontSize: 11.5 }}>이 산출물 숫자 한눈에</b>
-                      <span className="ae-hint" style={{ fontSize: 10, color: T.muted }}>단위가 둘입니다 — <b style={{ color: T.text }}>{K.noun}</b>(산출물 안의 항목) · <b style={{ color: T.text }}>의견</b>(검토 AI의 지적, {K.noun} 1건에 여러 개 달릴 수 있음). 칸을 누르면 해당 단계로 이동합니다.</span>
-                    </div>
+                  <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: "9px 10px", marginBottom: 10, background: T.surface }}>
                     <div style={{ display: "flex", gap: 6, alignItems: "stretch", flexWrap: "wrap" }}>
-                      {step("②", "검토 AI가 볼 것", changedN, `${K.noun} / ${lvItems.length}건`, `현재 내용으로 검토 끝남 ${reviewedN}건 · 처음이거나 검토 후 바뀐 것 ${changedN}건${rvSel ? ` (${String(rvSel.label || "").replace(/ \(.*\)$/, "")} 기준)` : ""}`, "rv-ai", "검토 AI에게 보낼 항목 수 — [변경분 검토] 버튼의 숫자와 같습니다", !!changedN)}
+                      {step("rule", "①", "규칙 검사", sevN("error"), `오류 · 경고 ${sevN("warn")}`, "rv-rule", "AI 없이 규칙으로 추적성·품질을 점검 — 오류는 반드시 해소", sevN("error") > 0)}
                       <span style={{ alignSelf: "center", color: T.muted }}>→</span>
-                      {step("②", "검토 AI 의견", fsL.length, "의견", `${withOpN}개 ${K.noun}에 달림 · 중대 ${fsL.filter(f => f.severity === "major").length} · 경미 ${fsL.filter(f => f.severity === "minor").length}`, "rv-ai", "검토 AI들이 낸 지적의 총수 (검토 AI별 의견 모두 포함)")}
+                      {step("ai", "②", "검토 AI", changedN, `${K.noun} 검토할 것`, "rv-ai", `검토 AI에게 보낼 항목(처음이거나 검토 후 바뀐 것). 받은 의견 ${fsL.length}건`, !!changedN)}
                       <span style={{ alignSelf: "center", color: T.muted }}>→</span>
-                      {step("③", "사람 판정", cnt.open, "의견 미판정", `맞음 ${cnt.valid} (고침 ${validDone} · 아직 ${validTodo}) · 보류 ${cnt.opinion} · 틀림 ${cnt.invalid}`, "rv-judge", "판정을 기다리는 의견 수 — 맞음·보류·틀림 중 하나로 판정합니다", !!cnt.open)}
+                      {step("fix", "③", "수정안", fixT.length, `${K.noun} 고칠 것`, "rv-fix", `미판정·맞음인데 아직 안 고친 의견 ${fixOps}건이 달린 ${K.noun} — 수정안을 만들어 승인`, !!fixT.length)}
                       <span style={{ alignSelf: "center", color: T.muted }}>→</span>
-                      {step("②-b", "수정안 만들 것", fixT.length, `${K.noun}`, `남은 의견 ${fixOps}건 = 미판정 + 맞음인데 아직 안 고침 (보류·틀림은 제외)`, "rv-fix", "[✦ 수정안 생성] 버튼의 숫자와 같습니다 — 항목 1건마다 수정안 1장에 그 의견들을 모아 반영", !!fixT.length)}
+                      {step("judge", "④", "사람 판정", cnt.open, "의견 미판정", "rv-judge", `맞음 ${cnt.valid} · 보류 ${cnt.opinion} · 틀림 ${cnt.invalid}`, !!cnt.open)}
                     </div>
-                    <div style={{ fontSize: 10.5, marginTop: 6, color: next ? T.text : T.green }}>
-                      {next ? <>👉 이 산출물에서 다음 할 일: <b>{next[0]} {next[1]}</b> <button onClick={() => go(next[2])} style={{ ...small, padding: "1px 8px", marginLeft: 4 }}>이동 ↓</button></> : "✓ 이 산출물은 검토·판정·수정이 모두 끝났습니다."}
-                      {cnt.stale > 0 && <span style={{ color: T.muted }}> · 의견을 받은 뒤 내용이 바뀐 의견 {cnt.stale}건 — 고친 결과는 [변경분 검토]로 다시 확인합니다</span>}
+                    <div style={{ fontSize: 11, marginTop: 7, color: rvNextStep ? T.text : T.green, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      {rvNextStep ? <>👉 다음 할 일: <b>{nextTxt}</b>{curStep !== rvNextStep && <button onClick={() => open_(rvNextStep, `rv-${rvNextStep}`)} style={{ ...small, padding: "1px 8px" }}>그 단계 열기</button>}</> : "✓ 이 산출물은 검토·수정·판정이 모두 끝났습니다."}
+                      <span className="ae-hint" style={{ color: T.muted, fontSize: 10 }}>칸을 누르면 그 단계만 펼쳐집니다. 단위: {K.noun}(산출물 안의 항목) · 의견(검토 AI의 지적, {K.noun} 1건에 여러 개).</span>
                     </div>
                   </div>);
               })()}
 
-              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, padding: "7px 10px", marginBottom: 8, background: T.accent + "0D", border: `1px solid ${T.accentDim}`, borderLeft: `3px solid ${T.accent}`, borderRadius: 8 }}>
+              <div className="ae-hint" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, padding: "7px 10px", marginBottom: 8, background: T.accent + "0D", border: `1px solid ${T.accentDim}`, borderLeft: `3px solid ${T.accent}`, borderRadius: 8 }}>
                 <b>검토 기준 적용 순서</b><span>① Automotive SPICE <b>{AE.vdaVersionLabel(V)}</b> (VDA QMC) 프로세스 BP 요건 — 적용 기준에서 고른 버전 기준</span><span style={{ color: T.muted }}>→</span><span>② 기존 산출물 품질 기준 (RC · AC · DC · TC)</span><span style={{ marginLeft: "auto", color: T.muted }}>의견의 기준 코드가 VDA-로 시작하면 ①, 아니면 ②에서 나온 지적입니다</span>
               </div>
-              <AeSec title="① 규칙 검사 — 결정론적 (같은 입력이면 같은 결과)" right={<button onClick={() => setTab("trace")} style={small}>추적성·충족도에서 보기</button>}>
+              <div id="rv-rule" />
+              <AeSec {...stepSec("rule")} title="① 규칙 검사 — 결정론적 (같은 입력이면 같은 결과)" right={<button onClick={() => setTab("trace")} style={small}>추적성·충족도에서 보기</button>}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {chip("V-모델 전체 오류", sevN("error"), sevN("error") ? T.red : T.green, "error")}
                   {chip("경고", sevN("warn"), sevN("warn") ? T.amber : T.green, "warn")}
@@ -10964,7 +10970,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </AeSec>
 
               <div id="rv-ai" />
-              <AeSec title={`② 검토 AI 의견 — ${S.label} (참고 의견)`} right={rvRunning ? <button onClick={() => { rvStop.current = true; }} style={{ ...small, color: T.red, borderColor: T.red + "88" }}>■ 검토 중지</button> : <>
+              <AeSec {...stepSec("ai")} title={`② 검토 AI 의견 — ${S.label} (참고 의견)`} right={rvRunning ? <button onClick={() => { rvStop.current = true; }} style={{ ...small, color: T.red, borderColor: T.red + "88" }}>■ 검토 중지</button> : <>
                 <button disabled={busy || !lvItems.length} onClick={() => aiReview("changed")} style={small} title="아직 검토하지 않았거나 마지막 검토 이후 바뀐 항목만 보냅니다 (선택한 검토 AI 기준)">변경분 검토 ({K.noun} {changedN}건)</button>
                 <button disabled={busy || !lvItems.length} onClick={() => aiReview("all")} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }} title="이 산출물의 항목을 변경 여부와 관계없이 모두 다시 보냅니다">전체 검토 ({K.noun} {lvItems.length}건)</button>
               </>}>
@@ -10978,7 +10984,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     {rvSel && !rvSel.sameAsGenerator && <span style={{ color: T.green, fontSize: 10.5 }}>✓ 생성 AI(Claude)와 다른 모델 — 독립 검토</span>}
                     {rvSel?.sameAsGenerator && <span style={{ color: T.amber, fontSize: 10.5 }}>⚠ 생성 AI와 같은 계열 — 독립성 낮음 (다른 검토 AI 권장)</span>}
                   </div>)}
-                {readyList.length > 1 && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 4 }}>같은 항목을 여러 검토 AI로 각각 검토할 수 있습니다. 검토 AI별 의견은 따로 보관되며 ③에서 함께 판정합니다.</div>}
+                {readyList.length > 1 && <div className="ae-hint" style={{ fontSize: 10.5, color: T.muted, marginTop: 4 }}>같은 항목을 여러 검토 AI로 각각 검토할 수 있습니다. 검토 AI별 의견은 따로 보관되며 ④에서 함께 판정합니다.</div>}
                 {/* 이 산출물의 검토 AI 의견 요약 — 의견 본문과 판정은 ③에서 */}
                 {(() => {
                   const fs = v.list.filter(f => f.level === rvLevel && !f.removed);
@@ -10992,15 +10998,15 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: T.bg, border: `1px solid ${T.border}` }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11.5 }}>
                         <b>검토 AI 의견 {fs.length}건</b>
-                        <span style={{ color: T.muted, fontSize: 10.5 }}>· 의견이 달린 {K.noun} {withOp.size}건 · 현재 내용으로 검토했고 의견 없는(문제 없음) {K.noun} {noOp}건 · 아직 검토 안 했거나 검토 후 바뀐 {K.noun} {lvItems.length - reviewed}건 <span title="의견은 이전 검토에서 받은 것도 남아 있으므로, 바뀐 항목이 '의견이 달린 항목'에도 함께 셈될 수 있습니다">ⓘ</span></span>
+                        <span className="ae-hint" style={{ color: T.muted, fontSize: 10.5 }}>· 의견이 달린 {K.noun} {withOp.size}건 · 현재 내용으로 검토했고 의견 없는(문제 없음) {K.noun} {noOp}건 · 아직 검토 안 했거나 검토 후 바뀐 {K.noun} {lvItems.length - reviewed}건 <span title="의견은 이전 검토에서 받은 것도 남아 있으므로, 바뀐 항목이 '의견이 달린 항목'에도 함께 셈될 수 있습니다">ⓘ</span></span>
                         <span style={{ flex: 1 }} />
-                        <button onClick={() => document.getElementById("rv-judge")?.scrollIntoView({ behavior: "smooth", block: "start" })} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>③에서 의견 보고 판정하기 ↓</button>
+                        <button onClick={() => { setRvStepOpen("judge"); setTimeout(() => document.getElementById("rv-judge")?.scrollIntoView({ behavior: "smooth", block: "start" }), 30); }} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>④ 판정으로 ↓</button>
                       </div>
                       <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 6 }}>
                         {bySev.map(([k, n]) => <span key={k} title={AE.REVIEW_SEV_ABOUT[k]} style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 6, border: `1px solid ${sevColor[k]}55`, color: sevColor[k] }}>{AE.REVIEW_SEV[k]} {n}</span>)}
-                        <span style={{ width: 8 }} />
-                        {byCrit.map(([c, n]) => <span key={c.code} title={c.easy || c.desc} style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 6, background: T.accent + "14", color: T.text }}>{c.label} {n}</span>)}
                       </div>
+                      {byCrit.length > 0 && <details style={{ marginTop: 6, fontSize: 10.5 }}><summary style={{ cursor: "pointer", color: T.muted }}>기준별 의견 수 보기 ({byCrit.length}개 기준)</summary>
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 5 }}>{byCrit.map(([c, n]) => <span key={c.code} title={c.easy || c.desc} style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 6, background: T.accent + "14", color: T.text }}>{c.label} {n}</span>)}</div></details>}
                     </div>);
                 })()}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 10.5, color: T.muted, flexWrap: "wrap" }}>
@@ -11033,13 +11039,13 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       {S.kind === "test" && <><br />TBD로 명시된 부분은 지적하지 않습니다.</>}
                     </div>
                   </div>)}
-                {lastRun && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 4 }}>
+                {lastRun && <div className="ae-hint" style={{ fontSize: 10.5, color: T.muted, marginTop: 4 }}>
                   마지막 검토 실행 {String(lastRun.at).slice(0, 16).replace("T", " ")} · {lastRun.label || lastRun.provider} {lastRun.model} · 기준 {lastRun.criteria} — {K.noun} {lastRun.reviewed}건을 보내 새 의견 {lastRun.kept}건 등록 · 규칙으로 버린 의견 {lastRun.dropped}건{lastRun.failed ? ` · 실패 ${lastRun.failed}건` : ""}
                 </div>}
               </AeSec>
 
               <div id="rv-fix" />
-              <AeSec title={`②-b 수정안 승인 큐 — ${S.label}${fixQ && fixQ.key === rvLevel ? ` · 대기 ${fixQ.cards.filter(c => c.status === "pending").length} · 승인 ${fixQ.cards.filter(c => String(c.status).startsWith("approved")).length} · 반려 ${fixQ.cards.filter(c => c.status === "rejected").length}` : ""}`}
+              <AeSec {...stepSec("fix")} title={`③ 수정안 승인 — ${S.label}${fixQ && fixQ.key === rvLevel ? ` · 대기 ${fixQ.cards.filter(c => c.status === "pending").length} · 승인 ${fixQ.cards.filter(c => String(c.status).startsWith("approved")).length} · 반려 ${fixQ.cards.filter(c => c.status === "rejected").length}` : ""}`}
                 right={<div style={{ display: "flex", gap: 6 }}>
                   {fixQ && fixQ.key === rvLevel && fixQ.cards.length > 1 && <>
                     <button onClick={() => setCardsOpen(fixQ.cards.map(c => `fq|${c.id}`), true)} style={{ ...small, color: T.muted }}>▾ 모두 펼치기</button>
@@ -11049,7 +11055,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   <Btn disabled={busy || !AE.fixQueueTargets(model, rvLevel).length} onClick={genFixQueue} title="미판정 또는 '맞음인데 미수정' 의견이 달린 항목마다 수정안을 만듭니다 — 규칙으로 되는 것은 규칙이, 문장은 생성 AI(Claude)가. 승인 전에는 아무것도 바뀌지 않습니다" style={{ fontSize: 11, padding: "4px 12px" }}>✦ 수정안 생성 ({K.noun} {AE.fixQueueTargets(model, rvLevel).length}건 · 의견 {AE.fixQueueTargets(model, rvLevel).reduce((a, t) => a + t.findings.length, 0)}건)</Btn>
                 </div>}>
                 <div className="ae-hint" style={{ fontSize: 10.5, color: T.muted, marginBottom: 8, lineHeight: 1.6 }}>
-                  의견이 달린 항목마다 <b>수정 전 → 수정 후</b>를 보여줍니다. <b style={{ color: T.green }}>승인</b> = 수정 적용 + 그 의견을 '맞음'으로 판정 + 이력 기록 · <b>편집 후 승인</b> = 편집기에서 손본 뒤 적용 · <b>반려</b> = 아무것도 바꾸지 않고 의견은 ③에서 개별 판정(틀림·보류). 규칙 초안은 결정론적(상위 검증 기준 상속), AI 초안은 의견과 상위 원문을 근거로 하며 원문에 없는 수치는 'TBD(확인 필요)'로만 들어옵니다. 승인 후에는 '변경분 검토'로 수정 결과를 재검토하세요.
+                  의견이 달린 항목마다 <b>수정 전 → 수정 후</b>를 보여줍니다. <b style={{ color: T.green }}>승인</b> = 수정 적용 + 그 의견을 '맞음'으로 판정 + 이력 기록 · <b>편집 후 승인</b> = 편집기에서 손본 뒤 적용 · <b>반려</b> = 아무것도 바꾸지 않고 의견은 ④에서 개별 판정(틀림·보류). 규칙 초안은 결정론적(상위 검증 기준 상속), AI 초안은 의견과 상위 원문을 근거로 하며 원문에 없는 수치는 'TBD(확인 필요)'로만 들어옵니다. 승인 후에는 '변경분 검토'로 수정 결과를 재검토하세요.
                 </div>
                 {(!fixQ || fixQ.key !== rvLevel) && <div style={{ fontSize: 11, color: T.muted }}>아직 생성한 수정안이 없습니다. [✦ 수정안 생성]을 누르세요.{fixQ && fixQ.key !== rvLevel ? ` (다른 산출물 '${AE.reviewScope(fixQ.key)?.label}'의 큐가 있습니다 — 그 산출물을 선택하면 보입니다)` : ""}</div>}
                 {fixQ && fixQ.key === rvLevel && fixQ.cards.map(c => {
@@ -11094,7 +11100,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               </AeSec>
 
               <div id="rv-judge" />
-              <AeSec title={`③ QA 담당자 판정 — 의견 ${cnt.total}건: 미판정 ${cnt.open} · 맞음 ${cnt.valid} · 보류 ${cnt.opinion} · 틀림 ${cnt.invalid}${cnt.edited ? ` | 의견 대상을 고친 의견 ${cnt.edited}` : ""}${cnt.stale ? ` · 의견 받은 뒤 내용 바뀜 ${cnt.stale}` : ""}`}
+              <AeSec {...stepSec("judge")} title={`④ 사람 판정(QA 담당자) — 의견 ${cnt.total}건: 미판정 ${cnt.open} · 맞음 ${cnt.valid} · 보류 ${cnt.opinion} · 틀림 ${cnt.invalid}${cnt.edited ? ` | 의견 대상을 고친 의견 ${cnt.edited}` : ""}${cnt.stale ? ` · 의견 받은 뒤 내용 바뀜 ${cnt.stale}` : ""}`}
                 right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정"], ["valid", "✓ 맞음"], ["invalid", "✕ 틀림"], ["opinion", "△ 보류"], ["edited", "✎ 수정함"], ["validTodo", "맞음인데 아직 안 고침"], ["all", "전체"]].map(([k, l]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.accent }}>{l}</button>)}</div>}>
                 <div className="ae-hint" style={{ fontSize: 10.5, color: T.muted, marginBottom: 6, lineHeight: 1.6 }}>
                   각 의견마다 <b>"AI의 이 지적이 맞는가?"</b>를 판정합니다. <b style={{ color: T.green }}>✓ 맞음</b> = 지적이 맞다 → 산출물을 고친다(✎ 대상 수정) · <b>✕ 틀림</b> = 지적이 틀리거나 이 과제에 맞지 않다 → 그대로 두고 사유를 적는다 · <b style={{ color: T.accent }}>△ 보류</b> = 지금 판단하기 어렵다 → 참고로 남긴다. 빠진 곳 점검의 변경 영향 검토 '영향 없음·하위 수정 필요'와는 다른 판정입니다.
