@@ -7595,14 +7595,14 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
     const resOf = t => { const ru = (t.targets || []).map(x => ({ id: x, r: R.units[x], st: utL.stale[x] })).filter(x => x.r); if (!ru.length) return { res: "Not executed", note: "호스트 실행 결과 없음" }; if (ru.some(x => x.st)) return { res: "Not executed", note: "실행 후 코드가 바뀜 — 재실행 필요" }; const r = ru[0].r; return { res: ru.some(x => x.r.result === "Fail") ? "Fail" : ru.every(x => x.r.result === "Pass") ? "Pass" : "Not executed", note: `${r.build === "fail" ? "빌드 실패 · " : ""}케이스 ${r.pass}/${r.cases} 통과${r.coverage ? ` · 문장 커버리지 ${r.coverage.stmt}%${r.coverage.branchN ? ` · 분기 ${r.coverage.branch}%` : ""}` : ""}` }; };
     const runDate = String(R.ranAt || R.at).slice(0, 10);
     const res = tests.map(t => ({ t, ...resOf(t) }));
-    res.forEach((x, i) => rows.push([String(i + 1), x.t.id, (x.t.targets || []).join(", "), x.t.title || "", x.res, x.res === "Not executed" ? "" : runDate, x.res === "Not executed" ? "" : "SPIDer 호스트 실행(자동)", x.res === "Not executed" ? "" : `호스트 SIL · ${R.cc || "gcc"} · 코드 ${R.units[(x.t.targets || [])[0]]?.code || "-"}`, "", x.note]));
+    res.forEach((x, i) => { const ur = R.units[(x.t.targets || [])[0]] || {}; const ne = x.res === "Not executed"; rows.push([String(i + 1), x.t.id, (x.t.targets || []).join(", "), x.t.title || "", x.res, ne ? "" : String(ur.ranAt || ur.at || runDate).slice(0, 10), ne ? "" : "SPIDer 호스트 실행(자동)", ne ? "" : `호스트 SIL · ${ur.cc || R.cc || "gcc"} · 코드 ${ur.code || "-"}`, "", x.note]); });
     const nOf = k => res.filter(x => x.res === k).length;
     const cs = R.cases;
     const uName = Object.fromEntries((model.units.SW || []).map(u => [u.id, u]));
     const caseRows = [["유닛 시험 케이스 실행 결과 (호스트 실행 · SIL)"], [], ["No", "케이스 ID", "유닛", "출처", "근거 요구", "제목", "결과", "확인 수", "실패 내용"]];
     cs.forEach((c, i) => caseRows.push([String(i + 1), c.case, c.unit, c.origin === "ai" ? "AI 초안(요구 근거·규칙 검증)" : "규칙", c.reqs || "", (uName[c.unit]?.ut?.cases || []).find(q => q.id === c.case)?.title || "", c.result === "pass" ? "Pass" : "Fail", String(c.checks ?? ""), c.detail || ""]));
     const sum = [[`${tl.label} 결과 요약`], [], ["구분", "건수"], ["전체", String(tests.length)], ["Pass", String(nOf("Pass"))], ["Fail", String(nOf("Fail"))], ["Not executed", String(nOf("Not executed"))],
-      [], ["실행 정보", `${String(R.ranAt || R.at).replace("T", " ").slice(0, 19)} · ${R.cc || "-"} · ${R.os || "-"}${R.coverage ? " · gcov 커버리지 측정" : ""} · 케이스 ${cs.length}건 중 통과 ${cs.filter(c => c.result === "pass").length}`],
+      [], ["실행 정보", `유닛별 최신 실행 결과 누적 (실행 유닛 ${Object.keys(R.units).length}개, 마지막 ${String(R.at).replace("T", " ").slice(0, 16)}) · 환경 ${R.cc || "-"} · ${R.os || "-"}${R.coverage ? " · gcov 커버리지 측정 포함" : ""} · 케이스 ${cs.length}건 중 통과 ${cs.filter(c => c.result === "pass").length}`],
       ["검증 환경", "호스트 실행(SIL) — RTE 스텁·시험 하네스(SPIDer UT). 로직 검증이며 타깃 MCU의 타이밍·메모리·인터럽트 동작은 이 결과로 보증하지 않음(타깃·HILS 검증 별도)."],
       ["정적 검증", `MISRA 준수 최종 판정은 ${AE.ddSettings(model).tools.join(" · ")} 결과로 함 — 이 결과서는 동적 유닛 시험 결과`],
       [], ["※ 4.0 15-52: 통과·미통과·미수행, 수행 정보(일자·수행자), 결과 요약을 포함해야 한다. 3.1 13-50과 동일 목적."]];
@@ -10493,7 +10493,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     {ok && !dUnits.length && <div style={{ fontSize: 11, color: T.muted, marginBottom: 8 }}>상세설계가 있는 유닛이 없습니다. SWE.3에서 상세설계·코드를 먼저 생성하세요.</div>}
                     {dropped.length > 0 && <details style={{ fontSize: 10.5, marginBottom: 8 }}><summary style={{ cursor: "pointer", color: T.muted }}>근거 불충분으로 버린 AI 케이스 {dropped.length}건 (규칙 검사)</summary>{dropped.slice(0, 40).map((d, k) => <div key={k} style={{ paddingLeft: 8, borderLeft: `2px solid ${T.border}`, marginTop: 3 }}><span style={{ fontFamily: "monospace", color: T.accent }}>{d.unit}</span> {d.title} — <span style={{ color: T.amber }}>{d.reason}</span></div>)}</details>}
                     {R && <>
-                      <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 6 }}>최근 실행: {String(R.ranAt || R.at).replace("T", " ").slice(0, 19)} · {R.cc || "컴파일러 정보 없음"}{R.os ? ` · ${R.os}` : ""}{R.coverage ? " · 커버리지 측정" : ""} · 가져온 파일 {R.file || "-"}{notRun ? ` · 실행 안 된 유닛 ${notRun}개` : ""}</div>
+                      <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 6 }}>유닛별 최신 결과 누적 — 실행한 유닛 {rows.length}개{notRun ? ` · 아직 실행 안 된 유닛 ${notRun}개` : ""} · 마지막 실행 {String(R.at).replace("T", " ").slice(0, 19)} ({R.file || "-"}) · 환경 {R.cc || "-"}{R.coverage ? " · 커버리지 측정 포함" : ""} · 실행 이력 {R.runs}회 · 저장(✓ 저장)해야 다음에 열어도 남습니다</div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                         <div style={{ display: "grid", gridTemplateColumns: "18px 80px 1fr 64px 90px 120px 70px", gap: 6, fontSize: 10, color: T.muted, padding: "0 6px" }}><span /><span>유닛</span><span>이름</span><span>빌드</span><span>케이스 통과</span><span>커버리지(문장·분기)</span><span>결과</span></div>
                         {rows.map(u => { const r = R.units[u.id]; const k = `ut|${u.id}`; const st = Lr.stale[u.id]; const cs = R.cases.filter(c => c.unit === u.id); return (
@@ -10501,7 +10501,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                             <div onClick={() => setOpen(o => ({ ...o, [k]: !o[k] }))} style={{ display: "grid", gridTemplateColumns: "18px 80px 1fr 64px 90px 120px 70px", gap: 6, fontSize: 11, padding: "5px 6px", cursor: "pointer", alignItems: "center" }}>
                               <span style={{ color: T.muted }}>{open[k] ? "▾" : "▸"}</span>
                               <span style={{ fontFamily: "monospace", color: T.accent }}>{u.id}</span>
-                              <span>{u.name}{st && <span style={{ color: T.amber, fontSize: 10 }}> · 실행 후 코드 변경 — 재실행 필요</span>}</span>
+                              <span>{u.name}<span style={{ color: T.muted, fontSize: 9.5 }}> · {String(r.at || "").replace("T", " ").slice(5, 16)} {/Browser/.test(r.os || "") ? "브라우저" : "gcc"}</span>{st && <span style={{ color: T.amber, fontSize: 10 }}> · 실행 후 코드 변경 — 재실행 필요</span>}</span>
                               <span style={{ color: r.build === "fail" ? T.red : T.text }}>{r.build === "fail" ? "실패" : r.build === "ok" ? `성공${r.warnings ? ` ⚠${r.warnings}` : ""}` : "-"}</span>
                               <span>{r.cases ? `${r.pass}/${r.cases}` : "-"}</span>
                               <span>{r.coverage ? `${r.coverage.stmt}% · ${r.coverage.branchN ? r.coverage.branch + "%" : "분기 없음"}` : "-"}</span>
