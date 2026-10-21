@@ -10456,28 +10456,23 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 const notRun = R ? dUnits.filter(u => !R.units[u.id]).length : dUnits.length;
                 const resCol = r => r === "Pass" ? T.green : r === "Fail" ? T.red : T.muted;
                 return (
-                  <AeSec title={`SWE.4 호스트 실행(SIL) — 유닛 ${dUnits.length} · 케이스 ${nRule + nAi} (규칙 ${nRule} · AI 초안 ${nAi})${R ? ` · 최근 실행 ${String(R.ranAt || R.at).slice(0, 10)}` : ""}`}
-                    right={<div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                      <Btn variant="outline" disabled={busy || !ok || !dUnits.length} onClick={genUnitTests} title="규칙 케이스(초기화·출력 갱신·견고성)는 설계에서 결정적으로, 요구 기반 케이스는 생성 AI가 초안 — 기대값이 요구·설계 원문에 없으면 버립니다" style={{ fontSize: 11, padding: "4px 12px" }}>✦ 케이스 생성</Btn>
-                      <Btn disabled={busy || !ok || !dUnits.length} onClick={downloadHostPkg} style={{ fontSize: 11, padding: "4px 12px" }}>📦 실행 패키지 ZIP</Btn>
-                      <label style={{ ...small, padding: "4px 12px", fontSize: 11, opacity: busy || !ok ? 0.5 : 1, pointerEvents: busy || !ok ? "none" : "auto" }} title="run_tests가 만든 swe4_results.jsonl">⬆ 실행 결과 가져오기<input type="file" accept=".jsonl,.json,.txt" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; importUtResults(f); }} /></label>
-                    </div>}>
+                  <AeSec title={`SWE.4 유닛 시험 실행 — 유닛 ${dUnits.length} · 케이스 ${nRule + nAi} (규칙 ${nRule} · AI 초안 ${nAi})${R ? ` · 실행 ${rows.length}/${dUnits.length}` : ""}`}>
                     <div style={{ fontSize: 10.5, color: T.muted, lineHeight: 1.65, marginBottom: 8 }}>
-                      SWE.3에서 만든 C 소스를 <b style={{ color: T.text }}>PC(gcc)에서 빌드·실행</b>해 유닛별로 검증합니다. ① <b>✦ 케이스 생성</b> → ② <b>📦 실행 패키지 ZIP</b>을 받아 압축을 풀고 <code>run_tests.sh</code>(Windows는 <code>run_tests.bat</code>, 커버리지는 <code>COVERAGE=1 sh run_tests.sh</code>) 실행 → ③ 만들어진 <code>swe4_results.jsonl</code>을 <b>⬆ 실행 결과 가져오기</b>로 올리면 SW 유닛 검증 결과서(SW4106)에 Pass/Fail이 채워집니다.
-                      RTE는 시험용 스텁으로 바꾸고, 외부 다운로드 없이 동작합니다. AI 초안 케이스는 소스가 아니라 <b>요구·상세설계</b>만 보고 만들며, 기대값이 원문에 없으면 버립니다.
+                      SWE.3에서 만든 C 소스를 <b style={{ color: T.text }}>설치 없이 이 화면에서 빌드·실행</b>해 유닛별로 검증하고, 결과를 SW 유닛 검증 결과서(SW4106)에 바로 반영합니다. RTE는 시험용 스텁으로 바꾸며, AI 초안 케이스는 소스가 아니라 <b>요구·상세설계</b>만 보고 만들고 기대값이 원문에 없으면 버립니다.
                       <span style={{ color: T.amber }}> 호스트 실행(SIL)은 로직 검증이며 타깃 MCU의 타이밍·메모리·인터럽트 동작은 보증하지 않습니다 — 결과서에도 그렇게 표기됩니다.</span>
                     </div>
                     {ok && dUnits.length > 0 && (
                       <div style={{ border: `1px solid ${T.accent}55`, borderRadius: 8, padding: "8px 10px", marginBottom: 10, background: T.accent + "0d" }}>
                         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                          <b style={{ fontSize: 11.5, flex: 1, minWidth: 220 }}>▶ 브라우저에서 바로 실행 <span style={{ fontWeight: 400, color: T.muted, fontSize: 10.5 }}>— 설치 불필요 · 같은 시험 소스를 clang(WebAssembly)으로 컴파일·실행 · 코드는 브라우저 밖으로 나가지 않음</span></b>
-                          {!clangRef.current && <button disabled={brBusy || !!brLoad} onClick={async () => { try { await loadBrowserCC(); setBrLog(l => [...l, { kind: "info", text: `컴파일러 준비 완료 (${clangRef.current.host}) — 이제 [▶ 실행]이 바로 시작됩니다.` }]); } catch (e) { setBrLog(l => [...l, { kind: "error", text: e.message }]); } }} style={{ ...small, fontSize: 10.5 }} title="데모 전에 눌러 두면 실행할 때 기다리지 않습니다 (약 100MB, 처음 1회)">⬇ 컴파일러 미리 불러오기</button>}
-                          {clangRef.current && <span style={{ fontSize: 10, color: T.green }}>✓ 컴파일러 준비됨</span>}
+                          <b style={{ fontSize: 11.5, flex: 1, minWidth: 220 }}>▶ 브라우저에서 바로 실행 <span style={{ fontWeight: 400, color: T.muted, fontSize: 10.5 }}>— 설치 불필요 · clang(WebAssembly) · 코드는 브라우저 밖으로 나가지 않음</span></b>
+                          <Btn variant="outline" disabled={busy || brBusy} onClick={genUnitTests} title="규칙 케이스(초기화·출력 갱신·견고성)는 설계에서 결정적으로, 요구 기반 케이스는 생성 AI가 초안 — 기대값이 요구·설계 원문에 없으면 버립니다" style={{ fontSize: 10.5, padding: "3px 10px" }}>① ✦ 케이스 생성{nAi ? ` (AI ${nAi})` : ""}</Btn>
+                          {!clangRef.current && <button disabled={brBusy || !!brLoad} onClick={async () => { try { await loadBrowserCC(); setBrLog(l => [...l, { kind: "info", text: `컴파일러 준비 완료 (${clangRef.current.host}) — 이제 [▶ 실행]이 바로 시작됩니다.` }]); } catch (e) { setBrLog(l => [...l, { kind: "error", text: e.message }]); } }} style={{ ...small, fontSize: 10.5 }} title="데모 전에 눌러 두면 실행할 때 기다리지 않습니다 (약 100MB, 처음 1회)">② ⬇ 컴파일러 미리 불러오기</button>}
+                          {clangRef.current && <span style={{ fontSize: 10, color: T.green }}>② ✓ 컴파일러 준비됨</span>}
                           <select value={brPick} onChange={e => setBrPick(e.target.value)} disabled={brBusy} style={{ ...small, color: T.text, background: T.bg, maxWidth: 220 }}>
                             <option value="all">전체 유닛 ({dUnits.length})</option>
                             {dUnits.map(u => <option key={u.id} value={u.id}>{u.id} {u.name}</option>)}
                           </select>
-                          {!brBusy ? <Btn disabled={busy || !!brLoad} onClick={runInBrowser} style={{ fontSize: 11, padding: "4px 14px" }}>▶ 실행</Btn>
+                          {!brBusy ? <Btn disabled={busy || !!brLoad} onClick={runInBrowser} style={{ fontSize: 11, padding: "4px 14px" }}>③ ▶ 실행</Btn>
                             : <button onClick={() => { brStop.current = true; }} style={{ ...small, color: T.red, borderColor: T.red }}>■ 중지 (지금 유닛까지)</button>}
                         </div>
                         {brLoad && <div style={{ marginTop: 6 }}><GenProgressBar progress={{ percent: Math.max(2, brLoad.pct), label: brLoad.label }} subText="내려받은 컴파일러는 브라우저 캐시에 남아 다음부터는 바로 시작합니다." /></div>}
@@ -10487,7 +10482,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                               {l.kind === "run" ? String(l.text).split("\n").map((s, j) => <div key={j} style={{ color: /\[FAIL\]/.test(s) ? "#ff6b6b" : /\[PASS\]/.test(s) ? "#addb67" : undefined }}>{s}</div>) : l.text}
                             </div>)}
                           </div>)}
-                        <div style={{ fontSize: 10, color: T.muted, marginTop: 5 }}>gcc 실행과 같은 시험·같은 판정입니다. 차이: 컴파일러가 clang(wasm32)이고 커버리지는 측정하지 않습니다(커버리지는 gcc 패키지의 <code>COVERAGE=1</code>). 결과는 실행이 끝나면 자동으로 아래 표와 결과서에 반영됩니다.</div>
+                        <div style={{ fontSize: 10, color: T.muted, marginTop: 5 }}>① 케이스 생성은 선택(규칙 케이스만으로도 실행됨 · 요구 기반 경계값 케이스를 넣으려면 실행 전에 한 번) → ② 처음 한 번 컴파일러를 받음(약 100MB, 이후 브라우저 캐시) → ③ 유닛을 골라 실행. 결과는 끝나면 자동으로 아래 표와 결과서에 반영되며, <b>✓ 저장</b>을 눌러야 남습니다. 커버리지 측정은 아래 <b>고급</b>의 PC 실행에서 합니다.</div>
                       </div>)}
                     {!ok && <div style={{ fontSize: 11, color: T.amber, marginBottom: 8 }}>현재 코드 대상이 {AE.DD_TARGETS[S.target]?.label}입니다. 호스트 실행은 AUTOSAR Classic(C)만 지원합니다 — Adaptive(C++)는 2단계로 예정되어 있습니다.</div>}
                     {ok && !dUnits.length && <div style={{ fontSize: 11, color: T.muted, marginBottom: 8 }}>상세설계가 있는 유닛이 없습니다. SWE.3에서 상세설계·코드를 먼저 생성하세요.</div>}
@@ -10520,6 +10515,16 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                           </div>); })}
                       </div>
                     </>}
+                    <details style={{ marginTop: 10, border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 10px", background: T.bg }}>
+                      <summary style={{ cursor: "pointer", fontSize: 11, color: T.muted }}><b style={{ color: T.text }}>고급: PC·CI에서 실행</b> — 코드 커버리지(문장·분기) 측정 · 사내망에서 CDN이 막혀 브라우저 실행이 안 될 때 · 고객사 CI로 옮길 때</summary>
+                      <div style={{ fontSize: 10.5, color: T.muted, lineHeight: 1.65, margin: "6px 0" }}>
+                        <b>📦 실행 패키지 ZIP</b>을 받아 압축을 풀고 gcc로 <code>run_tests.bat</code>(Windows) 또는 <code>sh run_tests.sh</code>를 실행합니다. 커버리지까지 재려면 <code>COVERAGE=1 sh run_tests.sh</code>(MSYS2·Git Bash·Linux). 만들어진 <code>swe4_results.jsonl</code>을 <b>⬆ 실행 결과 가져오기</b>로 올리면 브라우저 실행 결과와 같은 표·결과서에 유닛별로 합쳐집니다. 같은 시험 소스·같은 판정이며, gcc 설치 방법은 패키지의 README.txt에 있습니다.
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <Btn disabled={busy || !ok || !dUnits.length} onClick={downloadHostPkg} style={{ fontSize: 11, padding: "4px 12px" }}>📦 실행 패키지 ZIP</Btn>
+                        <label style={{ ...small, padding: "4px 12px", fontSize: 11, opacity: busy || !ok ? 0.5 : 1, pointerEvents: busy || !ok ? "none" : "auto" }} title="run_tests가 만든 swe4_results.jsonl">⬆ 실행 결과 가져오기<input type="file" accept=".jsonl,.json,.txt" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; importUtResults(f); }} /></label>
+                      </div>
+                    </details>
                   </AeSec>);
               })()}
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
