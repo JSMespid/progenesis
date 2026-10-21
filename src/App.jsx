@@ -7999,9 +7999,10 @@ function hw2ModelFiles(meta, ctx, folder = "HW4101_HW설계_모델") {
   if (!comps.length) return [];
   const files = [];
   try { files.push({ path: `${folder}/block/HW_architecture_block.svg`, content: AE.hdSvg("block", null, model) }); } catch (_) {}
+  try { files.push({ path: `${folder}/top/HW_top_schematic.svg`, content: AE.hdSvg("top", null, model) }); } catch (_) {}
   comps.forEach(c => { try { files.push({ path: `${folder}/schematics/${c.id}_schematic.svg`, content: AE.hdSvg("schematic", c, model) }); } catch (_) {} try { files.push({ path: `${folder}/schematics/${c.id}_wired.svg`, content: AE.hdSvg("wired", c, model) }); } catch (_) {} });
   const S = AE.hdSettings(model);
-  files.push({ path: `${folder}/README.txt`, content: [`HWE.2 HW 설계 모델 — ${meta.name || ""}`, ``, `block/      : HW 아키텍처 블록도(04-52) SVG`, `schematics/ : 블록별 회로도(04-54) SVG — <id>_schematic.svg 넷 라벨 방식(EDA용) · <id>_wired.svg 연결선 회로도(모든 넷을 선으로, 보기용)`, `EDA 교환 파일(${S.schematicFmt} 회로도 · ${S.layoutFmt} · ${S.fabFmt})은 다음 생성 단계에서 같은 폴더에 추가됩니다.`, `부품 PN은 AI 후보(BOM 14-54 참조). 모든 부품·넷·특성에 근거 HW 요구 ID가 기록됩니다.`].join("\n") });
+  files.push({ path: `${folder}/README.txt`, content: [`HWE.2 HW 설계 모델 — ${meta.name || ""}`, ``, `block/      : HW 아키텍처 블록도(04-52) SVG`, `top/        : HW 통합 회로도(전체 보드 · 최상위 계층 시트) SVG — 블록 = 상자, 블록 간 연결 = 선`, `schematics/ : 블록별 회로도(04-54) SVG — <id>_schematic.svg 넷 라벨 방식(EDA용) · <id>_wired.svg 연결선 회로도(모든 넷을 선으로, 보기용)`, `EDA 교환 파일(${S.schematicFmt} 회로도 · ${S.layoutFmt} · ${S.fabFmt})은 다음 생성 단계에서 같은 폴더에 추가됩니다.`, `부품 PN은 AI 후보(BOM 14-54 참조). 모든 부품·넷·특성에 근거 HW 요구 ID가 기록됩니다.`].join("\n") });
   return files;
 }
 // ── SVG 미리보기 배율: "fit" = 패널 너비에 맞춤(viewBox 유지), 숫자 = 원본 대비 배율 ──
@@ -10432,6 +10433,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               return (
               <AeSec title={`HWE.2 회로 설계 — 회로도·BOM·특별 특성·분석 (설계 ${have.length}/${model.comps.HW.length} 블록)`}
                 right={<div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {have.length > 1 && <button onClick={() => setHdView({ comp: hdView.comp || have[0].id, kind: "top" })} title="모든 HW 블록을 하나의 최상위 회로도로 — 블록 = 상자, 블록 간 연결 = 선" style={{ ...small, padding: "4px 10px", fontSize: 11 }}>🧩 통합 회로도(전체 보드)</button>}
                   {noNets.length > 0 && <Btn onClick={() => genHDNets(noNets.map(c => c.id))} disabled={busy} title="부품은 그대로 두고 핀 연결(넷)만 만듭니다" style={{ fontSize: 11, padding: "4px 10px" }}>🔗 연결 없는 {noNets.length}개 블록 연결 생성</Btn>}
                   {missing.length > 0 && have.length > 0 && <Btn onClick={() => genHD(missing.map(c => c.id))} disabled={busy} style={{ fontSize: 11, padding: "4px 10px" }}>{model.useAI ? "🤖" : "⚙"} 빠진 {missing.length}개만 설계</Btn>}
                   <Btn variant={have.length ? "outline" : undefined} onClick={() => { if (have.length && !window.confirm(`HW 블록 ${model.comps.HW.length}개의 회로 설계를 모두 다시 만듭니다. 기존 부품·넷·분석은 교체됩니다.`)) return; genHD(); }} disabled={busy || !model.comps.HW.length} style={{ fontSize: 11, padding: "4px 10px" }}>{model.useAI ? "🤖 AI 회로 설계 생성 (전체)" : "⚙ 규칙 회로 설계 생성 (전체)"}</Btn>
@@ -10453,7 +10455,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     <div style={{ display: "flex", gap: 3, alignItems: "center", padding: "6px 8px", flexWrap: "wrap", background: T.bg }}>
                       {AE.HD_DIAGRAMS.map(([k, lab]) => <button key={k} onClick={() => setHdView(v => ({ ...v, kind: k }))} style={{ ...small, padding: "3px 9px", color: hdView.kind === k ? "#fff" : T.muted, background: hdView.kind === k ? T.accent : "transparent", borderColor: hdView.kind === k ? T.accent : T.border }}>{lab}</button>)}
                       <div style={{ flex: 1 }} />
-                      <button onClick={() => dlSvgH(hdView.kind === "block" ? null : vc, hdView.kind)} style={small}>⬇ SVG</button>
+                      <button onClick={() => dlSvgH(hdView.kind === "block" || hdView.kind === "top" ? null : vc, hdView.kind)} style={small}>⬇ SVG</button>
                     </div>
                     <SvgView svg={AE.hdSvg(hdView.kind, vc, model)} zoom={svgZoom} setZoom={setSvgZoom} />
                     <div style={{ padding: "6px 10px", fontSize: 10.5, color: T.muted, borderTop: `1px solid ${T.border}`, maxHeight: 180, overflow: "auto" }}>
@@ -11091,7 +11093,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
             // 3) HW 블록
             const hwComps = model.comps.HW.filter(c => c.hd?.parts?.length);
             if (hwComps.length) {
-              groups.push({ cat: "common", name: "HWE.2 모델 공통", items: [{ type: "svg", key: "hw:block", label: "HW 아키텍처 블록도 (04-52)", sub: "svg", get: () => AE.hdSvg("block", null, model), file: "HW_architecture_block.svg" },
+              groups.push({ cat: "common", name: "HWE.2 모델 공통", items: [{ type: "svg", key: "hw:top", label: "HW 통합 회로도 (전체 보드)", sub: `블록 ${hwComps.length}개 · 블록 간 연결 · svg`, get: () => AE.hdSvg("top", null, model), file: "HW_top_schematic.svg" },
+                { type: "svg", key: "hw:block", label: "HW 아키텍처 블록도 (04-52)", sub: "svg", get: () => AE.hdSvg("block", null, model), file: "HW_architecture_block.svg" },
                 { type: "table", key: "hw:bom", label: "BOM 미리보기 (14-54)", sub: "부품 PN 후보", rows: () => [["블록", "RefDes", "종류", "값", "패키지", "제조사", "PN(후보)", "정격", "근거 요구"], ...hwComps.flatMap(c => c.hd.parts.map(p => [c.name, p.ref, p.kind, p.value, p.pkg, p.mfr, p.mpn, p.rating, (p.reqs || []).join(", ")]))] },
                 { type: "table", key: "hw:sc", label: "특별 특성 미리보기 (17-57)", sub: "", rows: () => [["블록", "ID", "특성", "분류", "대상", "값", "관리", "검증", "근거"], ...hwComps.flatMap(c => c.hd.specials.map(x => [c.name, x.id, x.char, x.type, x.target, x.value, x.control, x.verify, (x.reqs || []).join(", ")]))] },
                 { type: "table", key: "hw:an", label: "설계 분석 미리보기 (15-51)", sub: "Derating·열·최악조건", rows: () => [["블록", "분석", "항목", "정격/공칭", "적용/최소~최대", "기준/한계", "판정", "비고"], ...hwComps.flatMap(c => [...c.hd.analysis.derating.map(x => [c.name, "Derating", `${x.ref} ${x.param}`, x.rated, x.applied, `${x.ratio} / ${x.limit}`, x.ok ? "OK" : "NG", x.note]), ...c.hd.analysis.thermal.map(x => [c.name, "열", x.ref, `Pd ${x.pd_mW}mW`, `Ta ${x.ta} → Tj ${x.tj}`, x.limit, x.ok ? "OK" : "NG", x.note]), ...c.hd.analysis.worstCase.map(x => [c.name, "최악조건", x.item, x.nominal, `${x.min} ~ ${x.max}`, x.limit, x.ok ? "OK" : "NG", `${x.method} ${x.note}`])])] }] });

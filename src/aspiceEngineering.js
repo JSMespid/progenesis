@@ -3003,7 +3003,7 @@ JSON만 출력:
 }
 
 // ── HW 다이어그램 SVG: block(아키텍처 블록도, 04-52) · schematic(회로도 — 넷 라벨 방식) ──
-export const HD_DIAGRAMS = [["wired", "연결선 회로도(한눈에)"], ["schematic", "회로도(넷 라벨·EDA용)"], ["block", "블록도"]];
+export const HD_DIAGRAMS = [["top", "통합 회로도(전체 보드)"], ["wired", "연결선 회로도(이 블록)"], ["schematic", "회로도(넷 라벨·EDA용)"], ["block", "블록도"]];
 // 연결선 회로도(한눈에 보기) — 회로도 관례대로: 신호는 실제 선으로 잇고, 전원·GND는 핀마다 전원 깃발·접지 기호로 표시.
 //  · 핀이 가장 많은 부품(허브: MCU·AFE 등)을 가운데, 나머지는 좌·우 열. 2단자 수동소자(R·C·L·D·퓨즈·크리스탈)는 표준 기호로 그린다.
 //  · 허브와 좌·우 열 사이 '채널'에 신호 넷마다 세로선 1개 — 핀은 가로선으로 붙고 접점은 ●. 좌우에 걸친 신호는 허브 위 가로선으로 잇는다.
@@ -3020,8 +3020,12 @@ function symbolSvg(kind, value, cx, y1, y2, attrs) {
   if (/크리스탈/.test(kind)) return L(cx, y1, cx, mid - 8) + L(cx - 8, mid - 8, cx + 8, mid - 8) + `<rect x="${cx - 6}" y="${mid - 5}" width="12" height="10" fill="#fff" stroke="#222"/>` + L(cx - 8, mid + 8, cx + 8, mid + 8) + L(cx, mid + 8, cx, y2);
   return L(cx, y1, cx, y2);
 }
-function hdWiredSvg(comp, m) {
+function hdWiredSvg(comp, m, opt = {}) {
   const hd = comp?.hd; if (!hd || !hd.parts.length) return "";
+  // 이 블록 밖으로 나가는 신호: 블록 인터페이스(ifs)의 넷, 다른 블록에도 같은 이름이 있는 넷
+  const otherNets = new Set((m.comps.HW || []).filter(c => c.id !== comp.id && c.hd).flatMap(c => [...(c.hd.nets || []).map(n => n.name), ...(c.hd.ifs || []).map(x => x.net)]));
+  const ifNets = new Set((hd.ifs || []).map(x => x.net));
+  const extOf = n => opt.top ? "" : otherNets.has(n) ? "⇄ 다른 블록" : ifNets.has(n) ? "⇢ 블록 밖" : "";
   const P = 16, STUB = 18, TRK = 13, SP = 48;
   const netOf = {}; hd.conns.forEach(c => { if (c.net && c.net !== "NC") netOf[`${c.ref}.${c.pin}`] = c.net; });
   const pinNet = (p, pn) => netOf[`${p.ref}.${pn.num}`] || netOf[`${p.ref}.${pn.name}`] || null;
@@ -3094,9 +3098,15 @@ function hdWiredSvg(comp, m) {
     const k = kindOf(pa.net);
     if (k === "gnd" || k === "pwr") {
       // 박스 부품의 이웃 핀(16px 간격)에 기호가 겹치지 않도록 한 칸 걸러 선을 더 뺀다
-      const ext = pa.sym ? 0 : (Math.round((pa.y - top0) / P) % 2 ? 26 : 0); const xe = pa.dir === "R" ? pa.x + ext : pa.x - ext;
+      const ext = 0; const xe = pa.x;
       if (ext) b += `<line x1="${pa.x}" y1="${pa.y}" x2="${xe}" y2="${pa.y}" stroke="#222" stroke-width="1.2"${dn(pa.net, pa)}/>`;
-      b += k === "gnd" ? gndSym(xe, pa.y, pa.net, pa) : pwrSym(xe, pa.y, pa.net, pa); return; }
+      if (pa.sym) { b += k === "gnd" ? gndSym(xe, pa.y, pa.net, pa) : pwrSym(xe, pa.y, pa.net, pa); return; }
+      // 박스 부품 핀(16px 간격)은 기호를 옆으로 눕혀 위아래 핀의 선과 겹치지 않게
+      const s = pa.dir === "R" ? 1 : -1;
+      b += k === "gnd"
+        ? `<g${dn(pa.net, pa)}><line x1="${xe}" y1="${pa.y - 7}" x2="${xe}" y2="${pa.y + 7}" stroke="#333" stroke-width="1.3"/><line x1="${xe + s * 3}" y1="${pa.y - 4.5}" x2="${xe + s * 3}" y2="${pa.y + 4.5}" stroke="#333" stroke-width="1.3"/><line x1="${xe + s * 6}" y1="${pa.y - 2}" x2="${xe + s * 6}" y2="${pa.y + 2}" stroke="#333" stroke-width="1.3"/>${pa.net !== "GND" ? `<text x="${xe + s * 10}" y="${pa.y + 3}" font-size="7" fill="#333" ${s < 0 ? 'text-anchor="end"' : ""}>${X(pa.net)}</text>` : ""}</g>`
+        : `<g${dn(pa.net, pa)}><line x1="${xe}" y1="${pa.y - 6}" x2="${xe}" y2="${pa.y + 6}" stroke="#B00020" stroke-width="1.8"/><text x="${xe + s * 4}" y="${pa.y + 3}" font-size="7.5" font-weight="700" fill="#B00020" ${s < 0 ? 'text-anchor="end"' : ""}>${X(pa.net)}</text></g>`;
+      return; }
     const ch = chOf(pa); const tx = trackX(ch, pa.net); const c = col(pa.net);
     b += `<line x1="${pa.x}" y1="${pa.y}" x2="${tx}" y2="${pa.y}" stroke="${c}" stroke-width="1.3"${dn(pa.net, pa)}/><circle cx="${tx}" cy="${pa.y}" r="2.6" fill="${c}"${dn(pa.net)}/>`;
     (byNet[pa.net] = byNet[pa.net] || { L: [], R: [], n: 0 }); byNet[pa.net][ch].push(pa.y); byNet[pa.net].n++;
@@ -3105,16 +3115,52 @@ function hdWiredSvg(comp, m) {
     ["L", "R"].forEach(ch => { const ys = g[ch]; if (!ys.length) return; const tx = trackX(ch, n);
       const y1 = both.includes(n) ? bridgeY[n] : Math.min(...ys), y2 = Math.max(...ys);
       if (y2 > y1) b += `<line x1="${tx}" y1="${y1}" x2="${tx}" y2="${y2}" stroke="${c}" stroke-width="1.4"${dn(n)}/>`;
-      if (!both.includes(n)) b += `<text x="${tx + 3}" y="${Math.min(...ys) - 4}" font-size="7.5" fill="${lone ? "#C77700" : c}" font-weight="700"${dn(n)}>${X(n)}${lone ? " ⚠" : ""}</text>`; });
+      const ex = extOf(n); const warn = lone && !ex && !opt.top;
+      if (!both.includes(n)) b += `<text x="${tx + 3}" y="${Math.min(...ys) - 4}" font-size="7.5" fill="${warn ? "#C77700" : c}" font-weight="700"${dn(n)}>${X(n)}${warn ? " ⚠" : ""}${ex ? `<tspan fill="#00796B"> ${ex}</tspan>` : ""}</text>`; });
     if (both.includes(n)) { const xa = trackX("L", n), xb = trackX("R", n), yb = bridgeY[n];
       b += `<line x1="${xa}" y1="${yb}" x2="${xb}" y2="${yb}" stroke="${c}" stroke-width="1.4"${dn(n)}/><circle cx="${xa}" cy="${yb}" r="2" fill="${c}"/><circle cx="${xb}" cy="${yb}" r="2" fill="${c}"/><text x="${(xa + xb) / 2}" y="${yb - 2.5}" text-anchor="middle" font-size="7.5" font-weight="700" fill="${c}"${dn(n)}>${X(n)}</text>`; } });
   const W = Math.max(colRx + colRW + 60, (hub ? chR0 + chRW : chL0 + chLW) + 80, 800);
   const Hc = Math.max(yEndL, yEndR, top0 + hubH + 30);
   let ly = Hc + 10;
-  b += `<text x="${leftX}" y="${ly}" font-size="9" fill="#555">연결선 회로도(한눈에 보기) — 신호는 선으로 연결(● 접점, 선이 교차해도 ●가 없으면 연결 아님) · 전원은 빨간 깃발, GND는 접지 기호(같은 이름끼리 연결) · NC × 미연결 · ⚠ 한 핀만 연결.</text>`;
-  ly += 14; b += `<text x="${leftX}" y="${ly}" font-size="9" fill="#555">연결된 핀 ${st.con}/${st.total} · 신호 넷 ${Object.keys(byNet).length} · 부품 ${parts.length}${hub ? ` · 가운데 ${hub.ref}` : ""} — 보기용 자동 배치입니다. EDA 납품용은 '회로도'(넷 라벨 방식, ${hdSettings(m).schematicFmt} 기준).</text>`;
+  (opt.notes || [`연결선 회로도(한눈에 보기) — 신호는 선으로 연결(● 접점, 선이 교차해도 ●가 없으면 연결 아님) · 전원은 빨간 깃발, GND는 접지 기호(같은 이름끼리 연결) · NC × 미연결 · ⚠ 한 핀만 연결(상대 확인 필요) · ⇄ 다른 블록과 연결 · ⇢ 블록 밖(커넥터 등).`,
+    `연결된 핀 ${st.con}/${st.total} · 신호 넷 ${Object.keys(byNet).length} · 부품 ${parts.length}${hub ? ` · 가운데 ${hub.ref}` : ""} — 보기용 자동 배치입니다. 전체 보드는 '통합 회로도(전체)', EDA 납품용은 '회로도'(넷 라벨 방식, ${hdSettings(m).schematicFmt} 기준).`]).forEach((t, i) => { if (i) ly += 14; b += `<text x="${leftX}" y="${ly}" font-size="9" fill="#555">${X(t)}</text>`; });
   const H = ly + 20 + shift;
-  return svgWrap(W, H, `<g transform="translate(0,${shift})">${b}</g>`, `${comp.id} ${comp.name} — 연결선 회로도 (한눈에 보기)`);
+  return svgWrap(W, H, `<g transform="translate(0,${shift})">${b}</g>`, opt.title || `${comp.id} ${comp.name} — 연결선 회로도 (한눈에 보기)`);
+}
+// 블록 간 연결(최상위 넷) 계산 — ① HW 인터페이스(HWIF)마다 양 끝 블록의 포트를 잇고 ② 같은 이름의 전원·GND·신호 넷을 블록 사이에서 잇는다
+export function hwTopNets(model) {
+  const m = normalizeModel(model);
+  const comps = (m.comps.HW || []).filter(c => c.hd?.parts?.length);
+  const ports = {}; comps.forEach(c => { ports[c.id] = []; });
+  const addPort = (cid0, name, type, net) => { const list = ports[cid0]; if (!list) return; const nm = netName(name); if (list.some(p => p.name === nm)) { const p = list.find(q => q.name === nm); if (!p.net) p.net = net; return; } list.push({ name: nm, type, net }); };
+  const tops = [];
+  (m.interfaces.HW || []).forEach(i => {
+    const A = comps.find(c => c.id === i.from), B = comps.find(c => c.id === i.to); if (!A || !B) return;
+    const sig = netName(String(i.signals || i.kind || i.id).split(/[,;·/]/)[0].trim()) || netName(i.id);
+    const pa = (A.hd.ifs || []).find(x => x.source === i.id)?.net || sig, pb = (B.hd.ifs || []).find(x => x.source === i.id)?.net || sig;
+    const top = netName(`${sig}`); tops.push({ net: top, ifId: i.id, from: A.id, to: B.id, kind: i.kind || "" });
+    addPort(A.id, pa, "out", top); addPort(B.id, pb, "in", top);
+  });
+  // 같은 이름 넷이 둘 이상의 블록에 있으면 연결(전원·GND 포함)
+  const byName = {}; comps.forEach(c => new Set([...(c.hd.nets || []).map(n => n.name), ...(c.hd.ifs || []).map(x => x.net)]).forEach(n => { if (n && n !== "NC") (byName[n] = byName[n] || []).push(c.id); }));
+  Object.entries(byName).forEach(([n, cs]) => { if (cs.length < 2) return; const pwr = /GND|VSS/i.test(n) ? "gnd" : /^(V|VCC|VDD|\+?\d+V|\d+V\d)/i.test(n) ? "pwr" : "io"; cs.forEach(c => addPort(c, n, pwr, n)); if (pwr === "io") tops.push({ net: n, ifId: "", from: cs[0], to: cs.slice(1).join(","), kind: "같은 넷 이름" }); });
+  // 블록 밖(커넥터)으로 나가는 인터페이스 — 어느 블록과도 이어지지 않은 ifs
+  comps.forEach(c => (c.hd.ifs || []).forEach(x => { if (!ports[c.id].some(p => p.name === netName(x.net))) addPort(c.id, x.net, /in/.test(x.dir) ? "in" : /out/.test(x.dir) ? "out" : "io", null); }));
+  return { comps, ports, tops };
+}
+function hwTopSvg(model) {
+  const m = normalizeModel(model);
+  const { comps, ports, tops } = hwTopNets(m);
+  if (!comps.length) return svgWrap(700, 120, `<text x="20" y="60" font-size="12">회로 설계가 있는 HW 블록이 없습니다 — HWE.2에서 블록별 회로 설계를 먼저 만드세요.</text>`, "HW 통합 회로도 (전체 보드)");
+  // 블록을 '부품', 포트를 '핀'으로 하는 가상 회로로 바꿔 연결선 회로도 엔진으로 그린다
+  const parts = comps.map(c => ({ ref: c.id, kind: "블록", value: c.name, pkg: `부품 ${c.hd.parts.length}`, pins: ports[c.id].map((p, k) => ({ num: String(k + 1), name: p.name, type: p.type === "gnd" ? "gnd" : p.type === "pwr" ? "pwr" : p.type === "in" ? "in" : p.type === "out" ? "out" : "io" })) })).filter(p => p.pins.length);
+  const conns = []; comps.forEach(c => ports[c.id].forEach((p, k) => { if (p.net) conns.push({ ref: c.id, pin: String(k + 1), net: netName(p.net) }); }));
+  const pseudo = { id: "HW-TOP", name: "통합", hd: { parts, conns, nets: [], ifs: [] } };
+  const nIf = tops.filter(t => t.ifId).length;
+  const unlinked = (m.interfaces.HW || []).filter(i => !comps.some(c => c.id === i.from) || !comps.some(c => c.id === i.to)).length;
+  return hdWiredSvg(pseudo, m, { top: true, title: `HW 통합 회로도 (전체 보드 · 최상위 계층 시트) — 블록 ${parts.length}개`,
+    notes: [`최상위 계층 시트 — 상자 = HW 블록(내부는 블록별 연결선 회로도), 상자의 핀 = 블록 포트, 선 = 블록 간 연결. 연결 근거: HW 인터페이스 ${nIf}건(HWIF) + 여러 블록에 같은 이름으로 있는 넷. 전원·GND는 기호(같은 이름끼리 연결).`,
+      `NC × 포트 = 어느 블록과도 이어지지 않은 블록 밖 신호(커넥터·외부 장치로 나가는 것 — 커넥터 블록에서 확인)${unlinked ? ` · 회로 설계가 없는 블록과의 인터페이스 ${unlinked}건은 표시되지 않음` : ""}. 전원 넷 이름이 블록마다 다르면(예 3V3 · AFE_3V3) 따로 표시되니 이름을 맞추세요.`] });
 }
 export function hdSvg(kind, comp, model) {
   const m = normalizeModel(model);
@@ -3144,6 +3190,7 @@ export function hdSvg(kind, comp, model) {
     if (legendRows.length) { b += `<text x="30" y="${ly}" font-weight="700">인터페이스 범례</text>`; ly += 8; legendRows.forEach(([id, ft, d]) => { ly += 14; b += `<text x="30" y="${ly}" font-size="9.5" fill="#333"><tspan font-family="monospace">${X(id)}</tspan>  ${X(ft)} — ${X(d.slice(0, 100))}</text>`; }); ly += 16; }
     return svgWrap(W, legendRows.length ? ly : H, b, `HW 아키텍처 블록도 (04-52)${comp ? ` — ${comp.name} 강조` : ""}`);
   }
+  if (kind === "top") return hwTopSvg(m);
   if (kind === "wired") return hdWiredSvg(comp, m);
   const hd = comp?.hd; if (!hd) return "";
   // 회로도: 부품 심볼(사각 + 핀)을 격자 배치, 각 핀 끝에 넷 라벨. 전원/GND 넷은 심볼 표기.
