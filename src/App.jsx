@@ -12043,6 +12043,9 @@ function buildFileTree(files) {
     }
     node.files.push({ ...f, _displayName: fileName });
   }
+  // 폴더 안 파일은 이름(산출물 코드) 순 — 이동·교체한 파일이 올린 순서대로 뒤섞이지 않게
+  const sortRec = n => { n.files.sort((a, b) => String(a._displayName).localeCompare(String(b._displayName), "ko", { numeric: true })); Object.values(n.folders).forEach(sortRec); };
+  sortRec(root);
   return root;
 }
 
