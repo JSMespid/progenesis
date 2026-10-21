@@ -9882,13 +9882,20 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     window.addEventListener("beforeunload", h);
     return () => window.removeEventListener("beforeunload", h);
   }, [dirty]);
-  // 닫기(✕·닫기 버튼·바깥 클릭) — 저장 안 된 변경이 있으면 확인
+  // 닫기(✕·닫기 버튼) — 바깥 클릭으로는 닫지 않는다(작업 중 실수로 닫혀 내용이 사라지는 것 방지)
   function requestClose() {
-    if (dirty && !window.confirm("저장하지 않은 변경 내용이 있습니다.\n저장하지 않고 닫을까요?\n\n(취소를 누르면 창으로 돌아갑니다)")) return;
+    // 진행 중인 작업·저장 안 된 변경·아직 처리하지 않은 수정안(저장 대상이 아닌 임시 결과)이 있으면 확인
+    const warn = [];
+    if (busy || brBusy || rvRunning) warn.push("· 지금 실행 중인 작업이 있습니다 (닫으면 중단되고 결과가 반영되지 않습니다)");
+    if (dirty) warn.push("· 저장하지 않은 변경 내용이 있습니다");
+    const pendFix = fixQ ? fixQ.cards.filter(c => c.status === "pending").length : 0;
+    if (pendFix) warn.push(`· 승인·반려하지 않은 수정안 ${pendFix}건이 있습니다 (수정안 목록은 창을 닫으면 사라집니다)`);
+    if (warn.length && !window.confirm(`${warn.join("\n")}\n\n그래도 닫을까요?\n(취소를 누르면 창으로 돌아갑니다${dirty ? " — [✓ 저장]으로 저장한 뒤 닫으세요" : ""})`)) return;
     onClose();
   }
   // 바깥(어두운 배경) 클릭으로 닫기: 누른 곳과 뗀 곳이 모두 배경일 때만 — 입력란에서 드래그하다 바깥에서 놓아 닫히는 것 방지
   const downOnBackdrop = useRef(false);
+  const [bdHint, setBdHint] = useState(false); const bdTimer = useRef(null);   // 바깥을 눌렀을 때 잠깐 띄우는 안내
   // ── ① 요구 도출·명세 탭에서 확정: 변경 전 기준선 등록 → 새 요구로 동기화 → 즉시 저장 ──
   function confirmReqs(meta) {
     const base = AE.baselineLinks(model);
@@ -10085,8 +10092,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   return (
     <AeRunCtx.Provider value={runCtx}>
     <div onMouseDown={e => { downOnBackdrop.current = e.target === e.currentTarget; }}
-      onClick={e => { if (e.target === e.currentTarget && downOnBackdrop.current) requestClose(); downOnBackdrop.current = false; }}
+      onClick={e => { if (e.target === e.currentTarget && downOnBackdrop.current) { setBdHint(true); clearTimeout(bdTimer.current); bdTimer.current = setTimeout(() => setBdHint(false), 3500); } downOnBackdrop.current = false; }}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      {bdHint && <div style={{ position: "fixed", top: 18, left: "50%", transform: "translateX(-50%)", zIndex: 260, background: "#1F2937", color: "#fff", border: `1px solid ${T.accent}`, borderRadius: 10, padding: "9px 16px", fontSize: 12.5, boxShadow: "0 6px 24px rgba(0,0,0,0.4)", pointerEvents: "none" }}>창 바깥을 눌러도 닫히지 않습니다 — 닫으려면 오른쪽 위 <b>✕</b> 또는 아래 <b>[닫기]</b>를 누르세요.{dirty ? " 저장하지 않은 변경이 있습니다 — 먼저 [✓ 저장]을 누르세요." : ""}</div>}
       <div onClick={e => e.stopPropagation()} onClickCapture={e => { clickSec.current = e.target?.closest ? e.target.closest("[data-aesec]") : null; }} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, width: "100%", maxWidth: 1080, maxHeight: "92vh", display: "flex", flexDirection: "column", position: "relative" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
           <div>
