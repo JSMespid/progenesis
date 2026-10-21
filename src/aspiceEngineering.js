@@ -868,6 +868,9 @@ export function checkConsistency(model) {
     const badIf = (m.interfaces.SYS || []).filter(i => !ci.has(i.from) || !ci.has(i.to)).map(i => i.id);
     if (badIf.length) add("error", "SYS_IF", `존재하지 않는 요소를 참조하는 인터페이스 ${badIf.length}건`, badIf);
     if (sysComp.length > 1 && !(m.interfaces.SYS || []).length) add("warn", "SYS_IF", "시스템 요소 간 인터페이스가 정의되지 않았습니다.");
+    // 버스·직렬 통신 인터페이스는 주기(또는 이벤트 구분)가 있어야 통합 시험(주기·타임아웃 TC)의 근거가 된다
+    const noPer = (m.interfaces.SYS || []).filter(i => /CAN|LIN|SPI|UART|I2C|이더넷|ETH|FlexRay/i.test(`${i.kind || ""} ${i.signals || ""}`) && !String(i.periodMs || "").trim() && !/이벤트|event|on.?change|요청 시/i.test(`${i.signals || ""} ${i.desc || ""}`)).map(i => i.id);
+    if (noPer.length) add("info", "SYS_IF", `주기(ms)가 없는 통신 인터페이스 ${noPer.length}건 — 주기 통신이면 주기를, 이벤트 통신이면 신호 설명에 '이벤트'를 적으세요 (통합 시험의 주기·타임아웃 근거)`, noPer);
     if (!(m.modes || []).length) add("warn", "SYS_DYN", "운영 모드·상태(동적 측면)가 정의되지 않았습니다.");
   }
 

@@ -10004,6 +10004,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     const shown = new Set(applyFocus(rs).map(r => r.id));
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {rs.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "74px 1fr 104px 96px 30px 40px", gap: 6, fontSize: 10, color: T.muted, padding: "0 9px" }}><span>ID</span><span>요구 (아래 '할당 →'에서 담당 {AE.LEVELS[lv].compLabel} 선택)</span><span title="검증 방법 (4.0 08-60)">검증 방법</span><span>상태</span><span title="요구 품질 점검 (모호어·검증 기준·정량 기준)">품질</span><span /></div>}
         {rs.map((r, i) => shown.has(r.id) && (
           <div key={r.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", background: T.surface }}>
             <div style={{ display: "grid", gridTemplateColumns: "74px 1fr 104px 96px 30px 40px", gap: 6, alignItems: "center" }}>
@@ -10044,6 +10045,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   };
   const CompList = ({ lv }) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {model.comps[lv].length > 0 && <div style={{ display: "grid", gridTemplateColumns: "64px 150px 100px 1fr 1fr 22px", gap: 5, fontSize: 10, color: T.muted }}><span>ID</span><span>이름</span><span>구분</span><span>책임(정적 측면)</span><span>거동(동적 측면)</span><span /></div>}
       {model.comps[lv].map((c, i) => (
         <div key={c.id} style={{ display: "grid", gridTemplateColumns: "64px 150px 100px 1fr 1fr 22px", gap: 5, alignItems: "center" }}>
           <span style={{ fontFamily: "monospace", fontSize: 10, color: T.accent }}>{c.id}</span>
@@ -10059,6 +10061,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   );
   const IfList = ({ lv }) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {model.interfaces[lv].length > 0 && <div style={{ display: "grid", gridTemplateColumns: "60px 130px 130px 90px 1fr 60px 22px", gap: 5, fontSize: 10, color: T.muted }}><span>ID</span><span>보내는 쪽(From)</span><span>받는 쪽(To)</span><span>유형</span><span>신호·데이터</span><span title="주기 통신이면 주기(ms) — 통합 시험의 주기·타임아웃 TC 근거">주기(ms)</span><span /></div>}
       {model.interfaces[lv].map((x, i) => (
         <div key={x.id} style={{ display: "grid", gridTemplateColumns: "60px 130px 130px 90px 1fr 60px 22px", gap: 5, alignItems: "center" }}>
           <span style={{ fontFamily: "monospace", fontSize: 10, color: T.accent }}>{x.id}</span>
@@ -10332,14 +10335,14 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           </>)}
 
           {tab === "SYS" && (<>
-            <AeSec title={`시스템 요구사항 ${model.reqs.SYS.length}건 — 검증 방법·기준·상태·할당 (${AE.procLabel("SYS.2", V)})`}>
-              {ReqList({ lv: "SYS" })}
-            </AeSec>
-            <AeSec title={`시스템 요소 ${model.comps.SYS.length}개 (${AE.procLabel("SYS.3", V)} · 정적 측면)`} right={<Btn onClick={sysArch} disabled={busy || !model.reqs.SYS.length} style={{ fontSize: 11, padding: "4px 12px" }}>{aiLabel} 아키텍처 초안·할당</Btn>}>
+            <AeSec title={`시스템 요소 ${model.comps.SYS.length}개 (${AE.procLabel("SYS.3", V)} · 정적 측면)`} right={<Btn variant={model.comps.SYS.length ? "outline" : undefined} onClick={() => { if (model.comps.SYS.length && !window.confirm(`시스템 구조를 ${model.useAI ? "AI로 " : ""}다시 만듭니다.\n· AI·규칙이 만든 요소 ${model.comps.SYS.filter(c => c.origin !== "manual" && c.origin !== "dbc").length}개·인터페이스·운영 모드가 새 결과로 바뀌고, 요구 할당 ${Object.keys(model.alloc.SYS || {}).length}건이 다시 계산됩니다(직접 추가·DBC 요소는 보존).\n· SW·HW 요구와 컴포넌트는 지금 요소 ID에 연결돼 있어 연결이 어긋날 수 있습니다 — '빠진 곳 점검'에서 확인하세요.\n\n계속할까요?`)) return; sysArch(); }} disabled={busy || !model.reqs.SYS.length} title="시스템 요구에서 시스템 요소·인터페이스·운영 모드를 설계하고 요구를 요소에 할당합니다" style={{ fontSize: 11, padding: "4px 12px" }}>{model.comps.SYS.length ? `↻ 시스템 구조 다시 만들기${model.useAI ? " (AI)" : ""}` : `${aiLabel} 시스템 구조·요구 할당 만들기`}</Btn>}>
               <div className="ae-hint" style={{ fontSize: 10, color: T.muted, marginBottom: 6 }}>구분: HW·SW·HW+SW·ME(기구)·외부(시스템 경계 밖). SW/HW 하위 요구는 'SW'·'HW'가 포함된 요소에 할당된 시스템 요구에서 파생됩니다. DBC로 추가된 요소·인터페이스는 재생성 시 보존됩니다.</div>
               {CompList({ lv: "SYS" })}
             </AeSec>
             <AeSec title={`시스템 인터페이스 ${model.interfaces.SYS.length}건 (3.1 SYS.3.BP3 / 4.0 04-06 Interface Definitions)`}>{IfList({ lv: "SYS" })}</AeSec>
+            <AeSec title={`요구 할당 — 시스템 요구 ${model.reqs.SYS.length}건을 요소에 할당 (${AE.procLabel("SYS.3", V)} BP · 검증 방법·상태는 ${AE.procLabel("SYS.2", V)} 속성)`}>
+              {ReqList({ lv: "SYS" })}
+            </AeSec>
             <AeSec title="운영 모드·상태 (동적 측면 — 3.1 SYS.3.BP4 / 4.0 SYS.3.BP2)">
               {model.modes.map((x, i) => (
                 <div key={i} style={{ display: "grid", gridTemplateColumns: "140px 1fr 1fr 22px", gap: 5, marginBottom: 4 }}>
