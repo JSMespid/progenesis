@@ -8960,16 +8960,28 @@ const AE_SEV = { error: { c: "#FF5B5B", l: "오류" }, warn: { c: "#F5A623", l: 
 // 모달 내부에서 정의하면 렌더마다 컴포넌트가 새로 만들어져 입력 포커스가 사라지므로 최상위에 둔다
 // 진행률·오류를 '누른 버튼이 있는 섹션' 바로 아래에 표시하기 위한 컨텍스트 (V-모델 모달)
 const AeRunCtx = React.createContext(null);
+// 섹션 접기 상태 — 제목의 숫자(건수)는 바뀌므로 숫자를 지운 제목을 키로 쓴다. 모달을 닫기 전까지(같은 세션) 유지
+const AE_SEC_FOLD = new Map();
+const aeSecKey = t => String(typeof t === "string" ? t : "").replace(/\d+/g, "#").slice(0, 40);
+function AeFoldBtn({ open, onClick, title }) {
+  return <button type="button" onClick={onClick} title={title || (open ? "접기" : "펼치기")} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 11, padding: "0 4px", lineHeight: 1, flexShrink: 0 }}>{open ? "▾" : "▸"}</button>;
+}
 function AeSec({ title, right, children }) {
   const uid = React.useId();
   const rc = React.useContext(AeRunCtx);
   const here = !!rc && rc.anchor === uid;
+  const fk = aeSecKey(title);
+  const [open, setOpen] = useState(() => !(fk && AE_SEC_FOLD.get(fk) === false));
+  const toggle = () => setOpen(o => { const n = !o; if (fk) AE_SEC_FOLD.set(fk, n); return n; });
   return (
     <div data-aesec={uid} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}><div style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{title}</div>{right}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: open ? 8 : 0 }}>
+        <AeFoldBtn open={open} onClick={toggle} />
+        <div onClick={toggle} title={open ? "눌러서 접기" : "눌러서 펼치기"} style={{ fontSize: 12, fontWeight: 700, flex: 1, cursor: "pointer", userSelect: "none" }}>{title}</div>{right}
+      </div>
       {here && (rc.busy || rc.prog) && <GenProgressBar progress={rc.prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
       {here && rc.runErr && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 8 }}>{rc.runErr}</div>}
-      {children}
+      {open && children}
     </div>
   );
 }
@@ -9065,6 +9077,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const [rvProv, setRvProv] = useState("");          // 이번 검토에 쓸 검토 AI (Gemini·ChatGPT 등) — 기본은 설정의 기본 검토 AI
   const [rvBy, setRvBy] = useState("all");
   const [rvGroup, setRvGroup] = useState(true);       // ③ 판정 목록: 대상(요구·항목)별로 묶어 보기 — 한 대상의 의견을 한 번에 판정·수정
+  const [cardOpen, setCardOpen] = useState({});      // 승인 큐·판정 카드 펼침 — 키가 없으면 기본값(처리 대기는 펼침, 처리 끝난 것은 접힘)
+  const isCardOpen = (k, dflt) => (k in cardOpen ? cardOpen[k] : dflt);
+  const setCardsOpen = (keys, v) => setCardOpen(o => { const n = { ...o }; keys.forEach(k => { n[k] = v; }); return n; });
   const [rvSort, setRvSort] = useState("sev");       // 정렬: sev(중대 먼저) | id
   const [rvPick, setRvPick] = useState([]);          // 선택 검토할 산출물(검토 범위 key)
   const [rvRunning, setRvRunning] = useState(false);  // 검토 AI 호출 진행 중 (중지 버튼 표시)
@@ -10526,6 +10541,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
 
               <AeSec title={`②-b 수정안 승인 큐 — ${S.label}${fixQ && fixQ.key === rvLevel ? ` · 대기 ${fixQ.cards.filter(c => c.status === "pending").length} · 승인 ${fixQ.cards.filter(c => String(c.status).startsWith("approved")).length} · 반려 ${fixQ.cards.filter(c => c.status === "rejected").length}` : ""}`}
                 right={<div style={{ display: "flex", gap: 6 }}>
+                  {fixQ && fixQ.key === rvLevel && fixQ.cards.length > 1 && <>
+                    <button onClick={() => setCardsOpen(fixQ.cards.map(c => `fq|${c.id}`), true)} style={{ ...small, color: T.muted }}>▾ 모두 펼치기</button>
+                    <button onClick={() => setCardsOpen(fixQ.cards.map(c => `fq|${c.id}`), false)} style={{ ...small, color: T.muted }}>▸ 모두 접기</button>
+                  </>}
                   {fixQ && fixQ.key === rvLevel && fixQ.cards.some(c => c.status === "pending" && !c.err) && <button disabled={busy} onClick={approveAll} style={{ ...small, color: T.green }}>남은 {fixQ.cards.filter(c => c.status === "pending" && !c.err).length}건 모두 승인</button>}
                   <Btn disabled={busy || !AE.fixQueueTargets(model, rvLevel).length} onClick={genFixQueue} title="미판정 또는 '맞음인데 미수정' 의견이 달린 항목마다 수정안을 만듭니다 — 규칙으로 되는 것은 규칙이, 문장은 생성 AI(Claude)가. 승인 전에는 아무것도 바뀌지 않습니다" style={{ fontSize: 11, padding: "4px 12px" }}>✦ 수정안 생성 ({AE.fixQueueTargets(model, rvLevel).length}건)</Btn>
                 </div>}>
@@ -10536,14 +10555,19 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 {fixQ && fixQ.key === rvLevel && fixQ.cards.map(c => {
                   const pend = c.status === "pending";
                   const col = pend ? T.border : String(c.status).startsWith("approved") ? T.green + "66" : T.muted + "66";
+                  const ck = `fq|${c.id}`;
+                  const cOpen = rvEdit?.fkey === ck || isCardOpen(ck, pend);
+                  const cToggle = () => setCardsOpen([ck], !cOpen);
                   return (
                     <div key={c.id} style={{ border: `1px solid ${col}`, borderRadius: 9, padding: "8px 10px", marginBottom: 8, background: T.bg, opacity: pend ? 1 : 0.75 }}>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 11.5 }}>
-                        <span style={{ fontFamily: "monospace", color: T.accent }}>{c.id}</span><b style={{ flex: 1 }}>{c.title}</b>
+                        <AeFoldBtn open={cOpen} onClick={cToggle} />
+                        <span onClick={cToggle} style={{ fontFamily: "monospace", color: T.accent, cursor: "pointer" }}>{c.id}</span><b onClick={cToggle} title={cOpen ? "눌러서 접기" : "눌러서 펼치기"} style={{ flex: 1, cursor: "pointer", userSelect: "none" }}>{c.title}</b>
                         <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, background: c.kind === "rule" ? T.green + "22" : T.accent + "22", color: c.kind === "rule" ? T.green : T.accent }}>{c.kind === "rule" ? "규칙 초안" : "AI 초안"}</span>
                         <span style={{ fontSize: 10, color: T.muted }}>의견 {c.opinions.length}건: {[...new Set(c.opinions.map(o => critLabel[o.criterion] || o.criterion))].join(" · ")}</span>
                         {!pend && <span style={{ fontSize: 10.5, color: String(c.status).startsWith("approved") ? T.green : T.muted }}>{String(c.status).startsWith("approved") ? "✓ 승인됨" : "반려됨"}</span>}
                       </div>
+                      {cOpen && <>
                       {c.err && <div style={{ fontSize: 10.5, color: T.amber, marginTop: 4 }}>⚠ {c.err}</div>}
                       {Object.keys(c.fields).length > 0 && (
                         <div style={{ marginTop: 6, display: "grid", gridTemplateColumns: "110px 1fr 1fr", gap: "4px 8px", fontSize: 10.5 }}>
@@ -10564,6 +10588,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                           {Object.keys(c.fields).length > 0 && <button disabled={busy} onClick={() => approveCard(c)} style={{ ...small, background: T.green, color: "#fff", borderColor: T.green }}>✓ 승인</button>}
                         </div>)}
                       {rvEdit?.fkey === `fq|${c.id}` && <div style={{ marginTop: 8 }}>{editorBox(c.opinions.filter(o => o.suggestion).map(o => `[${critLabel[o.criterion] || o.criterion}] ${o.suggestion}`).join(" / "))}</div>}
+                      </>}
                     </div>);
                 })}
               </AeSec>
@@ -10606,10 +10631,18 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     {rvGroup && (() => {
                       const groups = [];
                       sorted.forEach(f => { let g = groups.find(x => x.id === f.reqId); if (!g) { g = { id: f.reqId, title: f.reqTitle, fs: [] }; groups.push(g); } g.fs.push(f); });
+                      const gKeys = groups.map(g => `jg|${rvLevel}|${g.id}`);
+                      const foldBar = groups.length > 1 && <div key="__fold" style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginBottom: 6 }}>
+                        <button onClick={() => setCardsOpen(gKeys, true)} style={{ ...small, color: T.muted }}>▾ 대상 모두 펼치기</button>
+                        <button onClick={() => setCardsOpen(gKeys, false)} style={{ ...small, color: T.muted }}>▸ 대상 모두 접기</button>
+                      </div>;
                       const agr = AE.reviewAgreement(v.list.filter(f => f.level === rvLevel && !f.removed));
-                      return groups.map(g => {
+                      return [foldBar, ...groups.map(g => {
                         const refs = AE.reviewRefs(model, rvLevel, g.id);
                         const open_ = g.fs.filter(f => !f.judge && !f.removed);
+                        const gk = `jg|${rvLevel}|${g.id}`;
+                        const gOpen = rvEdit?.fkey === `grp|${g.id}` || isCardOpen(gk, open_.length > 0);
+                        const gToggle = () => setCardsOpen([gk], !gOpen);
                         const sp = AE.reviewEditSpec(model, rvLevel, g.id);
                         const edited = g.fs.some(f => f.edits.length);
                         const vals = sp?.values || {};
@@ -10617,11 +10650,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                           <div key={g.id} style={{ border: `1px solid ${open_.length ? T.border : T.green + "55"}`, borderRadius: 9, padding: "8px 10px", marginBottom: 8, background: T.bg }}>
                             <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
                               <div style={{ flex: 1, minWidth: 260 }}>
-                                <div style={{ fontSize: 11.5 }}><span style={{ fontFamily: "monospace", color: T.accent, marginRight: 6 }}>{g.id}</span><b>{g.title}</b> <span style={{ color: T.muted, fontSize: 10 }}>· 의견 {g.fs.length}건 · 미판정 {open_.length}{edited ? " · ✎ 수정함" : ""}</span></div>
-                                {sp && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 3, lineHeight: 1.5 }}>
+                                <div style={{ fontSize: 11.5, display: "flex", alignItems: "baseline", gap: 2 }}><AeFoldBtn open={gOpen} onClick={gToggle} /><span onClick={gToggle} title={gOpen ? "눌러서 접기" : "눌러서 펼치기"} style={{ cursor: "pointer", userSelect: "none" }}><span style={{ fontFamily: "monospace", color: T.accent, marginRight: 6 }}>{g.id}</span><b>{g.title}</b> <span style={{ color: T.muted, fontSize: 10 }}>· 의견 {g.fs.length}건 · 미판정 {open_.length}{edited ? " · ✎ 수정함" : ""}</span></span></div>
+                                {gOpen && sp && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 3, lineHeight: 1.5 }}>
                                   {sp.fields.filter(fd => vals[fd.k]).slice(0, 4).map(fd => <div key={fd.k}><span style={{ color: T.muted }}>{fd.label}:</span> <span style={{ color: T.text }}>{String(vals[fd.k]).slice(0, 220)}{String(vals[fd.k]).length > 220 ? "…" : ""}</span></div>)}
                                 </div>}
-                                {refs.length > 0 && <details style={{ fontSize: 10.5, marginTop: 4 }}>
+                                {gOpen && refs.length > 0 && <details style={{ fontSize: 10.5, marginTop: 4 }}>
                                   <summary style={{ cursor: "pointer", color: T.accent }}>관련 상위·참조 항목 {refs.length}건 보기 (일관성·완전성 지적은 이것과 비교해 판정)</summary>
                                   {refs.slice(0, 6).map(r => <div key={r.id} style={{ marginTop: 3, paddingLeft: 8, borderLeft: `2px solid ${T.border}`, color: T.text }}><span style={{ fontFamily: "monospace", color: T.accent }}>{r.id}</span> <span style={{ color: T.muted }}>{r.구분}</span> {r.제목 ? <b>{r.제목} </b> : null}{r.내용 || r.책임 || r.설계 || r["신호·데이터"] || ""}{r.검증기준 ? <div style={{ color: T.muted }}>검증 기준: {r.검증기준}</div> : null}</div>)}
                                 </details>}
@@ -10636,7 +10669,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                                 {sp && <button disabled={busy} onClick={() => openEdit(`grp|${g.id}`, rvLevel, g.id)} style={{ ...small, padding: "3px 9px", background: rvEdit?.fkey === `grp|${g.id}` ? T.accent : "none", color: rvEdit?.fkey === `grp|${g.id}` ? "#fff" : T.accent }}>✎ 대상 수정 (의견 전부 반영)</button>}
                               </div>
                             </div>
-                            <div style={{ marginTop: 6, borderTop: `1px solid ${T.border}` }}>
+                            {gOpen && <div style={{ marginTop: 6, borderTop: `1px solid ${T.border}` }}>
                               {g.fs.map(f => (
                                 <div key={f.key} style={{ display: "grid", gridTemplateColumns: "86px 1fr 230px", gap: 8, padding: "5px 0", borderBottom: `1px solid ${T.border}22`, fontSize: 10.5, opacity: f.judge?.state === "invalid" ? 0.6 : 1 }}>
                                   <div><div>{AE.isVdaCode(f.criterion) && <span style={{ fontSize: 9, color: "#fff", background: T.accent, borderRadius: 4, padding: "0 4px", marginRight: 4 }}>ASPICE BP</span>}{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}{(agr[`${f.level}|${f.reqId}|${f.criterion}`] || 0) >= 2 && <div title="서로 다른 검토 AI가 같은 기준으로 같은 대상을 지적했습니다 — 독립된 두 검토가 일치" style={{ color: T.green, fontSize: 9.5, fontWeight: 700 }}>◎ 검토 AI {agr[`${f.level}|${f.reqId}|${f.criterion}`]}곳 일치</div>}</div>
@@ -10654,10 +10687,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                                     {f.judge?.note && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 2 }}>— {f.judge.note}</div>}
                                   </div>
                                 </div>))}
-                            </div>
+                            </div>}
                             {rvEdit?.fkey === `grp|${g.id}` && <div style={{ marginTop: 8 }}>{editorBox(g.fs.filter(f => f.suggestion && f.judge?.state !== "invalid").map(f => `[${critLabel[f.criterion] || f.criterion}] ${f.suggestion}`).join(" / "))}</div>}
                           </div>);
-                      });
+                      })];
                     })()}
                     {!rvGroup && null}
                   </>);
