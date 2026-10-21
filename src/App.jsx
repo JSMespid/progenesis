@@ -7587,6 +7587,32 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
   (model.units.SW || []).forEach(u => { tgtName[u.id] = u.name; });
   ["SYS", "SW", "HW"].forEach(lv => { model.reqs[lv].forEach(r => { tgtName[r.id] = r.title; }); model.comps[lv].forEach(c => { tgtName[c.id] = c.name; }); model.interfaces[lv].forEach(i => { tgtName[i.id] = `${i.kind || "IF"} ${i.signals || ""}`.trim(); }); });
   const std = xlsxStdParts({ title, docCode: projectDocNo(meta, doc?.code || D.code), phase: tl.proc, meta, infoRows: [["적용 기준", `Automotive SPICE ${AE.ASPICE_VERSIONS.find(v => v.id === model.version)?.label || model.version}`], ["정보항목(WP)", AE.wpLabel(kind, model.version)]] });
+  const utL = D.test === "SWE4" ? AE.utLatest(ctx?.requirements?.aspice) : null;
+  if (D.result && utL) {
+    // SWE.4 — 호스트 실행(SIL) 결과 반영
+    const R = utL.run;
+    const rows = [...head, ["No", `${term} ID`, "검증 대상", "제목", "결과(Pass/Fail/Not executed)", "수행일", "수행자", "형상(SW/HW 버전)", "결함·문제 ID", "비고"]];
+    const resOf = t => { const ru = (t.targets || []).map(x => ({ id: x, r: R.units[x], st: utL.stale[x] })).filter(x => x.r); if (!ru.length) return { res: "Not executed", note: "호스트 실행 결과 없음" }; if (ru.some(x => x.st)) return { res: "Not executed", note: "실행 후 코드가 바뀜 — 재실행 필요" }; const r = ru[0].r; return { res: ru.some(x => x.r.result === "Fail") ? "Fail" : ru.every(x => x.r.result === "Pass") ? "Pass" : "Not executed", note: `${r.build === "fail" ? "빌드 실패 · " : ""}케이스 ${r.pass}/${r.cases} 통과${r.coverage ? ` · 문장 커버리지 ${r.coverage.stmt}%${r.coverage.branchN ? ` · 분기 ${r.coverage.branch}%` : ""}` : ""}` }; };
+    const runDate = String(R.ranAt || R.at).slice(0, 10);
+    const res = tests.map(t => ({ t, ...resOf(t) }));
+    res.forEach((x, i) => rows.push([String(i + 1), x.t.id, (x.t.targets || []).join(", "), x.t.title || "", x.res, x.res === "Not executed" ? "" : runDate, x.res === "Not executed" ? "" : "SPIDer 호스트 실행(자동)", x.res === "Not executed" ? "" : `호스트 SIL · ${R.cc || "gcc"} · 코드 ${R.units[(x.t.targets || [])[0]]?.code || "-"}`, "", x.note]));
+    const nOf = k => res.filter(x => x.res === k).length;
+    const cs = R.cases;
+    const uName = Object.fromEntries((model.units.SW || []).map(u => [u.id, u]));
+    const caseRows = [["유닛 시험 케이스 실행 결과 (호스트 실행 · SIL)"], [], ["No", "케이스 ID", "유닛", "출처", "근거 요구", "제목", "결과", "확인 수", "실패 내용"]];
+    cs.forEach((c, i) => caseRows.push([String(i + 1), c.case, c.unit, c.origin === "ai" ? "AI 초안(요구 근거·규칙 검증)" : "규칙", c.reqs || "", (uName[c.unit]?.ut?.cases || []).find(q => q.id === c.case)?.title || "", c.result === "pass" ? "Pass" : "Fail", String(c.checks ?? ""), c.detail || ""]));
+    const sum = [[`${tl.label} 결과 요약`], [], ["구분", "건수"], ["전체", String(tests.length)], ["Pass", String(nOf("Pass"))], ["Fail", String(nOf("Fail"))], ["Not executed", String(nOf("Not executed"))],
+      [], ["실행 정보", `${String(R.ranAt || R.at).replace("T", " ").slice(0, 19)} · ${R.cc || "-"} · ${R.os || "-"}${R.coverage ? " · gcov 커버리지 측정" : ""} · 케이스 ${cs.length}건 중 통과 ${cs.filter(c => c.result === "pass").length}`],
+      ["검증 환경", "호스트 실행(SIL) — RTE 스텁·시험 하네스(SPIDer UT). 로직 검증이며 타깃 MCU의 타이밍·메모리·인터럽트 동작은 이 결과로 보증하지 않음(타깃·HILS 검증 별도)."],
+      ["정적 검증", `MISRA 준수 최종 판정은 ${AE.ddSettings(model).tools.join(" · ")} 결과로 함 — 이 결과서는 동적 유닛 시험 결과`],
+      [], ["※ 4.0 15-52: 통과·미통과·미수행, 수행 정보(일자·수행자), 결과 요약을 포함해야 한다. 3.1 13-50과 동일 목적."]];
+    return makeXlsxBook([
+      std.cover,
+      { name: "검증 결과", rows, widths: [5, 13, 18, 36, 20, 11, 18, 30, 12, 34], headerRows: [3], titleRows: [0], freezeRow: 4 },
+      { name: "케이스별 결과", rows: caseRows, widths: [5, 18, 11, 22, 18, 36, 8, 8, 44], headerRows: [2], titleRows: [0], freezeRow: 3 },
+      { name: "결과 요약", rows: sum, widths: [22, 80], headerRows: [2], titleRows: [0] },
+    ], std.opts);
+  }
   if (D.result) {
     const rows = [...head, ["No", `${term} ID`, "검증 대상", "제목", "결과(Pass/Fail/Not executed)", "수행일", "수행자", "형상(SW/HW 버전)", "결함·문제 ID", "비고"]];
     tests.forEach((t, i) => rows.push([String(i + 1), t.id, (t.targets || []).join(", "), t.title || "", "Not executed", "", "", "", "", ""]));
@@ -7614,9 +7640,22 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
   ];
   const sel = [[`${term} 선택 세트`], [], ["No", `${term} ID`, "제목", "선택", "선택 근거", "회귀 대상"]];
   tests.forEach((t, i) => sel.push([String(i + 1), t.id, t.title || "", "선택", t.origin === "rule" ? `요구 조건(${t.technique || "요구 기반"})에서 결정적으로 도출` : "요구 정상 시나리오", t.regression ? "Y" : ""]));
+  // SWE.4 — 호스트 실행 케이스(입력→기대)를 명세에 함께 수록 (요구·설계 추적 포함)
+  const utSheet = (() => {
+    if (D.test !== "SWE4") return null;
+    const us = (model.units.SW || []).filter(u => u.dd?.classes?.length);
+    if (!us.length) return null;
+    const r = [["유닛 시험 실행 케이스 (호스트 실행 · SIL)"], [], ["No", "케이스 ID", "유닛", "출처", "근거 요구", "근거 인용", "제목", "사전 상태", "입력", "실행", "기대 결과"]];
+    let k = 0;
+    us.forEach(u => [...AE.ruleUnitTests(u), ...(u.ut?.cases || []).filter(c => c.origin === "ai")].forEach(c => r.push([String(++k), c.id, u.id, c.origin === "ai" ? "AI 초안(규칙 검증)" : "규칙", (c.reqs || []).join(", "), c.basis || "", c.title, c.state || "(초기화 직후)",
+      Object.entries(c.inputs || {}).map(([a, b]) => `${a}=${b}`).join(", ") || "기본값(0)", c.runnable ? `${c.runnable} × ${c.times}` : "초기화만",
+      (c.expect || []).map(e => e.kind === "state" ? `상태=${e.value}` : e.kind === "stateValid" ? "상태가 정의된 값 범위 안" : e.kind === "written" ? `${e.ref} 출력 갱신` : `${e.ref} ${e.op} ${e.value}`).join("; ")])));
+    return { name: "실행 케이스(호스트)", rows: r, widths: [5, 18, 11, 16, 16, 22, 34, 14, 30, 26, 40], headerRows: [2], titleRows: [0], freezeRow: 3 };
+  })();
   return makeXlsxBook([
     std.cover,
     { name: "검증 명세", rows: spec, widths: [5, 13, 14, 20, 30, 18, 24, 40, 32, 24, 10, 8, 8], headerRows: [3], titleRows: [0], freezeRow: 4 },
+    ...(utSheet ? [utSheet] : []),
     { name: "검증 전략", rows: strategy, widths: [16, 70, 30], headerRows: [2], titleRows: [0] },
     { name: model.version === "3.1" ? "테스트 선택" : "선택 세트(08-58)", rows: sel, widths: [5, 13, 36, 8, 40, 9], headerRows: [2], titleRows: [0], freezeRow: 3 },
   ], std.opts);
@@ -7949,6 +7988,11 @@ function swe3ModelFiles(meta, ctx, folder = "SW4101_상세설계_모델") {
   files.push({ path: `${folder}/README.txt`, content: [`SWE.3 상세설계 모델 — ${meta.name || ""}`, ``, `xmi/      : UML 2.x XMI 2.1 — Sparx Systems Enterprise Architect 17.x에서 Publish › Model Exchange › Import › XMI File('Import Diagrams' 체크)로 가져오기`, `diagrams/ : 유닛별 다이어그램 7종(SVG) — 컴포넌트·클래스·시퀀스·상태 머신·액티비티·SysML BDD·IBD`, `src_${S.target}/ : ${AE.DD_TARGETS[S.target].label} 소스 (AUTOSAR ${S.release}) — ${S.target === "CP" ? "Rte_<Unit>.h는 RTE 생성기 출력으로 교체" : "ara::com proxy/skeleton은 생성기 출력 사용"}`, `MISRA_적용_체크리스트.xlsx : 규칙 번호별 조치·보장 수준 — 최종 준수 판정은 ${S.tools.join(" · ")} 결과로`, ``, `모든 요소·파일에 근거 SW 요구 ID가 기록되어 있습니다. 생성 결과는 QA 교차검토 후 확정하세요.`].join("\n") });
   return files;
 }
+// SWE.4 호스트 유닛 시험 실행 패키지 (ZIP 폴더용) — CP(C) 대상, 상세설계가 있을 때만
+function swe4HostFiles(meta, ctx, folder = "SW4106_유닛시험_호스트실행") {
+  const model = AE.normalizeModel(ctx?.requirements?.aspice);
+  try { const pkg = AE.buildHostTestPackage(model, meta, AE.ddSettings(model), folder); return pkg.units.length ? pkg.files : []; } catch (_) { return []; }
+}
 function hw2ModelFiles(meta, ctx, folder = "HW4101_HW설계_모델") {
   const model = AE.normalizeModel(ctx?.requirements?.aspice);
   const comps = (model.comps.HW || []).filter(c => c.hd?.parts?.length);
@@ -8026,6 +8070,7 @@ async function downloadAspicePackage(meta, ctx) {
   }
   try { swe3ModelFiles(meta, ctx, `${String(order.length + 1).padStart(2, "0")}_SW4101_상세설계_모델`).forEach(f => files.push(f)); } catch (_) {}
   try { hw2ModelFiles(meta, ctx, `${String(order.length + 2).padStart(2, "0")}_HW4101_HW설계_모델`).forEach(f => files.push(f)); } catch (_) {}
+  try { swe4HostFiles(meta, ctx, `${String(order.length + 3).padStart(2, "0")}_SW4106_유닛시험_호스트실행`).forEach(f => files.push(f)); } catch (_) {}
   if (!files.length) throw new Error("생성할 수 있는 ASPICE 산출물이 없습니다. 시스템 요소·하위 요구·검증 수단을 먼저 작성하세요.");
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
   const url = URL.createObjectURL(blob);
@@ -8247,6 +8292,7 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
   // SWE.3 상세설계 모델(XMI·다이어그램·코드·MISRA) — 상세설계가 있을 때만
   try { const hf = hw2ModelFiles(meta, ctx); if (hf.length) { hf.forEach(f => files.push(f)); manifest.push([hf[0].path.split("/")[0], "-", "HW4101", docCodeWithPrefix("HW4101", meta) || "-", "HWE.2 HW 설계 모델(블록도·회로도)", "폴더", "V-모델", `파일 ${hf.length}개`]); total += 1; } } catch (_) {}
   try { const mf = swe3ModelFiles(meta, ctx); if (mf.length) { report(93, `SWE.3 상세설계 모델 ${mf.length}개 파일 추가 중…`); mf.forEach(f => files.push(f)); manifest.push([mf[0].path.split("/")[0], "-", "SW4101", docCodeWithPrefix("SW4101", meta) || "-", "SWE.3 상세설계 모델(XMI·다이어그램·소스·MISRA)", "폴더", "V-모델", `파일 ${mf.length}개 — EA 17.x XMI 가져오기 · ${AE.ddSettings(AE.normalizeModel(ctx?.requirements?.aspice)).target} 소스`]); total += 1; } } catch (_) {}
+  try { const tf = swe4HostFiles(meta, ctx); if (tf.length) { tf.forEach(f => files.push(f)); manifest.push([tf[0].path.split("/")[0], "-", "SW4106", docCodeWithPrefix("SW4106", meta) || "-", "SWE.4 유닛 시험 호스트 실행 패키지(RTE 스텁·시험 케이스·실행 스크립트)", "폴더", "V-모델", `파일 ${tf.length}개 — gcc로 run_tests 실행`]); total += 1; } } catch (_) {}
   report(94, "산출물 목록 작성·ZIP 압축 중…");
   files.unshift({ path: "00_산출물목록.xlsx", content: makeXlsx({ sheetName: "산출물목록", rows: [
     ["프로젝트", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
@@ -9384,6 +9430,57 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       return `유닛 ${done}개의 ${AE.DD_TARGETS[S.target].label} 소스를 생성했습니다 (연산 본문 AI ${aiOk} · 규칙 ${done - aiOk}). 각 유닛의 [코드]에서 확인하고, MISRA 최종 판정은 ${S.tools.join("·")}로 하세요.`;
     });
   }
+  // ── SWE.4 호스트 유닛 시험(SIL): 규칙 케이스 + AI 초안(요구·설계 근거, 규칙으로 거름) → unit.ut / 실행 패키지 ZIP / 결과 가져오기 → model.utRuns ──
+  function genUnitTests() {
+    const S = AE.ddSettings(model);
+    const targets = (model.units.SW || []).filter(u => u.dd?.classes?.length);
+    return run(`유닛 시험 케이스 생성 (${targets.length}개 유닛)`, async () => {
+      if (!AE.utSupported(S)) throw new Error("호스트 실행은 현재 AUTOSAR Classic(C) 대상만 지원합니다 — Adaptive(C++)는 2단계입니다.");
+      if (!targets.length) throw new Error("상세설계가 있는 유닛이 없습니다. SWE.3에서 [AI 상세설계 생성]을 먼저 실행하세요.");
+      const n = AE.normalizeModel(JSON.parse(JSON.stringify(model)));
+      let done = 0, aiN = 0, dropN = 0, ruleN = 0;
+      const one = async (u) => {
+        const idx = n.units.SW.findIndex(x => x.id === u.id); if (idx < 0) return;
+        const cur = n.units.SW[idx];
+        let kept = [], dropped = [];
+        if (n.useAI && (cur.reqs || []).length) {
+          try { const raw = await callClaudeJson(AE.promptUnitTests({ unit: cur, model: n }), 3000); const v = AE.validateUnitTests(raw, cur, n); kept = v.kept; dropped = v.dropped; } catch (_) { /* AI 실패 시 규칙 케이스만 */ }
+        }
+        const ut = AE.buildUnitTestSet(cur, kept, dropped, { aiModel: n.useAI ? "생성 AI(Claude)" : "" });
+        aiN += kept.length; dropN += dropped.length; ruleN += ut.cases.length - kept.length;
+        n.units.SW[idx] = { ...cur, ut };
+        done++;
+        setProg({ percent: 5 + (done / targets.length) * 90, label: `${n.useAI ? "AI: " : "규칙: "}유닛 시험 ${done}/${targets.length} — ${u.id} ${u.name}` });
+      };
+      const CONC = n.useAI ? 3 : 20;
+      for (let i = 0; i < targets.length; i += CONC) await Promise.all(targets.slice(i, i + CONC).map(one));
+      setModel(n);
+      return `유닛 ${done}개 — 케이스 ${ruleN + aiN}건 (규칙 ${ruleN} · AI 초안 ${aiN}${dropN ? ` · 근거 불충분으로 버린 AI 케이스 ${dropN}` : ""}). [📦 실행 패키지 ZIP]을 받아 PC에서 실행하세요.`;
+    });
+  }
+  function downloadHostPkg() {
+    try {
+      const S = AE.ddSettings(model);
+      const pkg = AE.buildHostTestPackage(model, form, S);
+      if (!pkg.units.length) { setErr(pkg.note || "상세설계가 있는 유닛이 없습니다. SWE.3 상세설계를 먼저 생성하세요."); return; }
+      const blob = new Blob([zipBytes(pkg.files)], { type: "application/zip" });
+      const url = URL.createObjectURL(blob); const a = document.createElement("a");
+      a.href = url; a.download = `${String(form?.name || "project").replace(/[\\/:*?"<>|]/g, "_")}_SWE4_호스트시험.zip`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1500);
+      setNote(`실행 패키지: 유닛 ${pkg.units.length}개 · 케이스 ${pkg.units.reduce((s, x) => s + x.cases, 0)}건${pkg.skipped.length ? ` · 제외 ${pkg.skipped.length}개(${pkg.skipped.map(x => x.id).join(", ")})` : ""}. 압축을 풀고 run_tests.sh(또는 run_tests.bat)를 실행한 뒤 swe4_results.jsonl을 [실행 결과 가져오기]로 올리세요.`);
+    } catch (e) { setErr(`실행 패키지 생성 실패: ${e.message}`); }
+  }
+  async function importUtResults(file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = AE.parseUtResults(text);
+      if (!parsed.cases.length && !parsed.builds.length) throw new Error(`결과 줄을 찾지 못했습니다${parsed.bad ? ` (해석 불가 ${parsed.bad}줄)` : ""} — run_tests가 만든 swe4_results.jsonl 파일인지 확인하세요.`);
+      const { model: nm, run: r } = AE.applyUtResults(model, parsed, file.name);
+      setModel(nm);
+      const us = Object.values(r.units);
+      setNote(`실행 결과 반영: 유닛 ${us.length}개 (Pass ${us.filter(x => x.result === "Pass").length} · Fail ${us.filter(x => x.result === "Fail").length}) · 케이스 ${r.cases.length}건 중 통과 ${r.cases.filter(c => c.result === "pass").length} — SW 유닛 검증 결과서(SW4106)에 반영됩니다.`);
+    } catch (e) { setErr(`실행 결과 가져오기 실패: ${e.message}`); }
+  }
   // ── HWE.2 HW 회로 설계(HD): 블록별 A 회로(부품·넷·연결) → B 특별 특성·분석·근거, 실패·AI 미사용 시 규칙 생성 ──
   function genHD(compIds = null) {
     const targets = (model.comps.HW || []).filter(c => !compIds || compIds.includes(c.id));
@@ -10289,6 +10386,63 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               {runCtx.anchor === "verif-bar" && (busy || prog) && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
               {runCtx.anchor === "verif-bar" && runErr && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{runErr}</div>}
               <div style={{ fontSize: 10, color: T.muted, marginBottom: 8 }}>규칙 엔진: 요구 문장의 수치 조건(이상·이하·초과·미만·범위·이내)에서 경계값·타이밍 TC, 고장·진단 문구에서 결함 주입 TC, 인터페이스에서 연동·주기·통신이상 TC를 결정적으로 생성합니다. {model.useAI ? "AI는 정상 시나리오 절차 서술에만 사용합니다." : ""} 수동 추가·수정한 항목은 재생성 시 보존됩니다.</div>
+              {cur === "SWE4" && (() => {
+                const S = AE.ddSettings(model);
+                const ok = AE.utSupported(S);
+                const dUnits = (model.units.SW || []).filter(u => u.dd?.classes?.length);
+                const nRule = dUnits.reduce((a, u) => a + AE.ruleUnitTests(u).length, 0);
+                const nAi = dUnits.reduce((a, u) => a + (u.ut?.cases || []).filter(c => c.origin === "ai").length, 0);
+                const dropped = dUnits.flatMap(u => (u.ut?.dropped || []).map(d => ({ ...d, unit: u.id })));
+                const Lr = AE.utLatest(model);
+                const R = Lr?.run;
+                const rows = R ? dUnits.filter(u => R.units[u.id]) : [];
+                const notRun = R ? dUnits.filter(u => !R.units[u.id]).length : dUnits.length;
+                const resCol = r => r === "Pass" ? T.green : r === "Fail" ? T.red : T.muted;
+                return (
+                  <AeSec title={`SWE.4 호스트 실행(SIL) — 유닛 ${dUnits.length} · 케이스 ${nRule + nAi} (규칙 ${nRule} · AI 초안 ${nAi})${R ? ` · 최근 실행 ${String(R.ranAt || R.at).slice(0, 10)}` : ""}`}
+                    right={<div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      <Btn variant="outline" disabled={busy || !ok || !dUnits.length} onClick={genUnitTests} title="규칙 케이스(초기화·출력 갱신·견고성)는 설계에서 결정적으로, 요구 기반 케이스는 생성 AI가 초안 — 기대값이 요구·설계 원문에 없으면 버립니다" style={{ fontSize: 11, padding: "4px 12px" }}>✦ 케이스 생성</Btn>
+                      <Btn disabled={busy || !ok || !dUnits.length} onClick={downloadHostPkg} style={{ fontSize: 11, padding: "4px 12px" }}>📦 실행 패키지 ZIP</Btn>
+                      <label style={{ ...small, padding: "4px 12px", fontSize: 11, opacity: busy || !ok ? 0.5 : 1, pointerEvents: busy || !ok ? "none" : "auto" }} title="run_tests가 만든 swe4_results.jsonl">⬆ 실행 결과 가져오기<input type="file" accept=".jsonl,.json,.txt" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; importUtResults(f); }} /></label>
+                    </div>}>
+                    <div style={{ fontSize: 10.5, color: T.muted, lineHeight: 1.65, marginBottom: 8 }}>
+                      SWE.3에서 만든 C 소스를 <b style={{ color: T.text }}>PC(gcc)에서 빌드·실행</b>해 유닛별로 검증합니다. ① <b>✦ 케이스 생성</b> → ② <b>📦 실행 패키지 ZIP</b>을 받아 압축을 풀고 <code>run_tests.sh</code>(Windows는 <code>run_tests.bat</code>, 커버리지는 <code>COVERAGE=1 sh run_tests.sh</code>) 실행 → ③ 만들어진 <code>swe4_results.jsonl</code>을 <b>⬆ 실행 결과 가져오기</b>로 올리면 SW 유닛 검증 결과서(SW4106)에 Pass/Fail이 채워집니다.
+                      RTE는 시험용 스텁으로 바꾸고, 외부 다운로드 없이 동작합니다. AI 초안 케이스는 소스가 아니라 <b>요구·상세설계</b>만 보고 만들며, 기대값이 원문에 없으면 버립니다.
+                      <span style={{ color: T.amber }}> 호스트 실행(SIL)은 로직 검증이며 타깃 MCU의 타이밍·메모리·인터럽트 동작은 보증하지 않습니다 — 결과서에도 그렇게 표기됩니다.</span>
+                    </div>
+                    {!ok && <div style={{ fontSize: 11, color: T.amber, marginBottom: 8 }}>현재 코드 대상이 {AE.DD_TARGETS[S.target]?.label}입니다. 호스트 실행은 AUTOSAR Classic(C)만 지원합니다 — Adaptive(C++)는 2단계로 예정되어 있습니다.</div>}
+                    {ok && !dUnits.length && <div style={{ fontSize: 11, color: T.muted, marginBottom: 8 }}>상세설계가 있는 유닛이 없습니다. SWE.3에서 상세설계·코드를 먼저 생성하세요.</div>}
+                    {dropped.length > 0 && <details style={{ fontSize: 10.5, marginBottom: 8 }}><summary style={{ cursor: "pointer", color: T.muted }}>근거 불충분으로 버린 AI 케이스 {dropped.length}건 (규칙 검사)</summary>{dropped.slice(0, 40).map((d, k) => <div key={k} style={{ paddingLeft: 8, borderLeft: `2px solid ${T.border}`, marginTop: 3 }}><span style={{ fontFamily: "monospace", color: T.accent }}>{d.unit}</span> {d.title} — <span style={{ color: T.amber }}>{d.reason}</span></div>)}</details>}
+                    {R && <>
+                      <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 6 }}>최근 실행: {String(R.ranAt || R.at).replace("T", " ").slice(0, 19)} · {R.cc || "컴파일러 정보 없음"}{R.os ? ` · ${R.os}` : ""}{R.coverage ? " · 커버리지 측정" : ""} · 가져온 파일 {R.file || "-"}{notRun ? ` · 실행 안 된 유닛 ${notRun}개` : ""}</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "18px 80px 1fr 64px 90px 120px 70px", gap: 6, fontSize: 10, color: T.muted, padding: "0 6px" }}><span /><span>유닛</span><span>이름</span><span>빌드</span><span>케이스 통과</span><span>커버리지(문장·분기)</span><span>결과</span></div>
+                        {rows.map(u => { const r = R.units[u.id]; const k = `ut|${u.id}`; const st = Lr.stale[u.id]; const cs = R.cases.filter(c => c.unit === u.id); return (
+                          <div key={u.id} style={{ border: `1px solid ${T.border}`, borderRadius: 7, background: T.bg }}>
+                            <div onClick={() => setOpen(o => ({ ...o, [k]: !o[k] }))} style={{ display: "grid", gridTemplateColumns: "18px 80px 1fr 64px 90px 120px 70px", gap: 6, fontSize: 11, padding: "5px 6px", cursor: "pointer", alignItems: "center" }}>
+                              <span style={{ color: T.muted }}>{open[k] ? "▾" : "▸"}</span>
+                              <span style={{ fontFamily: "monospace", color: T.accent }}>{u.id}</span>
+                              <span>{u.name}{st && <span style={{ color: T.amber, fontSize: 10 }}> · 실행 후 코드 변경 — 재실행 필요</span>}</span>
+                              <span style={{ color: r.build === "fail" ? T.red : T.text }}>{r.build === "fail" ? "실패" : r.build === "ok" ? `성공${r.warnings ? ` ⚠${r.warnings}` : ""}` : "-"}</span>
+                              <span>{r.cases ? `${r.pass}/${r.cases}` : "-"}</span>
+                              <span>{r.coverage ? `${r.coverage.stmt}% · ${r.coverage.branchN ? r.coverage.branch + "%" : "분기 없음"}` : "-"}</span>
+                              <b style={{ color: st ? T.amber : resCol(r.result) }}>{st ? "재실행" : r.result}</b>
+                            </div>
+                            {open[k] && <div style={{ borderTop: `1px solid ${T.border}`, padding: "4px 8px 6px" }}>
+                              {r.build === "fail" && <div style={{ fontSize: 10.5, color: T.red, marginBottom: 4 }}>빌드 실패 — 실행 폴더의 build/{u.id}/build.log를 확인하세요. 대개 AI가 쓴 연산 본문의 식별자·형 불일치이며, SWE.3 [코드] 재생성 또는 수정 후 다시 실행합니다.</div>}
+                              {cs.map(c => <div key={c.case} style={{ display: "grid", gridTemplateColumns: "120px 56px 1fr 46px", gap: 6, fontSize: 10.5, padding: "2px 0", borderBottom: `1px solid ${T.border}22` }}>
+                                <span style={{ fontFamily: "monospace" }}>{c.case}</span>
+                                <span style={{ color: c.origin === "ai" ? T.accent : T.green }}>{c.origin === "ai" ? "AI 초안" : "규칙"}</span>
+                                <span>{(u.ut?.cases || []).find(x => x.id === c.case)?.title || ""}{c.reqs ? <span style={{ color: T.muted }}> · {c.reqs}</span> : null}{c.result === "fail" && <div style={{ color: T.red }}>{c.detail}</div>}</span>
+                                <b style={{ color: c.result === "pass" ? T.green : T.red }}>{c.result === "pass" ? "Pass" : "Fail"}</b>
+                              </div>)}
+                              {!cs.length && r.build !== "fail" && <div style={{ fontSize: 10.5, color: T.muted }}>케이스 결과 없음</div>}
+                            </div>}
+                          </div>); })}
+                      </div>
+                    </>}
+                  </AeSec>);
+              })()}
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {ts.map(t => { const i = model.tests.indexOf(t); return (
                   <div key={t.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", background: T.bg }}>

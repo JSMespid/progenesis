@@ -2177,7 +2177,7 @@ export function fillDDGaps(dd0, unit, model, seedKey) {
     dd.classes.push({ guid: g(`class:${uName}`), name: uName, stereotype: "SWC", desc: unit?.desc || "", reqs: ids(unit?.reqs),
       attrs: [{ name: "state", type: `${uName}_StateType`, init: "INIT", desc: "유닛 운영 상태", vis: "-" }],
       ops: [{ name: `${uName}_Init`, ret: "void", vis: "+", params: [], desc: "초기화 — 내부 상태·버퍼 초기화", pre: "", post: "state == INIT", algo: ["내부 변수 초기화", "state := INIT"], reqs: [] },
-        ...reqs.filter(r => r.type !== "비기능").slice(0, 12).map(r => ({ name: `${uName}_${cid(r.title || r.id).slice(0, 28)}`, ret: "Std_ReturnType", vis: "+", params: [], desc: `${r.title} 처리 (${r.id})`, pre: "", post: "", algo: [`입력 유효성 검사`, `${r.title} 수행`, `결과 반환`], reqs: [r.id] })),
+        ...reqs.filter(r => r.type !== "비기능").slice(0, 12).map(r => ({ name: `${uName}_${asciiName(r.title, cid(r.id)).slice(0, 28)}`, ret: "Std_ReturnType", vis: "+", params: [], desc: `${r.title} 처리 (${r.id})`, pre: "", post: "", algo: [`입력 유효성 검사`, `${r.title} 수행`, `결과 반환`], reqs: [r.id] })),
         { name: `${uName}_MainFunction`, ret: "void", vis: "+", params: [], desc: "주기 처리 — 입력 읽기 → 상태 천이 → 출력 쓰기", pre: "", post: "", algo: ["RTE에서 입력 읽기", "상태 머신 수행", "RTE로 출력 쓰기"], reqs: ids(unit?.reqs) }],
     });
   }
@@ -3037,4 +3037,400 @@ export const isVdaCode = code => /^VDA-/.test(String(code || ""));
 export function reviewCriteriaFor(key, version = "both") {
   const S = reviewScope(key); const K = reviewKindOf(key);
   return { vda: S ? vdaCriteria(S.proc, version) : [], base: K.criteria, all: [...(S ? vdaCriteria(S.proc, version) : []), ...K.criteria], ver: `${vdaVersionLabel(version)} + ${K.ver}`, baseVer: K.ver };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 15) SWE.4 호스트 유닛 시험 (SIL, Software-in-the-Loop on host) — CP(C) 대상
+//  · 목적: SWE.3 코드를 PC(gcc)에서 빌드·실행해 유닛 단위로 검증하고, 결과를 SWE.4 결과서(3.1 13-50 / 4.0 15-52)에 반영.
+//  · 구성: RTE 스텁(Rte_Read/Write → 시험용 버퍼) + 시험 케이스 + 경량 시험 프레임워크 + 실행 스크립트(sh·bat) — 외부 다운로드 없음.
+//  · 케이스: ① 규칙(결정적) — 초기화·출력 갱신·견고성(형 최소/최대 입력)  ② AI 초안 — 할당 요구 근거의 입력→기대 출력.
+//    AI 케이스의 기대값은 요구·설계 원문에 있는 수치(10의 거듭제곱 환산 허용) 또는 0/1만 허용, 근거 인용은 원문과 일치해야 함 — 어긋나면 버린다.
+//    AI에는 소스코드가 아니라 요구·상세설계를 준다(구현을 보고 기대값을 맞추면 시험이 아니므로).
+//  · 한계: 호스트 실행은 로직 검증이며 타깃 MCU의 타이밍·메모리·인터럽트 동작을 보증하지 않는다(결과서에 명시).
+// ═══════════════════════════════════════════════════════════════════════════
+export const UT_VER = "UT-1.0";
+const UT_LIMITS = { uint8: [0, 255], uint16: [0, 65535], uint32: [0, 4294967295], sint8: [-128, 127], sint16: [-32768, 32767], sint32: [-2147483648, 2147483647], boolean: [0, 1], float32: [-1e6, 1e6], float64: [-1e6, 1e6] };
+const utEsc = s => String(s == null ? "" : s).replace(/[\\"]/g, "'").replace(/[\r\n\t]+/g, " ").replace(/\*\//g, "* /").slice(0, 200);
+export const utSupported = (settings) => ({ ...DD_DEFAULT, ...(settings || {}) }).target === "CP";
+// 유닛 → 시험 생성에 필요한 구조(코드 생성기와 같은 명명 규칙)
+export function utContext(unit) {
+  const dd = unit?.dd; if (!dd || !arr(dd.classes).length) return null;
+  const u = (dd.classes.find(c => c.stereotype === "SWC") || dd.classes[0])?.name || unitIdent(unit);
+  const own = new Set(arr(dd.dataTypes).map(t => cid(t.name)));
+  const dtOf = Object.fromEntries(arr(dd.dataTypes).map(t => [cid(t.name), t]));
+  const limOf = type => {
+    const ct = cT(type, own);
+    if (UT_LIMITS[ct]) return { lim: UT_LIMITS[ct], float: /^float/.test(ct), scalar: true };
+    const t = dtOf[ct];
+    if (t && t.base === "enum") return { lim: [0, Math.max(0, String(t.range || "V").split(/[,;]/).filter(x => x.trim()).length - 1)], float: false, scalar: true };
+    if (t && t.base !== "struct" && UT_LIMITS[cT(t.base, own)]) return { lim: UT_LIMITS[cT(t.base, own)], float: /^float/.test(cT(t.base, own)), scalar: true };
+    return { lim: [0, 0], float: false, scalar: false };   // struct 등 — 시험 입력으로 직접 설정하지 않음
+  };
+  const els = dir => arr(dd.ports).filter(p => p.dir === dir).flatMap(p => arr(p.elements).map(e => ({ ref: `${p.name}.${e.name}`, rte: `${p.name}_${e.name}`, ctype: cT(e.type, own), port: p.name, ...limOf(e.type) })));
+  const states = arr(dd.states?.states).map(s => s.name);
+  const runs = arr(dd.runnables).map(r => ({ name: cid(r.name), trigger: r.trigger, periodMs: r.periodMs || 0, writes: arr(r.writes), reads: arr(r.reads), reqs: ids(r.reqs), desc: r.desc || "" }));
+  return { u, own, inputs: els("R"), outputs: els("P"), states, stEnum: states.map(s => `${u}_ST_${s}`.toUpperCase()),
+    inits: runs.filter(r => r.trigger === "init"), runs: runs.filter(r => r.trigger !== "init"),
+    dataVars: arr(dd.classes).filter(c => arr(c.attrs).length).map(c => `${c.name}_Data`),
+    attrs: arr(dd.classes).filter(c => arr(c.attrs).length).flatMap(c => c.attrs.filter(a => /^-?[\d.]+$/.test(String(a.init || ""))).map(a => ({ ref: `${c.name}.${a.name}`, c: `${c.name}_Data.${a.name}`, value: Number(a.init) }))) };
+}
+// ① 규칙 케이스 — 설계 구조만으로 결정되는 항목
+export function ruleUnitTests(unit) {
+  const x = utContext(unit); if (!x) return [];
+  const cs = [];
+  const id = n => `${unit.id}-RT${String(n).padStart(2, "0")}`;
+  const allReqs = ids(unit.reqs);
+  cs.push({ id: id(cs.length + 1), origin: "rule", title: "초기화 후 초기 상태·초기값", reqs: [], basis: "SWE.3 상태 머신 초기 상태·속성 초기값", state: "", inputs: {}, runnable: "", times: 0,
+    expect: [...(x.states.length ? [{ kind: "state", value: x.states[0] }] : []), ...x.attrs.map(a => ({ kind: "attr", ref: a.ref, op: "==", value: a.value }))] });
+  x.runs.forEach(r => {
+    const outs = x.outputs.filter(o => r.writes.includes(o.port));
+    cs.push({ id: id(cs.length + 1), origin: "rule", title: `${r.name} 1회 실행 — 출력 갱신`, reqs: r.reqs.length ? r.reqs : allReqs, basis: `Runnable 쓰기 포트(${r.writes.join(", ") || "없음"})`, state: "", inputs: {}, runnable: r.name, times: 1,
+      expect: outs.length ? outs.map(o => ({ kind: "written", ref: o.ref, op: ">=", value: 1 })) : [{ kind: "stateValid" }] });
+    const ins = x.inputs.filter(i => i.scalar);
+    if (ins.length || x.states.length) {
+      cs.push({ id: id(cs.length + 1), origin: "rule", title: `${r.name} 견고성 — 입력 최대값 10회`, reqs: r.reqs.length ? r.reqs : allReqs, basis: "입력 형 최대값에서 상태가 정의된 값 안에 머무름", state: "", inputs: Object.fromEntries(ins.map(i => [i.ref, "MAX"])), runnable: r.name, times: 10, expect: [{ kind: "stateValid" }] });
+      cs.push({ id: id(cs.length + 1), origin: "rule", title: `${r.name} 견고성 — 입력 최소값 10회`, reqs: r.reqs.length ? r.reqs : allReqs, basis: "입력 형 최소값에서 상태가 정의된 값 안에 머무름", state: "", inputs: Object.fromEntries(ins.map(i => [i.ref, "MIN"])), runnable: r.name, times: 10, expect: [{ kind: "stateValid" }] });
+    }
+  });
+  return cs;
+}
+// ② AI 케이스 프롬프트 — 요구·상세설계만 제공(코드는 주지 않음)
+export function promptUnitTests({ unit, model }) {
+  const m = normalizeModel(model); const x = utContext(unit); const dd = unit.dd;
+  const reqs = (m.reqs.SW || []).filter(r => ids(unit.reqs).includes(r.id));
+  return `역할: ASPICE SWE.4 유닛 검증 엔지니어. 아래 SW 유닛의 할당 요구와 상세설계(SWE.3)로부터 호스트에서 실행할 유닛 시험 케이스를 작성하세요.
+
+[할당 SW 요구]
+${reqs.map(r => `- ${r.id} ${r.title}: ${r.text || ""}${r.verifCriteria ? ` / 검증 기준: ${r.verifCriteria}` : ""}`).join("\n") || "-"}
+[입력 포트 요소(Rte_Read)] ${x.inputs.filter(i => i.scalar).map(i => `${i.ref}(${i.ctype} ${i.lim[0]}..${i.lim[1]})`).join(", ") || "-"}
+[출력 포트 요소(Rte_Write)] ${x.outputs.filter(o => o.scalar).map(o => `${o.ref}(${o.ctype})`).join(", ") || "-"}
+[Runnable] ${x.runs.map(r => `${r.name}(${r.trigger}${r.periodMs ? " " + r.periodMs + "ms" : ""}): ${r.desc}`).join("; ") || "-"}
+[상태] ${x.states.join(", ") || "-"} / 전이: ${arr(dd.states?.transitions).map(t => `${t.from}→${t.to} when "${t.trigger}" [${t.guard || ""}]`).join("; ") || "-"}
+[연산 알고리즘] ${arr(dd.classes).flatMap(c => arr(c.ops).map(o => `${o.name}: ${arr(o.algo).join(" / ")}`)).join(" | ").slice(0, 2500)}
+
+규칙:
+- 케이스는 요구 1건 이상을 근거로 하며 최대 6개. 각 케이스: 사전 상태(state, 없으면 ""), 입력값(inputs: "포트.요소": 숫자), 실행할 Runnable과 반복 횟수(times — 주기 ${x.runs[0]?.periodMs || 10}ms 기준으로 시간 조건을 횟수로 환산), 기대(expect).
+- expect는 출력 포트 요소 값({"port":"포트.요소","op":"==|!=|>=|<=|>|<","value":숫자}) 또는 상태({"state":"상태명"}).
+- 기대값 숫자는 요구·설계 원문에 있는 수치(단위 환산 시 10의 거듭제곱 배) 또는 0/1만. 원문에 근거가 없으면 그 케이스를 만들지 말 것.
+- basis에는 근거가 된 요구 원문 구절을 그대로 인용(20자 이내).
+- 경계값(조건 직전·직후)과 이상 입력 케이스를 우선한다. ${AI_FIDELITY}
+
+JSON만 출력:
+{"cases":[{"title":"","reqs":["SWR-..."],"basis":"","state":"","inputs":{"Rp_X.y":0},"runnable":"","times":1,"expect":[{"port":"Pp_X.y","op":"==","value":0},{"state":"RUN"}]}]}`;
+}
+// AI 케이스 검증 — 규칙으로 거른다 (kept / dropped)
+export function validateUnitTests(raw, unit, model) {
+  const m = normalizeModel(model); const x = utContext(unit); if (!x) return { kept: [], dropped: [] };
+  const reqs = (m.reqs.SW || []).filter(r => ids(unit.reqs).includes(r.id));
+  const dd = unit.dd;
+  const srcText = [...reqs.map(r => `${r.title} ${r.text || ""} ${r.verifCriteria || ""}`), ...arr(dd.classes).flatMap(c => arr(c.ops).flatMap(o => [o.desc, ...arr(o.algo)])), ...arr(dd.states?.transitions).map(t => `${t.trigger} ${t.guard}`), ...arr(unit.macros).map(mm => mm.value)].join(" ");
+  const nums = new Set((srcText.match(/-?\d+(?:\.\d+)?/g) || []).map(Number));
+  const numOk = v => v === 0 || v === 1 || [...nums].some(n => [-3, -2, -1, 0, 1, 2, 3].some(k => Math.abs(n * Math.pow(10, k) - v) < 1e-9 * Math.max(1, Math.abs(v))));
+  const norm = s => String(s || "").replace(/["'“”‘’`\s]/g, "").toLowerCase();
+  const reqText = norm(reqs.map(r => `${r.title} ${r.text || ""} ${r.verifCriteria || ""}`).join(" "));
+  const inByRef = Object.fromEntries(x.inputs.filter(i => i.scalar).map(i => [i.ref, i]));
+  const outByRef = Object.fromEntries(x.outputs.filter(o => o.scalar).map(o => [o.ref, o]));
+  const runNames = new Set(x.runs.map(r => r.name));
+  const OPS = new Set(["==", "!=", ">=", "<=", ">", "<"]);
+  const kept = [], dropped = [];
+  arr(raw?.cases).slice(0, 8).forEach((c, i) => {
+    const title = str(c?.title, 120) || `케이스 ${i + 1}`;
+    const drop = reason => dropped.push({ title, reason });
+    const rq = ids(c?.reqs).filter(r => ids(unit.reqs).includes(r));
+    if (!rq.length) return drop("할당 요구가 아닌 근거");
+    const basis = str(c?.basis, 120);
+    if (basis && !reqText.includes(norm(basis))) return drop(`근거 인용이 요구 원문과 불일치("${basis.slice(0, 20)}")`);
+    const run = cid(c?.runnable || x.runs[0]?.name || "");
+    if (!runNames.has(run)) return drop(`없는 Runnable(${run})`);
+    const st = str(c?.state, 40); if (st && !x.states.includes(st)) return drop(`없는 상태(${st})`);
+    const inputs = {};
+    for (const [k, v] of Object.entries(c?.inputs || {})) {
+      const d = inByRef[k]; const n = Number(v);
+      if (!d) return drop(`없는 입력 포트 요소(${k})`);
+      if (!Number.isFinite(n) || n < d.lim[0] || n > d.lim[1]) return drop(`입력값이 형 범위 밖(${k}=${v})`);
+      inputs[k] = d.float ? n : Math.round(n);
+    }
+    const expect = [];
+    for (const e of arr(c?.expect)) {
+      if (e && e.state != null) { if (!x.states.includes(String(e.state))) return drop(`없는 기대 상태(${e.state})`); expect.push({ kind: "state", value: String(e.state) }); continue; }
+      const d = outByRef[e?.port]; const n = Number(e?.value); const op = OPS.has(e?.op) ? e.op : "==";
+      if (!d) return drop(`없는 출력 포트 요소(${e?.port})`);
+      if (!Number.isFinite(n)) return drop("기대값이 숫자가 아님");
+      if (!numOk(n)) return drop(`기대값 ${n}이 요구·설계 원문에 없음`);
+      expect.push({ kind: "port", ref: e.port, op, value: n });
+    }
+    if (!expect.length) return drop("기대 결과 없음");
+    const times = Math.max(1, Math.min(1000, Math.round(Number(c?.times) || 1)));
+    kept.push({ origin: "ai", title, reqs: rq, basis, state: st, inputs, runnable: run, times, expect });
+  });
+  kept.forEach((c, i) => { c.id = `${unit.id}-AT${String(i + 1).padStart(2, "0")}`; });
+  return { kept, dropped };
+}
+// 유닛 시험 세트 = 규칙 + AI (unit.ut)
+export function buildUnitTestSet(unit, aiKept = [], dropped = [], meta = {}) {
+  return { ver: UT_VER, cases: [...ruleUnitTests(unit), ...arr(aiKept)], dropped: arr(dropped), generatedAt: new Date().toISOString(), aiModel: meta.aiModel || "", codeHash: utCodeHash(unit.dd?.code) };
+}
+export const utCodeHash = code => code && Array.isArray(code.files) ? fnv1a(code.files.map(f => f.text).join("\u241f")) : "";
+// 시험 C 파일 (유닛 .c를 include해 내부 static 상태까지 확인)
+export function utTestSource(unit, code, cases) {
+  const x = utContext(unit); if (!x || !code) return "";
+  const src = (code.files.find(f => /\.c$/.test(f.name)) || {}).name;
+  const inRef = Object.fromEntries(x.inputs.map(i => [i.ref, i])), outRef = Object.fromEntries(x.outputs.map(o => [o.ref, o]));
+  const lit = (d, v) => v === "MAX" ? (d.float ? `(${d.ctype})${d.lim[1]}` : `(${d.ctype})${d.lim[1]}${d.lim[1] > 2147483647 ? "u" : ""}`) : v === "MIN" ? `(${d.ctype})(${d.lim[0]})` : `(${d.ctype})(${d.float ? Number(v) : Math.round(Number(v))})`;
+  const stVal = s => x.stEnum[x.states.indexOf(s)];
+  const L = [];
+  L.push(`/* SPIDer QA Agent — SWE.4 host unit test (${UT_VER}) for ${unit.id} ${utEsc(unit.name)}`, ` * Generated ${new Date().toISOString().slice(0, 10)} from SWE.3 detailed design. Host execution (SIL) — not target verification. */`);
+  L.push(`#include <string.h>`, `#include "spider_test.h"`, `#include "${src}"   /* unit under test (static internals visible to the test) */`, ``);
+  L.push(`#define UT_UNIT_ID   "${unit.id}"`, `#define UT_CODE_HASH "${utCodeHash(code)}"`, ``, `/* ---- RTE stub (replaces Rte_${x.u}.h implementation on host) ---- */`, `static Std_ReturnType TS_ret = E_OK;`);
+  x.inputs.forEach(i => L.push(`static ${i.ctype} TS_in_${i.rte}; static uint32 TS_rd_${i.rte};`, `Std_ReturnType Rte_Read_${i.rte}(${i.ctype} *data) { if (data != NULL_PTR) { *data = TS_in_${i.rte}; } TS_rd_${i.rte}++; return TS_ret; }`));
+  x.outputs.forEach(o => L.push(`static ${o.ctype} TS_out_${o.rte}; static uint32 TS_wr_${o.rte};`, `Std_ReturnType Rte_Write_${o.rte}(${o.ctype} data) { TS_out_${o.rte} = data; TS_wr_${o.rte}++; return TS_ret; }`));
+  L.push(``, `static void TS_Reset(void)`, `{`);
+  x.inputs.forEach(i => L.push(`    (void)memset(&TS_in_${i.rte}, 0, sizeof(TS_in_${i.rte})); TS_rd_${i.rte} = 0u;`, `    (void)memset(&${i.rte}, 0, sizeof(${i.rte}));`));
+  x.outputs.forEach(o => L.push(`    (void)memset(&TS_out_${o.rte}, 0, sizeof(TS_out_${o.rte})); TS_wr_${o.rte} = 0u;`, `    (void)memset(&${o.rte}, 0, sizeof(${o.rte}));`));
+  x.dataVars.forEach(v => L.push(`    (void)memset(&${v}, 0, sizeof(${v}));`));
+  if (x.stEnum.length) L.push(`    ${x.u}_State = ${x.stEnum[0]};`);
+  L.push(`    TS_ret = E_OK;`);
+  x.inits.forEach(r => L.push(`    ${r.name}();`));
+  x.outputs.forEach(o => L.push(`    TS_wr_${o.rte} = 0u;   /* count writes from the case only */`));
+  L.push(`}`, ``);
+  if (x.stEnum.length) L.push(`static int TS_StateValid(void) { return ((int)${x.u}_State >= 0) && ((int)${x.u}_State <= ${x.stEnum.length - 1}); }`, ``);
+  const fnames = [];
+  arr(cases).forEach(c => {
+    const fn = `TC_${cid(c.id)}`; fnames.push(fn);
+    L.push(`/* ${c.id} [${c.origin === "ai" ? "AI draft" : "rule"}] ${utEsc(c.title)} — traces: ${arr(c.reqs).join(", ") || "-"}${c.basis ? ` — basis: ${utEsc(c.basis)}` : ""} */`, `static void ${fn}(void)`, `{`, `    ST_BEGIN("${c.id}", "${utEsc(c.title)}", "${arr(c.reqs).join(",")}", "${c.origin}");`, `    TS_Reset();`);
+    if (c.state && stVal(c.state)) L.push(`    ${x.u}_State = ${stVal(c.state)};`);
+    Object.entries(c.inputs || {}).forEach(([k, v]) => { const d = inRef[k]; if (d && d.scalar) L.push(`    TS_in_${d.rte} = ${lit(d, v)};`); });
+    if (c.runnable && c.times > 0) L.push(`    { uint32 n; for (n = 0u; n < ${c.times}u; n++) { ${c.runnable}(); } }`);
+    arr(c.expect).forEach(e => {
+      if (e.kind === "state" && stVal(e.value)) L.push(`    ST_CHECK((int)${x.u}_State == (int)${stVal(e.value)}, "state == ${e.value}", (double)${x.u}_State, (double)${stVal(e.value)});`);
+      else if (e.kind === "stateValid") L.push(x.stEnum.length ? `    ST_CHECK(TS_StateValid(), "state within defined states", (double)${x.u}_State, -1.0);` : `    ST_CHECK(1, "executed without crash", 1.0, 1.0);`);
+      else if (e.kind === "written") { const d = outRef[e.ref]; if (d) L.push(`    ST_CHECK(TS_wr_${d.rte} >= 1u, "${e.ref} written", (double)TS_wr_${d.rte}, 1.0);`); }
+      else if (e.kind === "attr") { const a = x.attrs.find(q => q.ref === e.ref); if (a) L.push(`    ST_CHECK(ST_NUM_EQ((double)${a.c}, ${a.value}), "${e.ref} == ${a.value}", (double)${a.c}, ${a.value});`); }
+      else if (e.kind === "port") { const d = outRef[e.ref]; if (d) { const a = `(double)TS_out_${d.rte}`; const cond = e.op === "==" ? `ST_NUM_EQ(${a}, ${e.value})` : e.op === "!=" ? `!ST_NUM_EQ(${a}, ${e.value})` : `${a} ${e.op} ${e.value}`; L.push(`    ST_CHECK(${cond}, "${e.ref} ${e.op} ${e.value}", ${a}, ${e.value});`); } }
+    });
+    L.push(`    ST_END();`, `}`, ``);
+  });
+  L.push(`int main(void)`, `{`, `    ST_START(UT_UNIT_ID, "${utEsc(unit.name)}", UT_CODE_HASH);`, ...fnames.map(f => `    ${f}();`), `    return ST_FINISH();`, `}`, ``);
+  return L.join("\n");
+}
+const UT_STD_TYPES = `/* Host stub of AUTOSAR Std_Types.h / Platform_Types.h — for SPIDer host unit tests ONLY.
+ * On target, use the BSW-provided headers. */
+#ifndef STD_TYPES_H
+#define STD_TYPES_H
+#include <stdint.h>
+typedef uint8_t  uint8;  typedef uint16_t uint16; typedef uint32_t uint32; typedef uint64_t uint64;
+typedef int8_t   sint8;  typedef int16_t  sint16; typedef int32_t  sint32; typedef int64_t  sint64;
+typedef float    float32; typedef double float64;
+typedef uint8 boolean;
+#ifndef TRUE
+#define TRUE  ((boolean)1u)
+#endif
+#ifndef FALSE
+#define FALSE ((boolean)0u)
+#endif
+typedef uint8 Std_ReturnType;
+#define E_OK      ((Std_ReturnType)0u)
+#define E_NOT_OK  ((Std_ReturnType)1u)
+#define STD_ON    1u
+#define STD_OFF   0u
+#define STD_HIGH  1u
+#define STD_LOW   0u
+#ifndef NULL_PTR
+#define NULL_PTR  ((void *)0)
+#endif
+#endif /* STD_TYPES_H */
+`;
+const UT_FW_H = `/* SPIDer host unit test framework (minimal, no external dependency) */
+#ifndef SPIDER_TEST_H
+#define SPIDER_TEST_H
+void st_start(const char *unit, const char *name, const char *hash);
+void st_begin(const char *id, const char *title, const char *reqs, const char *origin);
+void st_check(int ok, const char *what, double actual, double expected, int line);
+void st_end(void);
+int  st_finish(void);
+int  st_num_eq(double a, double b);
+#define ST_START(u, n, h)        st_start((u), (n), (h))
+#define ST_BEGIN(i, t, r, o)     st_begin((i), (t), (r), (o))
+#define ST_CHECK(c, w, a, e)     st_check((c) ? 1 : 0, (w), (a), (e), __LINE__)
+#define ST_END()                 st_end()
+#define ST_FINISH()              st_finish()
+#define ST_NUM_EQ(a, b)          st_num_eq((a), (b))
+#endif
+`;
+const UT_FW_C = `/* SPIDer host unit test framework — results: stdout + JSON Lines (SPIDER_RESULTS, default swe4_results.jsonl) */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include "spider_test.h"
+static FILE *g_out = NULL;
+static const char *g_unit = "", *g_hash = "";
+static char g_id[64], g_title[256], g_reqs[256], g_origin[16], g_fail[512];
+static int g_checks = 0, g_failed = 0, g_cases = 0, g_case_fail = 0;
+static void js(FILE *f, const char *s) { fputc('"', f); for (; s && *s; s++) { unsigned char c = (unsigned char)*s; if (c == '"' || c == '\\\\') { fputc('\\\\', f); fputc(c, f); } else if (c < 0x20) { fputc(' ', f); } else { fputc(c, f); } } fputc('"', f); }
+static void cp(char *d, size_t n, const char *s) { strncpy(d, s ? s : "", n - 1); d[n - 1] = '\\0'; }
+int st_num_eq(double a, double b) { double t = 1e-4 * (fabs(b) > 1.0 ? fabs(b) : 1.0); return fabs(a - b) <= t; }
+void st_start(const char *unit, const char *name, const char *hash) {
+  const char *p = getenv("SPIDER_RESULTS"); g_unit = unit; g_hash = hash;
+  g_out = fopen(p ? p : "swe4_results.jsonl", "a");
+  printf("== %s %s ==\\n", unit, name);
+}
+void st_begin(const char *id, const char *title, const char *reqs, const char *origin) { cp(g_id, sizeof g_id, id); cp(g_title, sizeof g_title, title); cp(g_reqs, sizeof g_reqs, reqs); cp(g_origin, sizeof g_origin, origin); g_checks = 0; g_failed = 0; g_fail[0] = '\\0'; }
+void st_check(int ok, const char *what, double actual, double expected, int line) {
+  g_checks++;
+  if (!ok) { g_failed++; if (!g_fail[0]) { snprintf(g_fail, sizeof g_fail, "%s: actual %.6g (expected %.6g) at line %d", what, actual, expected, line); } }
+}
+void st_end(void) {
+  g_cases++; if (g_failed) g_case_fail++;
+  printf("  [%s] %s %s%s%s\\n", g_failed ? "FAIL" : "PASS", g_id, g_title, g_failed ? " -- " : "", g_failed ? g_fail : "");
+  if (g_out) {
+    fputs("{\\"type\\":\\"case\\",\\"unit\\":", g_out); js(g_out, g_unit); fputs(",\\"code\\":", g_out); js(g_out, g_hash);
+    fputs(",\\"case\\":", g_out); js(g_out, g_id); fputs(",\\"origin\\":", g_out); js(g_out, g_origin); fputs(",\\"reqs\\":", g_out); js(g_out, g_reqs);
+    fprintf(g_out, ",\\"result\\":\\"%s\\",\\"checks\\":%d,\\"failed\\":%d,\\"detail\\":", g_failed ? "fail" : "pass", g_checks, g_failed); js(g_out, g_fail); fputs("}\\n", g_out);
+  }
+}
+int st_finish(void) {
+  printf("  %d case(s), %d failed\\n", g_cases, g_case_fail);
+  if (g_out) { fclose(g_out); g_out = NULL; }
+  return g_case_fail ? 1 : 0;
+}
+`;
+const UT_RUN_SH = `#!/bin/sh
+# SPIDer QA Agent — SWE.4 host unit test runner (gcc). Usage: ./run_tests.sh   (coverage: COVERAGE=1 ./run_tests.sh)
+cd "$(dirname "$0")" || exit 1
+CC=\${CC:-gcc}
+OUT=swe4_results.jsonl
+rm -f "$OUT"; rm -rf build; mkdir -p build
+if ! command -v "$CC" >/dev/null 2>&1; then echo "C compiler '$CC' not found (install gcc / MinGW-w64)"; exit 2; fi
+CCV=$("$CC" --version 2>/dev/null | head -n 1 | tr -d '"\\\\')
+COVF=""; COVJ=false
+if [ "\${COVERAGE:-0}" = "1" ]; then COVF="--coverage -O0"; COVJ=true; fi
+printf '{"type":"run","ver":"${UT_VER}","at":"%s","cc":"%s","os":"%s","coverage":%s}\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$CCV" "$(uname -s 2>/dev/null)" "$COVJ" >> "$OUT"
+for d in units/*/; do
+  id=$(basename "$d"); mkdir -p "build/$id"
+  t=$(ls "$d"test_*.c 2>/dev/null | head -n 1)
+  if "$CC" -std=c99 -Wall -Wextra -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter $COVF -I stubs -I framework -I "$d" -c "$t" -o "build/$id/test.o" 2> "build/$id/build.log" && \\
+     "$CC" -std=c99 -I framework $COVF -c framework/spider_test.c -o "build/$id/fw.o" 2>> "build/$id/build.log" && \\
+     "$CC" $COVF -o "build/$id/run" "build/$id/test.o" "build/$id/fw.o" -lm 2>> "build/$id/build.log"; then
+    W=$(grep -c "warning:" "build/$id/build.log")
+    printf '{"type":"build","unit":"%s","result":"ok","warnings":%s}\\n' "$id" "$W" >> "$OUT"
+    SPIDER_RESULTS="$OUT" "./build/$id/run" || true
+    if [ "$COVJ" = "true" ] && command -v gcov >/dev/null 2>&1; then
+      src=$(ls "$d"*.c | grep -v '/test_' | head -n 1); sb=$(basename "$src")
+      (cd "build/$id" && gcov -b -o test.o "../../$t" > gcov.txt 2>/dev/null)
+      awk -v id="$id" -v sb="$sb" '
+        /^File / { f=$0; gsub(/^File .|.$/,"",f); n=split(f,a,"/"); cur=(a[n]==sb) }
+        cur && /^Lines executed:/ { split($2,p,":"); l=p[2]; sub(/%/,"",l); ln=$4 }
+        cur && /^Branches executed:/ { split($2,p,":"); b=p[2]; sub(/%/,"",b); bn=$4 }
+        cur && /^Taken at least once:/ { split($4,p,":"); tk=p[2]; sub(/%/,"",tk); if (tk=="") { tk=$4; sub(/%/,"",tk); sub(/.*:/,"",tk) } }
+        END { if (l!="") printf("{\\"type\\":\\"coverage\\",\\"unit\\":\\"%s\\",\\"file\\":\\"%s\\",\\"stmt\\":%s,\\"stmtN\\":%s,\\"branch\\":%s,\\"branchN\\":%s}\\n", id, sb, l, ln+0, (tk==""?0:tk), bn+0) }' "build/$id/gcov.txt" >> "$OUT"
+    fi
+  else
+    printf '{"type":"build","unit":"%s","result":"fail","log":"build/%s/build.log"}\\n' "$id" "$id" >> "$OUT"
+    echo "== $id BUILD FAILED (see build/$id/build.log)"
+  fi
+done
+echo ""; echo "Results: $OUT  ->  SPIDer V-model > SWE.4 > [실행 결과 가져오기]"
+`;
+const UT_RUN_BAT = `@echo off
+rem SPIDer QA Agent - SWE.4 host unit test runner (MinGW-w64 gcc on PATH). Coverage: use run_tests.sh (Git Bash / MSYS2 / WSL)
+setlocal enabledelayedexpansion
+chcp 65001 >nul
+cd /d "%~dp0"
+set OUT=swe4_results.jsonl
+if exist %OUT% del %OUT%
+if exist build rmdir /s /q build
+mkdir build
+where gcc >nul 2>nul || (echo gcc not found - install MinGW-w64 and add to PATH & exit /b 2)
+for /f "delims=" %%v in ('gcc -dumpfullversion') do set CCV=%%v
+echo {"type":"run","ver":"${UT_VER}","at":"%date% %time%","cc":"gcc !CCV!","os":"Windows","coverage":false}>> %OUT%
+for /d %%D in (units\\*) do (
+  set ID=%%~nxD
+  mkdir build\\!ID!
+  set T=
+  for %%F in (%%D\\test_*.c) do set T=%%F
+  gcc -std=c99 -Wall -Wextra -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter -I stubs -I framework -I %%D -o build\\!ID!\\run.exe !T! framework\\spider_test.c 2> build\\!ID!\\build.log
+  if exist build\\!ID!\\run.exe (
+    echo {"type":"build","unit":"!ID!","result":"ok"}>> %OUT%
+    set SPIDER_RESULTS=%CD%\\%OUT%
+    build\\!ID!\\run.exe
+  ) else (
+    echo {"type":"build","unit":"!ID!","result":"fail","log":"build/!ID!/build.log"}>> %OUT%
+    echo == !ID! BUILD FAILED - see build\\!ID!\\build.log
+  )
+)
+echo.
+echo Results: %OUT%  -^>  SPIDer V-model ^> SWE.4 ^> Import results
+endlocal
+pause
+`;
+// 호스트 시험 패키지 — 경로·내용 목록 (ZIP은 화면에서 묶음)
+export function buildHostTestPackage(model, meta, settings, folder = "SW4106_유닛시험_호스트실행") {
+  const m = normalizeModel(model); const S = { ...DD_DEFAULT, ...(settings || ddSettings(m)) };
+  if (S.target !== "CP") return { files: [], units: [], skipped: [], note: "AUTOSAR Adaptive(C++) 호스트 실행은 2단계 — 현재는 Classic(C)만 지원" };
+  const files = [], units = [], skipped = [];
+  (m.units.SW || []).filter(u => u.dd?.classes?.length).forEach(u => {
+    let code = u.dd.code && u.dd.code.target === "CP" ? u.dd.code : null;
+    if (!code) { try { code = generateCode(u, m, meta, S, null); } catch (_) { code = null; } }
+    if (!code) { skipped.push({ id: u.id, reason: "코드 생성 실패" }); return; }
+    const cases = [...ruleUnitTests(u), ...arr(u.ut?.cases).filter(c => c.origin === "ai")];   // 규칙 케이스는 항상 현재 설계로 다시 만든다(결정적)
+    const dir = `${folder}/units/${u.id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+    code.files.forEach(f => files.push({ path: `${dir}/${f.name}`, content: f.text }));
+    files.push({ path: `${dir}/test_${cid(u.id)}.c`, content: utTestSource(u, code, cases) });
+    units.push({ id: u.id, name: u.name, cases: cases.length, ai: cases.filter(c => c.origin === "ai").length, codeHash: utCodeHash(code), codeOrigin: u.dd.code ? (u.dd.code.origin || "") : "rule" });
+  });
+  files.push({ path: `${folder}/stubs/Std_Types.h`, content: UT_STD_TYPES }, { path: `${folder}/framework/spider_test.h`, content: UT_FW_H }, { path: `${folder}/framework/spider_test.c`, content: UT_FW_C },
+    { path: `${folder}/run_tests.sh`, content: UT_RUN_SH }, { path: `${folder}/run_tests.bat`, content: UT_RUN_BAT.replace(/\n/g, "\r\n") });
+  files.push({ path: `${folder}/README.txt`, content: [
+    `SWE.4 유닛 시험 — 호스트 실행 패키지 (${UT_VER}) · ${meta?.name || ""}`, ``,
+    `무엇인가`, `  SWE.3에서 생성한 C 소스를 PC에서 빌드·실행해 유닛별로 검증합니다. RTE는 시험용 스텁(가짜 버퍼)으로 바꿔 입력을 넣고 출력을 확인합니다.`,
+    `  케이스: 규칙(초기화·출력 갱신·견고성) + AI 초안(할당 요구 근거의 입력→기대 출력, 기대값은 요구·설계 원문 수치만 사용).`, ``,
+    `필요한 것`, `  gcc (Linux 기본 / Windows는 MinGW-w64 또는 MSYS2). 외부 다운로드 없음.`, ``,
+    `실행`, `  Linux·macOS·Git Bash·WSL : sh run_tests.sh        (커버리지 포함: COVERAGE=1 sh run_tests.sh)`, `  Windows 명령 프롬프트     : run_tests.bat          (커버리지는 run_tests.sh 사용)`, ``,
+    `결과`, `  swe4_results.jsonl 이 만들어집니다. SPIDer V-모델 › SWE.4 › [실행 결과 가져오기]로 올리면 SW 유닛 검증 결과서(SW4106)에 반영됩니다.`,
+    `  빌드 실패는 build/<유닛>/build.log 를 보세요 — 실패도 결과로 기록됩니다.`, ``,
+    `주의`, `  · 호스트 실행(SIL)은 로직 검증입니다. 타깃 MCU의 타이밍·메모리·인터럽트 동작은 보증하지 않으며, 타깃·HILS 검증을 대체하지 않습니다.`,
+    `  · stubs/Std_Types.h 는 시험 전용입니다. 타깃 빌드에는 BSW가 제공하는 헤더를 쓰세요.`,
+    `  · 시험 파일은 유닛 .c 를 #include 해 내부 상태(static)까지 확인합니다 — 화이트박스 유닛 시험의 일반 기법입니다.`,
+    `  · MISRA 최종 판정은 ${S.tools.join(" · ")} 결과로 합니다.`, ``,
+    `유닛 ${units.length}개 · 케이스 ${units.reduce((a, x) => a + x.cases, 0)}건 (AI 초안 ${units.reduce((a, x) => a + x.ai, 0)}건)${skipped.length ? ` · 제외 ${skipped.length}개` : ""}`,
+  ].join("\r\n") });
+  return { files, units, skipped, note: "" };
+}
+// 실행 결과(JSON Lines) 파싱
+export function parseUtResults(text) {
+  const out = { run: null, cases: [], builds: [], coverage: [], bad: 0 };
+  String(text || "").split(/\r?\n/).forEach(l => {
+    const s = l.trim(); if (!s) return;
+    let o; try { o = JSON.parse(s); } catch (_) { out.bad++; return; }
+    if (o.type === "run") out.run = o; else if (o.type === "case") out.cases.push(o); else if (o.type === "build") out.builds.push(o); else if (o.type === "coverage") out.coverage.push(o);
+  });
+  return out;
+}
+// 결과 반영 — model.utRuns(최근 10회) + 유닛별 요약. 코드가 실행 후 바뀌었으면 stale 표시
+export function applyUtResults(model, parsed, fileName = "") {
+  const m = normalizeModel(model);
+  const known = new Set((m.units.SW || []).map(u => u.id));
+  const cases = parsed.cases.filter(c => known.has(c.unit));
+  if (!cases.length && !parsed.builds.some(b => known.has(b.unit))) throw new Error("이 프로젝트의 유닛 결과가 없습니다 — 다른 프로젝트의 결과 파일이거나 실행이 되지 않았습니다.");
+  const units = {};
+  (m.units.SW || []).forEach(u => {
+    const cs = cases.filter(c => c.unit === u.id); const b = parsed.builds.find(x => x.unit === u.id); const cv = parsed.coverage.find(x => x.unit === u.id);
+    if (!cs.length && !b) return;
+    const pass = cs.filter(c => c.result === "pass").length;
+    units[u.id] = { build: b ? b.result : (cs.length ? "ok" : ""), warnings: b?.warnings ?? null, cases: cs.length, pass, fail: cs.length - pass,
+      result: b && b.result === "fail" ? "Fail" : cs.length && pass === cs.length ? "Pass" : cs.length ? "Fail" : "Not executed",
+      code: cs[0]?.code || "", coverage: cv ? { stmt: Number(cv.stmt), stmtN: Number(cv.stmtN), branch: Number(cv.branch), branchN: Number(cv.branchN) } : null };
+  });
+  const run = { at: new Date().toISOString(), ranAt: parsed.run?.at || "", cc: parsed.run?.cc || "", os: parsed.run?.os || "", ver: parsed.run?.ver || "", coverage: !!parsed.run?.coverage, file: str(fileName, 120),
+    cases: cases.map(c => ({ unit: c.unit, case: c.case, origin: c.origin, reqs: c.reqs, result: c.result, checks: c.checks, failed: c.failed, detail: str(c.detail, 300) })), units };
+  m.utRuns = [...arr(m.utRuns), run].slice(-10);
+  return { model: m, run };
+}
+// 최신 실행 결과 + 현재 코드와의 일치 여부
+export function utLatest(model) {
+  const m = normalizeModel(model); const run = arr(m.utRuns).slice(-1)[0]; if (!run) return null;
+  const stale = {};
+  (m.units.SW || []).forEach(u => { const r = run.units[u.id]; if (!r) return; const h = utCodeHash(u.dd?.code); stale[u.id] = !!(r.code && h && r.code !== h); });
+  return { run, stale };
 }
