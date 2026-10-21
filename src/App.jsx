@@ -232,7 +232,7 @@ function Spinner({ text="AI 생성 중…" }) {
 }
 
 // 생성 진행 상황 표시 — 단계 라벨 + 퍼센트 바 (AI 호출처럼 오래 걸리는 작업용)
-function GenProgressBar({ progress, subText }) {
+function GenProgressBar({ progress, subText, onStop, stopping }) {
   if (!progress) return null;
   const pct = Math.min(100, Math.round(progress.percent || 0));
   const done = pct >= 100;
@@ -243,7 +243,10 @@ function GenProgressBar({ progress, subText }) {
           {!done && <div style={{ width:14, height:14, border:`2px solid ${T.border}`, borderTop:`2px solid ${T.accent}`, borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />}
           <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{done ? "✓ " : ""}{progress.label}</span>
         </div>
-        <div style={{ fontSize:13, fontWeight:700, color: done ? T.green : T.accent, fontFamily:"monospace", flexShrink:0 }}>{pct}%</div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
+          {onStop && !done && <button onClick={onStop} disabled={stopping} title="AI 작업을 멈춥니다 — 이번 실행은 취소되고 실행 전 상태로 돌아갑니다" style={{ background:"none", border:`1px solid ${T.red}88`, borderRadius:6, color:T.red, cursor: stopping ? "default" : "pointer", fontSize:11, padding:"2px 9px", fontFamily:"inherit", opacity: stopping ? 0.6 : 1 }}>{stopping ? "중지하는 중…" : "■ 중지"}</button>}
+          <div style={{ fontSize:13, fontWeight:700, color: done ? T.green : T.accent, fontFamily:"monospace" }}>{pct}%</div>
+        </div>
       </div>
       <div style={{ height:8, background:T.border, borderRadius:99, overflow:"hidden" }}>
         <div style={{ height:"100%", width:`${pct}%`, background: done ? T.green : T.accent, borderRadius:99, transition:"width .4s ease" }} />
@@ -814,8 +817,18 @@ function LoginGate({ onSuccess }) {
   );
 }
 
+// AI 작업 중지 신호 — run()이 켜고 끈다. 켜지면 대기 중인 호출은 즉시 중단되고 새 호출은 바로 실패한다
+const AI_STOP = { on: false, waiters: new Set() };
+function aiStopNow() { AI_STOP.on = true; AI_STOP.waiters.forEach(f => { try { f(); } catch (_) {} }); AI_STOP.waiters.clear(); }
 // AI JSON 호출 (모듈 공용): /api/chat 프록시 → JSON 파싱·잘림 복구 — 컴포넌트 밖에서도 사용
 async function callClaudeJson(prompt, maxTokens=AI_DEFAULTS.maxTokens, model=AI_DEFAULTS.model) {
+  if (AI_STOP.on) throw new Error("AI_STOPPED");
+  let off = null;
+  const stopP = new Promise((_, rej) => { off = () => rej(new Error("AI_STOPPED")); AI_STOP.waiters.add(off); });
+  try { return await Promise.race([callClaudeJsonInner(prompt, maxTokens, model), stopP]); }
+  finally { AI_STOP.waiters.delete(off); }
+}
+async function callClaudeJsonInner(prompt, maxTokens, model) {
   // /api/chat 는 조직의 Claude API 키를 소비하므로 서버에서 세션 토큰을 검증한다 → 인증 헤더 필수
   const _tk = getToken();
   const res = await fetch("/api/chat", {
@@ -9064,7 +9077,7 @@ function AeSec({ title, right, children }) {
         <AeFoldBtn open={open} onClick={toggle} />
         <div onClick={toggle} title={open ? "눌러서 접기" : "눌러서 펼치기"} style={{ fontSize: 12, fontWeight: 700, flex: 1, cursor: "pointer", userSelect: "none" }}>{title}</div>{right}
       </div>
-      {here && (rc.busy || rc.prog) && <GenProgressBar progress={rc.prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
+      {here && (rc.busy || rc.prog) && <GenProgressBar progress={rc.prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 멈추려면 ■ 중지(이번 실행 취소)." onStop={rc.stop} stopping={rc.stopping} />}
       {here && rc.runErr && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 8 }}>{rc.runErr}</div>}
       {open && children}
     </div>
@@ -9151,11 +9164,23 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     if (busy) return;
     const el = clickSec.current;
     setRunAt(el ? { anchor: el.getAttribute("data-aesec"), el, tab } : null);
+    const snap = model;   // 중지하면 이 상태로 되돌린다
+    AI_STOP.on = false; setStopping(false);
     setBusy(true); setErr(null); setRunErr(null); setNote(null); setProg({ percent: 3, label });
-    try { const msg = await fn(); setProg({ percent: 100, label: msg || "완료" }); setTimeout(() => setProg(null), 2500); }
-    catch (e) { setRunErr(`${label} 실패: ${e.message}`); setProg(null); }
+    try {
+      const msg = await fn();
+      if (AI_STOP.on) { setModel(snap); setProg(null); setNote(`■ '${label}'을(를) 중지했습니다 — 이번 실행은 취소되어 실행 전 상태 그대로입니다.`); }
+      else { setProg({ percent: 100, label: msg || "완료" }); setTimeout(() => setProg(null), 2500); }
+    }
+    catch (e) {
+      if (AI_STOP.on || e?.message === "AI_STOPPED") { setModel(snap); setProg(null); setNote(`■ '${label}'을(를) 중지했습니다 — 이번 실행은 취소되어 실행 전 상태 그대로입니다.`); }
+      else { setRunErr(`${label} 실패: ${e.message}`); setProg(null); }
+    }
+    AI_STOP.on = false; setStopping(false);
     setBusy(false);
   }
+  const [stopping, setStopping] = useState(false);
+  const stopRun = () => { setStopping(true); aiStopNow(); };
   const sysCompName = () => Object.fromEntries(model.comps.SYS.map(c => [c.id, c.name]));
 
   // ── 11) 3단 교차검토: ① 규칙 검사 → ② 검토 AI 의견(/api/review, 생성 AI와 다른 모델) → ③ QA 담당자 판정 ──
@@ -10162,7 +10187,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const procMark = st => st === "done" ? "✓" : st === "partial" ? "●" : "○";
   const procColor = st => st === "done" ? T.green : st === "partial" ? T.amber : T.muted;
   const runHere = !!(runAt && runAt.el && runAt.el.isConnected && runAt.tab === tab);
-  const runCtx = { anchor: runHere ? runAt.anchor : null, busy, prog, runErr };
+  const runCtx = { anchor: runHere ? runAt.anchor : null, busy, prog, runErr, stop: busy ? stopRun : null, stopping };
 
   return (
     <AeRunCtx.Provider value={runCtx}>
@@ -10248,7 +10273,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 {docs.length > 0 && <> · 산출물: {docs.map(d => `${d.title} (${vs.map(v => `${v === "3.1" ? "3.1 WP" : "4.0 정보항목"} ${d.wp[v]}`).join(" / ")})`).join(" · ")}</>}
                 {pair && <> · 검증 대상: <button onClick={() => goProc(pair.id)} style={{ ...small, padding: "0 6px", fontSize: 10 }}>{pair.id} {pair.short}</button></>}
               </div>); })()}
-          {(busy || prog) && !runHere && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
+          {(busy || prog) && !runHere && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 멈추려면 ■ 중지(이번 실행 취소)." onStop={busy ? stopRun : null} stopping={stopping} />}
           {runErr && !runHere && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{runErr}</div>}
           {err && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{err}</div>}
           {note && <div style={{ color: T.green, fontSize: 11.5, padding: 9, background: T.green + "11", borderRadius: 8, marginBottom: 10 }}>{note}</div>}
@@ -10573,7 +10598,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 <Btn variant="outline" onClick={() => { if (model.tests.some(t => t.level === cur && t.origin !== "manual") && !window.confirm(`${AE.TEST_LEVELS[cur].proc} ${AE.TEST_LEVELS[cur].label} 시험을 다시 만듭니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.${(() => { const n = model.tests.filter(t => t.level === cur && t.origin !== "manual" && t.result?.state).length; return n ? `\nⓘ 입력한 검증 결과 ${n}건: 대상·제목이 그대로인 시험은 번호·결과가 유지되고, 내용이 바뀐 시험의 결과만 사라집니다 — 필요하면 먼저 [⬇ 결과 기록 양식]으로 보관하세요.` : ""; })()}\n빠진 것만 채우려면 [빠진 시험만 추가]를 쓰세요.\n\n계속할까요?`)) return; genTests([cur]); }} disabled={busy} title={`${AE.TEST_LEVELS[cur].proc} ${AE.TEST_LEVELS[cur].label}의 시험만 규칙${model.useAI ? "+AI" : ""}로 새로 만듭니다 — 직접 작성·수정한 시험(✎)은 보존`} style={{ fontSize: 11, padding: "4px 10px" }}>{model.tests.some(t => t.level === cur) ? `↻ ${AE.TEST_LEVELS[cur].proc} 시험 다시 만들기` : `${AE.TEST_LEVELS[cur].proc} 시험 만들기`}</Btn>
                 <Btn variant={model.tests.length ? "outline" : undefined} onClick={() => { if (model.tests.some(t => t.origin !== "manual") && !window.confirm(`모든 검증 단계(${lvKeys.map(k => AE.TEST_LEVELS[k].proc).join("·")})의 시험을 다시 만듭니다(직접 작성·수정한 시험은 유지).\n규칙·AI로 만든 시험의 번호가 다시 매겨져 교차검토 기록과 어긋날 수 있습니다.${(() => { const n = model.tests.filter(t => t.origin !== "manual" && t.result?.state).length; return n ? `\nⓘ 입력한 검증 결과 ${n}건: 대상·제목이 그대로인 시험은 번호·결과가 유지되고, 내용이 바뀐 시험의 결과만 사라집니다 — 필요하면 먼저 단계별 [⬇ 결과 기록 양식]으로 보관하세요.` : ""; })()}\n빠진 것만 채우려면 [빠진 시험만 추가]를 쓰세요.\n\n계속할까요?`)) return; genTests(lvKeys); }} disabled={busy} title={`${lvKeys.map(k => AE.TEST_LEVELS[k].proc).join("·")} 전체를 규칙${model.useAI ? "(경계값·결함 주입·인터페이스) + AI(정상 시나리오 서술)" : ""}로 만듭니다 — 직접 작성·수정한 시험(✎)은 보존`} style={{ fontSize: 11, padding: "4px 12px" }}>{model.tests.length ? `↻ 모든 검증 단계 시험 다시 만들기 (${lvKeys.length}단계)` : `모든 검증 단계 시험 만들기 (${lvKeys.length}단계)`}</Btn>
               </div>
-              {runCtx.anchor === "verif-bar" && (busy || prog) && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
+              {runCtx.anchor === "verif-bar" && (busy || prog) && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 멈추려면 ■ 중지(이번 실행 취소)." onStop={busy ? stopRun : null} stopping={stopping} />}
               {runCtx.anchor === "verif-bar" && runErr && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{runErr}</div>}
               <div className="ae-hint" style={{ fontSize: 10, color: T.muted, marginBottom: 8 }}>규칙 엔진: 요구 문장의 수치 조건(이상·이하·초과·미만·범위·이내)에서 경계값·타이밍 TC, 고장·진단 문구에서 결함 주입 TC, 인터페이스에서 연동·주기·통신이상 TC를 결정적으로 생성합니다. {model.useAI ? "AI는 정상 시나리오 절차 서술에만 사용합니다." : ""} 수동 추가·수정한 항목은 재생성 시 보존됩니다.</div>
               {cur === "SWE4" && (() => {
