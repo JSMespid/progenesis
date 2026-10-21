@@ -2067,7 +2067,7 @@ export function aeProgress(model, opts = {}) {
   { const mi = cov.filter(c => c.group === "verif" && c.missing.length); add("verif", !m.tests.length ? "todo" : mi.length ? "partial" : "done", m.tests.length ? `시험 ${m.tests.length}건` : "요구·인터페이스·유닛마다 시험 생성", mi[0] ? { cov: mi[0] } : { tab: "verif" }); }
   add("trace", !m.reqs.SYS.length ? "todo" : errs.length || openLinks ? "partial" : "done", errs.length || openLinks ? `오류 ${errs.length} · 변경 영향 확인 대기 ${openLinks}` : "오류 없음", { tab: "trace" });
   { const tot = rcov.reduce((a, c) => a + c.total, 0), rv = rcov.reduce((a, c) => a + c.reviewedAny, 0), op = rcov.reduce((a, c) => a + c.open, 0);
-    add("review", tot && rv === tot && !op ? "done" : rv ? "partial" : "todo", tot ? `검토 ${rv}/${tot} · 미판정 ${op}` : "검토할 산출물 없음", { tab: "review" }); }
+    add("review", tot && rv === tot && !op ? "done" : rv ? "partial" : "todo", tot ? `전체 항목 ${tot}건 중 검토 끝남 ${rv}건 · 판정 기다리는 의견 ${op}건` : "검토할 산출물 없음", { tab: "review" }); }
   // 다음 할 일: 순서상 첫 미완료 단계. 단, 앞 단계가 아직이면 뒤 단계의 '부분'은 보이지 않게 한다
   const next = steps.find(s => s.state !== "done") || null;
   const done = steps.filter(s => s.state === "done").length;
