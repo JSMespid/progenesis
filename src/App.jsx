@@ -10570,23 +10570,46 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     </details>
                   </AeSec>);
               })()}
+              {ts.length > 0 && (() => {
+                const regN = ts.filter(t => t.regression).length;
+                const setReg = fn => set(n => { n.tests = n.tests.map(t => ts.some(x => x.id === t.id) ? { ...t, regression: fn(t) } : t); });
+                return (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 11, padding: "6px 10px", marginBottom: 6, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8 }}>
+                    <span title={AE.REGRESSION_ABOUT}>회귀 시험 대상 <b>{regN}</b> / {ts.length}건 <span style={{ color: T.muted, cursor: "help" }}>ⓘ</span></span>
+                    <span style={{ color: T.muted, fontSize: 10 }}>— 설계·코드가 바뀐 뒤 다시 수행할 시험 (검증 명세서의 '선택 세트·회귀 대상'에 그대로 기록)</span>
+                    <span style={{ flex: 1 }} />
+                    <button onClick={() => setReg(() => true)} style={small}>모두 선택</button>
+                    <button onClick={() => setReg(() => false)} style={small}>모두 해제</button>
+                    <button onClick={() => setReg(t => AE.defaultRegression(model, t))} title={AE.REGRESSION_ABOUT} style={small}>기본값으로</button>
+                  </div>);
+              })()}
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {ts.length > 0 && (
+                  <div style={{ display: "grid", gridTemplateColumns: "84px 110px 1fr 170px 64px 60px", gap: 6, alignItems: "center", fontSize: 10, color: T.muted, padding: "0 9px" }}>
+                    <span>시험 ID</span><span>검증 대상</span><span>제목</span><span>기법</span>
+                    <span title={AE.REGRESSION_ABOUT} style={{ textAlign: "center", cursor: "help" }}>회귀 대상 ⓘ</span><span />
+                  </div>)}
                 {ts.map(t => { const i = model.tests.indexOf(t); return (
                   <div key={t.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", background: T.bg }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "84px 110px 1fr 150px 40px 46px 40px", gap: 6, alignItems: "center" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "84px 110px 1fr 170px 64px 60px", gap: 6, alignItems: "center" }}>
                       <span style={{ fontFamily: "monospace", fontSize: 10, color: T.accent }}>{t.id}</span>
                       <span style={{ fontSize: 9.5, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={(t.targets || []).join(", ")}>{(t.targets || []).join(", ")}</span>
-                      <input value={t.title || ""} onChange={e => set(n => { n.tests[i] = { ...n.tests[i], title: e.target.value, origin: "manual" }; })} style={inp} />
+                      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                        <input value={t.title || ""} onChange={e => set(n => { n.tests[i] = { ...n.tests[i], title: e.target.value, origin: "manual" }; })} style={inp} />
+                        {t.origin === "manual" && <span title="직접 작성·수정한 시험 — [다시 생성]해도 덮어쓰지 않고 보존됩니다" style={{ fontSize: 9.5, color: T.amber, whiteSpace: "nowrap" }}>✎ 수정함</span>}
+                      </div>
                       <span style={{ fontSize: 9.5, color: T.muted }}>{t.technique}</span>
-                      <label style={{ fontSize: 9.5 }} title="회귀 대상 (3.1 08-50 / 4.0 08-58)"><input type="checkbox" checked={!!t.regression} onChange={e => set(n => { n.tests[i] = { ...n.tests[i], regression: e.target.checked }; })} />회귀</label>
-                      <span style={{ fontSize: 9, color: t.origin === "manual" ? T.amber : t.origin === "ai" ? T.accent : T.green }}>{t.origin === "rule" ? "규칙" : t.origin === "ai" ? "AI" : "수동"}</span>
+                      <span style={{ textAlign: "center" }}><input type="checkbox" checked={!!t.regression} title={t.regression ? "회귀 시험 대상 — 변경 시 다시 수행" : "회귀 대상 아님"} onChange={e => set(n => { n.tests[i] = { ...n.tests[i], regression: e.target.checked }; })} /></span>
                       <button onClick={() => setOpen(o => ({ ...o, [t.id]: !o[t.id] }))} style={{ ...small, color: T.muted, padding: "2px 0" }}>{open[t.id] ? "접기" : "상세"}</button>
                     </div>
                     {open[t.id] && (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 6 }}>
                         {[["precondition", "사전조건(진입 기준)"], ["steps", "절차 (';' 구분)"], ["expected", "기대 결과"], ["passCriteria", "합격 기준"], ["env", "검증 환경"]].map(([k, l]) => (
                           <div key={k}><div style={{ fontSize: 10, color: T.muted }}>{l}</div><textarea value={t[k] || ""} onChange={e => set(n => { n.tests[i] = { ...n.tests[i], [k]: e.target.value, origin: "manual" }; })} style={ta} /></div>))}
-                        <div style={{ display: "flex", alignItems: "flex-end" }}><button onClick={() => set(n => { n.tests.splice(i, 1); })} style={{ ...small, color: T.red }}>삭제</button></div>
+                        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 6 }}>
+                          <span style={{ fontSize: 10, color: T.muted }}>만든 방식: <b style={{ color: t.origin === "manual" ? T.amber : t.origin === "ai" ? T.accent : T.green }}>{t.origin === "rule" ? "규칙(요구·인터페이스 조건에서 결정적으로 도출)" : t.origin === "ai" ? "AI 초안" : "직접 작성·수정 (재생성 시 보존)"}</b></span>
+                          <button onClick={() => set(n => { n.tests.splice(i, 1); })} style={{ ...small, color: T.red }}>삭제</button>
+                        </div>
                       </div>)}
                   </div>); })}
                 {!ts.length && <div style={{ fontSize: 11, color: T.muted, padding: 8 }}>검증 수단 없음 — 생성 버튼을 누르세요.</div>}

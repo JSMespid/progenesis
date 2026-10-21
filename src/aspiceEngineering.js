@@ -528,6 +528,16 @@ export function ruleTestsForReq(req, testLevel) {
   return tests;
 }
 
+// 회귀 시험 대상 기본값 — 생성 규칙과 같은 기준: 결함 주입·인터페이스 통합 시험은 회귀, 요구 기반은 우선순위 '상'·안전 관련일 때, 유닛·컴포넌트 거동은 아님
+export function defaultRegression(model, t) {
+  const m = normalizeModel(model); const tl = TEST_LEVELS[t?.level]; if (!tl) return false;
+  if (/결함 주입|fault injection/i.test(String(t.technique || ""))) return true;
+  if (tl.targetKind === "unit") return false;
+  const tg = t.targets || [];
+  if (tl.targetKind === "if") return (m.interfaces[tl.level] || []).some(i => tg.includes(i.id));
+  return (m.reqs[tl.level] || []).some(r => tg.includes(r.id) && (r.priority === "상" || !!r.safety));
+}
+export const REGRESSION_ABOUT = "회귀 시험 대상 — 설계·코드가 바뀐 뒤 다시 수행할 시험 (3.1 08-50 회귀 전략 / 4.0 08-58 검증 수단 선택 세트). 기본값: 인터페이스 통합·결함 주입 시험은 체크, 요구 기반은 우선순위 '상'·안전 관련일 때 체크, 유닛·컴포넌트 거동 시험은 해제.";
 // 인터페이스(요소 간 관계) → 통합 검증 수단 (SYS.4 / SWE.5 / HWE.3)
 export function ruleTestsForInterface(itf, testLevel, compName = {}) {
   const from = compName[itf.from] || itf.from || "?";
