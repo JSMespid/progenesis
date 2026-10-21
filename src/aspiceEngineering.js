@@ -600,7 +600,7 @@ export function normalizeModel(m) {
     modes: [...(x.modes || [])], rationale: { ...e.rationale, ...(x.rationale || {}) },
     tests: [...(x.tests || [])],
     linkReview: { ...(x.linkReview || {}) }, reqSnaps: { ...(x.reqSnaps || {}) }, reviewLog: [...(x.reviewLog || [])],
-    units: { SW: [...((x.units || {}).SW || [])].map(repairUnitDD) },
+    units: { SW: [...((x.units || {}).SW || [])].map(repairUnitDD).map(repairCodeInit) },
     aiReview: { runs: [...((x.aiReview || {}).runs || [])], findings: [...((x.aiReview || {}).findings || [])], hashes: { ...((x.aiReview || {}).hashes || {}) }, edits: [...((x.aiReview || {}).edits || [])] },
   };
 }
@@ -2646,6 +2646,27 @@ function ruleBody(o, unit, lang) {
   const retDecl = o.ret === "void" ? "" : lang === "C" ? (o.ret === "Std_ReturnType" ? "Std_ReturnType ret = E_OK;\n" : `${cT(o.ret, new Set())} ret = (${cT(o.ret, new Set())})0;\n`) : (o.ret === "void" ? "" : `auto ret = ${o.ret === "Std_ReturnType" ? "ara::core::Result<void>{}" : cppT(o.ret, new Set()) + "{}"};\n`);
   return retDecl + steps.map((st, i) => `/* step ${i + 1}: ${st} */`).join("\n") + `\n/* traces: ${(o.reqs || unit.reqs || []).join(", ") || "-"} */` + (o.ret === "void" ? "" : "\nreturn ret;");
 }
+// 구조체(비스칼라) 자료형 — (Type)0 캐스트 대입이 C에서 컴파일 오류이므로 memset으로 0 초기화한다
+function nonScalarTypes(dd) { return new Set(arr(dd?.dataTypes).filter(t => t.base === "struct" || /\[/.test(String(t.base || ""))).map(t => cid(t.name))); }
+function initAttrC(cls, a, own, nonScalar) {
+  const t = cT(a.type, own);
+  return nonScalar.has(t) ? `    (void)memset(&${cls}_Data.${a.name}, 0, sizeof(${cls}_Data.${a.name}));` : `    ${cls}_Data.${a.name} = (${t})${/^[\d.]+$/.test(a.init) ? a.init : "0"};`;
+}
+// 이미 저장된 CP 코드의 같은 결함을 결정적으로 고친다(AI가 쓴 연산 본문은 그대로 유지) — 생성기 수정본과 같은 결과
+export function repairCodeInit(u) {
+  const dd = u && u.dd; const code = dd && dd.code;
+  if (!code || code.target !== "CP" || !Array.isArray(code.files)) return u;
+  const own = new Set(arr(dd.dataTypes).map(t => cid(t.name))); const ns = nonScalarTypes(dd);
+  if (!ns.size) return u;
+  let changed = false;
+  const files = code.files.map(f => {
+    if (!/\.c$/.test(f.name)) return f;
+    let text = f.text.replace(/^(\s*)(\w+)_Data\.(\w+) = \((\w+)\)[\d.]+;$/gm, (all, sp, c, at, ty) => (ns.has(ty) ? (changed = true, `${sp}(void)memset(&${c}_Data.${at}, 0, sizeof(${c}_Data.${at}));`) : all));
+    if (text !== f.text && !/#include <string\.h>/.test(text)) text = text.replace(/(\*\/\n)(#include ")/, `$1#include <string.h>   /* memset: zero-init of structured data (MISRA C:2023 Dir 4.x — library use documented) */\n$2`);
+    return text === f.text ? f : { ...f, text };
+  });
+  return changed ? { ...u, dd: { ...dd, code: { ...code, files, repaired: "struct-init" } } } : u;
+}
 export function generateCode(unit, model, meta, settings, ai = null) {
   const S = { ...DD_DEFAULT, ...(settings || {}) }; const dd = unit.dd; if (!dd) return null;
   const m = normalizeModel(model); const u = (dd.classes.find(c => c.stereotype === "SWC") || dd.classes[0])?.name || unitIdent(unit); const own = new Set(dd.dataTypes.map(t => cid(t.name)));
@@ -2661,6 +2682,8 @@ export function generateCode(unit, model, meta, settings, ai = null) {
   const runnableNames = new Set(dd.runnables.map(r => cid(r.name)));
   if (S.target === "CP") {
     const lang = "C";
+    const nonScalar = nonScalarTypes(dd);
+    const needMemset = dd.classes.some(c => c.attrs.some(a => nonScalar.has(cT(a.type, own))));
     const typesH = `${u}_Types.h`, rteH = `Rte_${u}.h`, cfgH = `${u}_Cfg.h`, hdr = `${u}.h`, src = `${u}.c`;
     const guard = f => f.toUpperCase().replace(/[^A-Z0-9]/g, "_");
     // Types
@@ -2686,8 +2709,8 @@ export function generateCode(unit, model, meta, settings, ai = null) {
       const body = sanitizeBody(bodies[cid(o.name)] || ruleBody(o, unit, lang), lang);
       return `/*------------------------------------------------------------------\n * ${o.name} — ${o.desc || ""}\n${o.pre ? ` * Pre : ${o.pre}\n` : ""}${o.post ? ` * Post: ${o.post}\n` : ""} * ${traceCmt(o).replace(/\/\*|\*\//g, "").trim()}\n *----------------------------------------------------------------*/\n${o.vis === "-" ? "static " : ""}${sig}\n{\n${indent(body)}\n}\n`; };
     const smFunc = stEnum.length ? `/* State machine step — transitions from SWE.3 state machine */\nstatic void ${u}_StateMachine(void)\n{\n    switch (${u}_State)\n    {\n${dd.states.states.map(s => { const outs = dd.states.transitions.map((t, i) => ({ t, i })).filter(x => x.t.from === s.name); return `        case ${`${u}_ST_${s.name}`.toUpperCase()}:\n        {\n${outs.map(({ t, i }) => `            /* ${t.trigger}${t.guard ? ` [${t.guard}]` : ""} — traces: ${(t.reqs || []).join(", ") || "-"} */\n            if (${guards[i] || "FALSE /* TODO guard: " + (t.guard || t.trigger) + " */"})\n            {\n${t.effect ? `                /* effect: ${t.effect} */\n` : ""}                ${u}_State = ${`${u}_ST_${t.to}`.toUpperCase()};\n            }\n`).join("            else\n")}            break;\n        }\n`; }).join("")}        default:\n        {\n            ${u}_State = ${stEnum[0]};   /* defensive: unknown state → re-init (MISRA switch default) */\n            break;\n        }\n    }\n}\n` : "";
-    files.push({ name: src, text: BANNER(src, unit, meta, S, lang) + `#include "${hdr}"\n#include "${cfgH}"\n#include "${rteH}"\n\n/*==================================================================\n * Internal data (static — no external linkage, MISRA C:2023 Rule 8.7/8.9)\n *================================================================*/\n${stEnum.length ? `static ${u}_StateType ${u}_State = ${stEnum[0]};\n` : ""}${dd.classes.filter(c => c.attrs.length).map(c => `static ${c.name}_DataType ${c.name}_Data;`).join("\n")}\n\n/* Port buffers */\n${dd.ports.flatMap(p => p.elements.map(e => `static ${cT(e.type, own)} ${p.name}_${e.name};`)).join("\n")}\n\n/* Private operations */\n${allOps.filter(o => o.vis === "-").map(o => `static ${cT(o.ret, own)} ${o.name}(${o.params.length ? o.params.map(p => `${p.dir === "in" ? "const " : ""}${cT(p.type, own)}${p.dir === "in" ? "" : " *"} ${p.name}`).join(", ") : "void"});`).join("\n")}\n${stEnum.length ? `static void ${u}_StateMachine(void);\n` : ""}\n/*==================================================================\n * Runnable entities\n *================================================================*/\n` +
-      dd.runnables.map(r => `/* ${r.name} — ${r.desc || ""} (${r.trigger}${r.periodMs ? `, ${r.periodMs}ms` : ""}) traces: ${(r.reqs || []).join(", ") || "-"} */\nvoid ${cid(r.name)}(void)\n{\n${r.trigger === "init" ? `    ${stEnum.length ? `${u}_State = ${stEnum[0]};\n` : ""}${dd.classes.filter(c => c.attrs.length).map(c => c.attrs.map(a => `    ${c.name}_Data.${a.name} = (${cT(a.type, own)})${/^[\d.]+$/.test(a.init) ? a.init : "0"};`).join("\n")).join("\n")}\n` : ""}${r.reads.flatMap(pn => (dd.ports.find(p => p.name === pn)?.elements || []).map(e => `    (void)Rte_Read_${pn}_${e.name}(&${pn}_${e.name});`)).join("\n")}\n${(() => { const self = allOps.find(o => o.name === cid(r.name)); return self ? indent(sanitizeBody(bodies[cid(self.name)] || ruleBody({ ...self, ret: "void" }, unit, lang), lang)) + "\n" : ""; })()}${r.calls.filter(c => allOps.some(o => o.name === c) && !runnableNames.has(c)).map(c => { const o = allOps.find(x => x.name === c); return `    ${o.ret === "void" ? "" : "(void)"}${c}(${o.params.map(p => p.dir === "in" ? `${p.name}` : `&${p.name}`).join(", ")});   /* ${o.desc || ""} */`; }).join("\n")}\n${stEnum.length && r.trigger !== "init" ? `    ${u}_StateMachine();\n` : ""}${r.writes.flatMap(pn => (dd.ports.find(p => p.name === pn)?.elements || []).map(e => `    (void)Rte_Write_${pn}_${e.name}(${pn}_${e.name});`)).join("\n")}\n}\n`).join("\n") +
+    files.push({ name: src, text: BANNER(src, unit, meta, S, lang) + `${needMemset ? "#include <string.h>   /* memset: zero-init of structured data (MISRA C:2023 Dir 4.x — library use documented) */\n" : ""}#include "${hdr}"\n#include "${cfgH}"\n#include "${rteH}"\n\n/*==================================================================\n * Internal data (static — no external linkage, MISRA C:2023 Rule 8.7/8.9)\n *================================================================*/\n${stEnum.length ? `static ${u}_StateType ${u}_State = ${stEnum[0]};\n` : ""}${dd.classes.filter(c => c.attrs.length).map(c => `static ${c.name}_DataType ${c.name}_Data;`).join("\n")}\n\n/* Port buffers */\n${dd.ports.flatMap(p => p.elements.map(e => `static ${cT(e.type, own)} ${p.name}_${e.name};`)).join("\n")}\n\n/* Private operations */\n${allOps.filter(o => o.vis === "-").map(o => `static ${cT(o.ret, own)} ${o.name}(${o.params.length ? o.params.map(p => `${p.dir === "in" ? "const " : ""}${cT(p.type, own)}${p.dir === "in" ? "" : " *"} ${p.name}`).join(", ") : "void"});`).join("\n")}\n${stEnum.length ? `static void ${u}_StateMachine(void);\n` : ""}\n/*==================================================================\n * Runnable entities\n *================================================================*/\n` +
+      dd.runnables.map(r => `/* ${r.name} — ${r.desc || ""} (${r.trigger}${r.periodMs ? `, ${r.periodMs}ms` : ""}) traces: ${(r.reqs || []).join(", ") || "-"} */\nvoid ${cid(r.name)}(void)\n{\n${r.trigger === "init" ? `    ${stEnum.length ? `${u}_State = ${stEnum[0]};\n` : ""}${dd.classes.filter(c => c.attrs.length).map(c => c.attrs.map(a => initAttrC(c.name, a, own, nonScalar)).join("\n")).join("\n")}\n` : ""}${r.reads.flatMap(pn => (dd.ports.find(p => p.name === pn)?.elements || []).map(e => `    (void)Rte_Read_${pn}_${e.name}(&${pn}_${e.name});`)).join("\n")}\n${(() => { const self = allOps.find(o => o.name === cid(r.name)); return self ? indent(sanitizeBody(bodies[cid(self.name)] || ruleBody({ ...self, ret: "void" }, unit, lang), lang)) + "\n" : ""; })()}${r.calls.filter(c => allOps.some(o => o.name === c) && !runnableNames.has(c)).map(c => { const o = allOps.find(x => x.name === c); return `    ${o.ret === "void" ? "" : "(void)"}${c}(${o.params.map(p => p.dir === "in" ? `${p.name}` : `&${p.name}`).join(", ")});   /* ${o.desc || ""} */`; }).join("\n")}\n${stEnum.length && r.trigger !== "init" ? `    ${u}_StateMachine();\n` : ""}${r.writes.flatMap(pn => (dd.ports.find(p => p.name === pn)?.elements || []).map(e => `    (void)Rte_Write_${pn}_${e.name}(${pn}_${e.name});`)).join("\n")}\n}\n`).join("\n") +
       `\n/*==================================================================\n * Unit operations\n *================================================================*/\n` + allOps.filter(o => !runnableNames.has(o.name)).map(opDef).join("\n") + "\n" + smFunc });
     return { target: "CP", lang, files, notes, generatedAt: new Date().toISOString(), origin: ai ? "ai" : "rule" };
   }
@@ -3072,7 +3095,7 @@ export function utContext(unit) {
   return { u, own, inputs: els("R"), outputs: els("P"), states, stEnum: states.map(s => `${u}_ST_${s}`.toUpperCase()),
     inits: runs.filter(r => r.trigger === "init"), runs: runs.filter(r => r.trigger !== "init"),
     dataVars: arr(dd.classes).filter(c => arr(c.attrs).length).map(c => `${c.name}_Data`),
-    attrs: arr(dd.classes).filter(c => arr(c.attrs).length).flatMap(c => c.attrs.filter(a => /^-?[\d.]+$/.test(String(a.init || ""))).map(a => ({ ref: `${c.name}.${a.name}`, c: `${c.name}_Data.${a.name}`, value: Number(a.init) }))) };
+    attrs: arr(dd.classes).filter(c => arr(c.attrs).length).flatMap(c => c.attrs.filter(a => /^-?[\d.]+$/.test(String(a.init || "")) && limOf(a.type).scalar).map(a => ({ ref: `${c.name}.${a.name}`, c: `${c.name}_Data.${a.name}`, value: Number(a.init) }))) };
 }
 // ① 규칙 케이스 — 설계 구조만으로 결정되는 항목
 export function ruleUnitTests(unit) {
