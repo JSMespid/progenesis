@@ -8902,7 +8902,9 @@ ${chunks[i]}`, 6000);
         _stk: it._stk || [],
       }));
       // 재생성 시 ID 무결성: 기존 요구와 매칭되면 기존 ID 유지, 신규만 ID 레지스트리 기준으로 새 번호 (폐기·기존 번호 재사용 금지)
-      const idMatch = matchPrevReqIds(freshRaw, items);
+      // DBC에서 가져온 인터페이스 요구는 원문 도출과 무관한 결정적 결과 — 매칭·교체 대상에서 빼고 끝에 그대로 보존한다
+      const dbcKept = items.filter(x => x._dbc);
+      const idMatch = matchPrevReqIds(freshRaw, items.filter(x => !x._dbc));
       let list = assignReqIds(idMatch.list, reqIdFloor(requirements, items.map(x => x.id)));
       // 이해관계자 요구(STK): 기존 STK와 문장 매칭 → 기존 ID 유지, 신규만 새 번호. 시스템 요구의 stkIds를 전역 키 → STK ID로 변환
       let stkNote = "";
@@ -8976,6 +8978,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
           list = list.map(it => (pendIds.has(it.id) && !it.wbsNo) ? { ...it, wbsNo: "공통" } : it);
         }
       }
+      if (dbcKept.length) list = [...list, ...dbcKept.filter(d => !list.some(x => x.id === d.id))];
       setItems(list);
       setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세${leaves.length ? `·모듈 배정(규칙 ${ruleCnt}건${aiCnt ? ` · AI ${aiCnt}건` : ""})` : ""} 완료${idNote}${stkNote} — 아래에서 검토·수정 후 확정하세요.` });
     } catch (e) { setError("AI 생성 실패: " + e.message); setProg(null); }
@@ -9063,7 +9066,8 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                 <span style={{ fontSize:10, color:T.green }}>✓ 첨부됨 · AI 생성 시 함께 분석되며, {embedded ? "V-모델 저장" : "확정 저장"} 시 원문과 함께 프로젝트에 보관됩니다</span>
               )}
               <div style={{ flex:1 }} />
-              <Btn onClick={() => { if (items.length && !window.confirm(`원문에서 요구를 다시 도출하면 지금 목록(${STK_ON && stk.length ? `이해관계자 ${stk.length}건 · ` : ""}시스템 ${items.length}건)이 AI 결과로 바뀝니다.\n직접 고친 내용도 바뀝니다. 확정하기 전까지 V-모델에는 반영되지 않습니다.${STK_ON && stk.length ? "\n이해관계자 요구의 합의·보류·해당 없음 판정은 원문 문장이 그대로인 요구에만 유지됩니다." : ""}\n\n계속할까요?`)) return; generate(); }} disabled={busy} title="첨부 원문(사양서·회의록 등)에서 이해관계자 요구를 발췌하고 시스템 요구를 도출합니다" style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ 원문에서 다시 도출" : "⚡ 원문에서 요구 도출"}</Btn>
+              {(() => { const derived = items.filter(x => !x._dbc).length, dbcN = items.length - derived, again = derived > 0 || (STK_ON && stk.length > 0);
+              return <Btn onClick={() => { if (again && !window.confirm(`원문에서 요구를 다시 도출하면 지금 목록(${STK_ON && stk.length ? `이해관계자 ${stk.length}건 · ` : ""}시스템 ${derived}건)이 AI 결과로 바뀝니다.\n직접 고친 내용도 바뀝니다. 확정하기 전까지 V-모델에는 반영되지 않습니다.${STK_ON && stk.length ? "\n이해관계자 요구의 합의·보류·해당 없음 판정은 원문 문장이 그대로인 요구에만 유지됩니다." : ""}${dbcN ? `\nDBC에서 가져온 인터페이스 요구 ${dbcN}건은 그대로 유지됩니다.` : ""}\n\n계속할까요?`)) return; generate(); }} disabled={busy} title={`첨부 원문(사양서·회의록 등)에서 이해관계자 요구를 발췌하고 시스템 요구를 도출합니다${dbcN ? ` — DBC 인터페이스 요구 ${dbcN}건은 유지` : ""}`} style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : again ? "⚡ 원문에서 다시 도출" : "⚡ 원문에서 요구 도출"}</Btn>; })()}
             </div>
           </div>)}
           {(busy || prog) && <GenProgressBar progress={prog || { percent:3, label:"요구사항 분석 준비 중…" }} subText="원문 분량·요구사항 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
