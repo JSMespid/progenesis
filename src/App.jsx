@@ -10169,6 +10169,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       });
       newItems.filter(x => x._dbc).forEach(x => { if (!(n.alloc.SYS[x.id] || []).length) n.alloc.SYS[x.id] = [comm.id]; });
       n.inputs.in_dbc = "have";
+      // 가져온 DBC 이력 — 파일 자체는 저장하지 않고 변환 결과와 이력만 남긴다 (같은 파일은 최신 1건으로 갱신)
+      const hist = (n.dbcImports || []).filter(h => !(h.fileName === dbc.fileName && h.own === dbc.own));
+      hist.push({ fileName: dbc.fileName, own: dbc.own, at: new Date().toISOString(), messages: reqs.length, added: add.length, dup: reqs.length - add.length });
+      n.dbcImports = hist.slice(-10);
     });
     setNote(`DBC '${dbc.fileName}' — 노드 ${dbc.own} 기준 인터페이스 요구 ${add.length}건 추가${reqs.length - add.length ? ` (중복 ${reqs.length - add.length}건 제외)` : ""}. 저장 시 시스템 요구사항 명세서·인터페이스 정의서에도 반영됩니다.`);
     setDbc(null);
@@ -10588,7 +10592,15 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   <span>{dbc.fileName}: 메시지 {dbc.parsed.messages.length}개 · 노드 {dbc.parsed.nodes.length}개 — 우리 시스템 노드:</span>
                   <select value={dbc.own} onChange={e => setDbc(d => ({ ...d, own: e.target.value }))} style={{ ...inp, width: 160 }}>{dbc.parsed.nodes.map(x => <option key={x}>{x}</option>)}</select>
                   <span style={{ color: T.muted }}>송신 {dbc.parsed.messages.filter(x => x.tx === dbc.own).length} · 수신 {dbc.parsed.messages.filter(x => x.tx !== dbc.own && x.signals.some(s => s.rx.includes(dbc.own))).length}</span>
-                  <Btn onClick={applyDbc} style={{ fontSize: 11, padding: "4px 12px" }}>인터페이스 요구 추가</Btn>
+                  <Btn onClick={applyDbc} title="DBC의 메시지마다 인터페이스 요구(SYS.2)와 시스템 인터페이스(SYS.3)를 만들어 V-모델에 넣습니다. 파일 자체는 저장하지 않고 변환 결과가 남습니다" style={{ fontSize: 11, padding: "4px 12px" }}>인터페이스 요구 추가</Btn>
+                </div>)}
+              {!dbc && (model.dbcImports || []).length > 0 && (
+                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3 }}>
+                  {(model.dbcImports || []).slice().reverse().map(h => (
+                    <div key={h.fileName + h.own} style={{ fontSize: 10.5, color: T.text }}>
+                      <span style={{ color: T.green }}>✓ 가져옴</span> {h.fileName} · 노드 {h.own} · 메시지 {h.messages}개 → 인터페이스 요구 {h.added}건 추가{h.dup ? ` (이미 있던 ${h.dup}건 제외)` : ""} · <span style={{ color: T.muted }}>{String(h.at).replace("T", " ").slice(0, 16)}</span>
+                    </div>))}
+                  <div style={{ fontSize: 10, color: T.muted }}>결과는 SYS.2 시스템 요구(출처 DBC)와 SYS.3 시스템 인터페이스에 있습니다. DBC가 개정되면 새 파일을 다시 올리세요 — 새로 생긴 메시지만 추가됩니다.</div>
                 </div>)}
               </FileDrop>
             </AeSec>
