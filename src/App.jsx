@@ -10866,6 +10866,26 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               {ReqList({ lv: lv })}
               <button onClick={() => set(n => { n.reqs[lv].push({ id: AE.nextId(AE.REQ_PREFIX[lv], n.reqs[lv], 4), level: lv, parents: [], sysElems: [], title: "", text: "", type: "기능", priority: "중", verifMethod: "Test", verifCriteria: "", status: "Draft", origin: "manual" }); })} style={{ ...small, marginTop: 6 }}>＋ {lv} 요구 추가</button>
             </AeSec>)}
+            {(!sub || sub === "arch") && (() => {
+              // 담당 컴포넌트가 없는 요구 — 컴포넌트를 골라 바로 할당 (SWE.2·HWE.2 신호등이 '진행 중'인 원인)
+              const cids = new Set(model.comps[lv].map(c => c.id));
+              const un = model.reqs[lv].filter(r => !(model.alloc[lv][r.id] || []).some(c => cids.has(c)));
+              if (!un.length || !model.comps[lv].length) return null;
+              return (
+                <div style={{ border: `1px solid ${T.amber}66`, background: T.amber + "10", borderRadius: 9, padding: "10px 14px", marginBottom: 10 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: T.amber, marginBottom: 6 }}>담당 {L.compLabel}가 정해지지 않은 {lv} 요구 {un.length}건 — 골라서 할당하면 {L.archProc} 완료(●)가 됩니다</div>
+                  {un.map(r => (
+                    <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 11.5 }}>
+                      <span style={{ fontFamily: "monospace", color: T.accent, minWidth: 74 }}>{r.id}</span>
+                      <span style={{ flex: 1, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.text || ""}>{r.title || r.text || ""}</span>
+                      <select defaultValue="" onChange={e => { const cid = e.target.value; if (!cid) return; set(n => { n.alloc[lv][r.id] = [...new Set([...(n.alloc[lv][r.id] || []).filter(c => n.comps[lv].some(x => x.id === c)), cid])]; }); }}
+                        style={{ background: T.bg, color: T.text, border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 11, padding: "3px 6px", fontFamily: "inherit", maxWidth: 260 }}>
+                        <option value="">{L.compLabel} 선택…</option>
+                        {model.comps[lv].map(c => <option key={c.id} value={c.id}>{c.id} {c.name}</option>)}
+                      </select>
+                    </div>))}
+                </div>);
+            })()}
             {(!sub || sub === "arch") && (<><AeSec title={`${L.compLabel} ${model.comps[lv].length}개 (${AE.procLabel(L.archProc, V)})`} right={<Btn variant={model.comps[lv].length ? "outline" : undefined} onClick={() => { if (model.comps[lv].length && !window.confirm(`${L.compLabel} 설계·할당을 처음부터 다시 만듭니다.\n기존 컴포넌트·할당·인터페이스와 그에 연결된 유닛·시험·교차검토가 바뀔 수 있습니다.\n요구 몇 건만 할당하려면 요구의 '할당 →' 칩을 누르세요.\n\n계속할까요?`)) return; compose(lv); }} disabled={busy || !model.reqs[lv].length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.comps[lv].length ? `↻ ${L.compLabel} 전체 다시 설계·할당` : `${aiLabel} ${L.compLabel} 설계·할당`}</Btn>}>
               {CompList({ lv: lv })}
             </AeSec>
