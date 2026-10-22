@@ -727,7 +727,8 @@ export function syncSysReqs(items, prev) {
       verifCriteria: o.verifCriteriaEdited ? o.verifCriteria : (it.acceptance || o.verifCriteria || ""),
       verifCriteriaEdited: !!o.verifCriteriaEdited,
       safety: o.safety || "", security: !!o.security, special: !!o.special,
-      status: o.status || "Draft", release: o.release || "", rationale: o.rationale || "" };
+      status: o.status || "Draft", release: o.release || "", rationale: o.rationale || "",
+      ...((o.reqClass || it.reqClass) ? { reqClass: o.reqClass || it.reqClass } : {}) };
     return merged;
   });
 }

@@ -8877,7 +8877,7 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, 
         setProg({ percent: 5 + (i / chunks.length) * 35, label: `${STK_ON ? "이해관계자 요구 발췌·시스템 " : ""}요구사항 도출 중… (${i + 1}/${chunks.length})` });
         const r = await callClaudeJson(`${RG.roleDerive || "당신은 정보공학 방법론 요구정의 단계(RD1200 요구사항 정의)에 정통한 SI 품질보증 전문가입니다. 아래 이해관계자 요구사항 원문에서 기능·비기능·인터페이스 요구사항을 도출하세요."}
 프로젝트: ${form?.name || ""} (${form?.type || ""}) / 고객사: ${form?.client || ""}
-규칙: 요구사항 단위로 중복 없이 분할. 비기능은 ${QSTD.name} 품질특성(${QSTD.chars}) 관점으로 식별. 최대 30건.
+규칙: 요구사항 단위로 중복 없이 분할. 비기능은 ${QSTD.name} 품질특성(${QSTD.chars}) 관점으로 식별. 최대 40건. 발췌한 이해관계자 요구(stk)는 하나도 빠짐없이 어떤 시스템 요구의 stk에 포함되어야 한다(같은 내용의 stk 여러 개를 한 요구로 묶는 것은 허용).
 ${FIDELITY}
 ${STK_ON ? `먼저 원문에서 이해관계자 요구 문장을 고쳐 쓰지 말고 그대로 발췌해 stk 목록으로 만드세요(요구 주체: OEM|법규·표준|내부|기타, 유형: 기능|비기능|규제|인터페이스, 문장당 100자 이내). 그 다음 각 stk에서 시스템 요구(items)를 도출하고, 각 item의 stk에 근거가 된 stk의 k 값을 배열로 적으세요(한 stk가 여러 item으로 나뉘거나 여러 stk가 한 item이 될 수 있음).
 JSON만 출력: {"stk":[{"k":"s1","text":"원문 발췌","source":"조항·위치","stakeholder":"OEM","type":"기능"}],"items":[{"type":"기능|비기능|인터페이스","name":"요구사항명(25자 이내)","source":"원문 내 근거(15자 이내)","priority":"상|중|하","summary":"개요 1문장(50자 이내)","stk":["s1"]}]}` :
@@ -8893,6 +8893,55 @@ ${chunks[i]}`, 6000);
         raw = raw.concat(its);
       }
       if (!raw.length) throw new Error("도출된 요구사항이 없습니다. 원문을 확인해 주세요.");
+      // ── 이해관계자 요구 전수 도출 보장 (ASPICE SYS.2 양방향 추적) ──
+      //   1차 도출에서 어떤 시스템 요구와도 연결되지 않은 이해관계자 요구를 모아 2차 보완 호출:
+      //   기존 시스템 요구가 이미 다루면 '연결', 아니면 새 시스템 요구 작성(일정·납품·보고 등은 프로젝트 요구로 표시).
+      //   AI가 끝내 답하지 않은 것은 원문 문장으로 시스템 요구 초안을 규칙으로 만든다 → 미도출 0건.
+      let coverNote = "";
+      if (STK_ON && stkRaw.length) {
+        const covered = () => new Set(raw.flatMap(it => it._stk || []));
+        let left = stkRaw.filter(k => !covered().has(k._k));
+        const before = left.length;
+        let linked = 0, created = 0, fallback = 0;
+        const B2 = 8;
+        for (let i = 0; i < left.length; i += B2) {
+          const grp = left.slice(i, i + B2);
+          setProg({ percent: 40 + (i / Math.max(1, left.length)) * 6, label: `미도출 이해관계자 요구 보완 중… (${Math.min(i + B2, left.length)}/${left.length})` });
+          try {
+            const r = await callClaudeJson(`${RG.roleDerive || "당신은 요구사항 분석 전문가입니다."}
+아래 [이해관계자 요구]는 아직 어떤 시스템 요구로도 도출되지 않았다. 각각에 대해 하나를 정하라.
+- [기존 시스템 요구] 중 이 요구의 내용을 이미 빠짐없이 다루는 것이 있으면 link에 그 번호(i)를 적는다.
+- 없으면 item에 새 시스템 요구를 작성한다. 일정·납품·보고·인증 서류·프로세스 준수처럼 제품 기능이 아닌 요구는 class를 "project"로 한다.
+${FIDELITY}
+JSON만 출력: {"results":[{"k":"이해관계자 요구 k","link":0},{"k":"...","item":{"type":"기능|비기능|인터페이스","name":"25자 이내","source":"원문 근거","priority":"상|중|하","summary":"개요 1문장","class":"product|project"}}]}
+${guideBlock}--- 기존 시스템 요구 ---
+${JSON.stringify(raw.slice(0, 120).map((it, idx) => ({ i: idx, name: String(it.name || "").slice(0, 40), summary: String(it.summary || "").slice(0, 70) })))}
+--- 이해관계자 요구 ---
+${JSON.stringify(grp.map(k => ({ k: k._k, text: k.text, type: k.type })))}`, 5000);
+            (Array.isArray(r?.results) ? r.results : []).forEach(x => {
+              const k = grp.find(g => g._k === String(x?.k || "")); if (!k || covered().has(k._k)) return;
+              const li = Number(x?.link);
+              if (x?.item && String(x.item.name || "").trim()) {
+                const it = x.item;
+                raw.push({ type: it.type, name: it.name, source: it.source || k.source, priority: it.priority, summary: it.summary || k.text, _stk: [k._k], ...(it.class === "project" ? { reqClass: "project" } : {}) });
+                created++;
+              } else if (Number.isInteger(li) && li >= 0 && li < raw.length) {
+                raw[li]._stk = [...new Set([...(raw[li]._stk || []), k._k])];
+                linked++;
+              }
+            });
+          } catch (_) { /* 보완 호출 실패 — 아래 규칙 초안으로 채움 */ }
+        }
+        // 규칙 초안: 그래도 남은 이해관계자 요구는 원문 문장으로 시스템 요구 초안 생성 (사람이 다듬도록 개요에 표시)
+        left = stkRaw.filter(k => !covered().has(k._k));
+        left.forEach(k => {
+          const text = String(k.text || "").trim();
+          raw.push({ type: ["기능", "비기능", "인터페이스"].includes(k.type) ? k.type : (k.type === "규제" ? "비기능" : "기능"),
+            name: text.replace(/[.。]\s*$/, "").slice(0, 40), source: k.source || "", priority: "중", summary: text, _stk: [k._k] });
+          fallback++;
+        });
+        if (before) coverNote = ` · 미도출 보완 ${before}건(기존 요구에 연결 ${linked} · 새 요구 ${created} · 원문 초안 ${fallback})`;
+      }
       const freshRaw = raw.map(it => ({
         type: ["기능", "비기능", "인터페이스"].includes(it.type) ? it.type : "기능",
         name: String(it.name || "").slice(0, 60), source: String(it.source || ""),
@@ -8900,6 +8949,7 @@ ${chunks[i]}`, 6000);
         summary: String(it.summary || ""), detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통",
         actors: "", basicFlow: "", subFlow: "", exceptionFlow: "", precondition: "", postcondition: "",
         _stk: it._stk || [],
+        ...(it.reqClass ? { reqClass: it.reqClass } : {}),
       }));
       // 재생성 시 ID 무결성: 기존 요구와 매칭되면 기존 ID 유지, 신규만 ID 레지스트리 기준으로 새 번호 (폐기·기존 번호 재사용 금지)
       // DBC에서 가져온 인터페이스 요구는 원문 도출과 무관한 결정적 결과 — 매칭·교체 대상에서 빼고 끝에 그대로 보존한다
@@ -8980,7 +9030,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
       }
       if (dbcKept.length) list = [...list, ...dbcKept.filter(d => !list.some(x => x.id === d.id))];
       setItems(list);
-      setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세${leaves.length ? `·모듈 배정(규칙 ${ruleCnt}건${aiCnt ? ` · AI ${aiCnt}건` : ""})` : ""} 완료${idNote}${stkNote} — 아래에서 검토·수정 후 확정하세요.` });
+      setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세${leaves.length ? `·모듈 배정(규칙 ${ruleCnt}건${aiCnt ? ` · AI ${aiCnt}건` : ""})` : ""} 완료${idNote}${stkNote}${coverNote} — 아래에서 검토·수정 후 확정하세요.` });
     } catch (e) { setError("AI 생성 실패: " + e.message); setProg(null); }
     setBusy(false);
   }
@@ -8988,6 +9038,83 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
   const upd = (i, k, v) => setItems(list => list.map((it, j) => j === i ? { ...it, [k]: v } : it));
   const del = i => setItems(list => list.filter((_, j) => j !== i));
   const add = () => setItems(list => assignReqIds([...list, { id: "", type: "기능", name: "", source: "", priority: "중", summary: "", detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통", actors: "", basicFlow: "", subFlow: "", exceptionFlow: "", precondition: "", postcondition: "" }], reqIdFloor(requirements)));
+  // 미도출 이해관계자 요구 일괄 도출 — 전체를 다시 도출하지 않고, 시스템 요구와 연결되지 않은 것만 처리
+  //   AI: 기존 시스템 요구에 연결 또는 새 요구 작성 → 새 요구는 상세 명세까지 → AI가 답하지 않은 것은 원문 초안
+  async function deriveMissingStk() {
+    const cnt = {}; items.forEach(it => (it.stkIds || []).forEach(id => { cnt[id] = (cnt[id] || 0) + 1; }));
+    const miss = stk.filter(k => k.id && String(k.text || "").trim() && !cnt[k.id] && !AE.stkClosed(k));
+    if (!miss.length) return;
+    setBusy(true); setError(null);
+    const selG = guides.filter(g => guideSel[g.id]);
+    const gb1 = buildGuideBlock(selG.filter(g => guideApplies(g, guideTrack, "SYS.1")));
+    const gb2 = buildGuideBlock(selG.filter(g => guideApplies(g, guideTrack, "SYS.2")));
+    let list = items.map(x => ({ ...x, stkIds: [...(x.stkIds || [])] }));
+    const newIdx = [];
+    let linked = 0, created = 0, fallback = 0;
+    try {
+      const B2 = 8;
+      for (let i = 0; i < miss.length; i += B2) {
+        const grp = miss.slice(i, i + B2);
+        setProg({ percent: 5 + (i / miss.length) * 50, label: `미도출 이해관계자 요구 도출 중… (${Math.min(i + B2, miss.length)}/${miss.length})` });
+        let r = null;
+        try {
+          r = await callClaudeJson(`${RG.roleDerive || "당신은 요구사항 분석 전문가입니다."}
+아래 [이해관계자 요구]는 아직 어떤 시스템 요구로도 도출되지 않았다. 각각에 대해 하나를 정하라.
+- [기존 시스템 요구] 중 이 요구의 내용을 이미 빠짐없이 다루는 것이 있으면 link에 그 id를 적는다.
+- 없으면 item에 새 시스템 요구를 작성한다. 일정·납품·보고·인증 서류·프로세스 준수처럼 제품 기능이 아닌 요구는 class를 "project"로 한다.
+${FIDELITY}
+JSON만 출력: {"results":[{"k":"STK-…","link":"기존 id"},{"k":"STK-…","item":{"type":"기능|비기능|인터페이스","name":"25자 이내","source":"원문 근거","priority":"상|중|하","summary":"개요 1문장","class":"product|project"}}]}
+${gb1}--- 기존 시스템 요구 ---
+${JSON.stringify(list.slice(0, 150).map(it => ({ id: it.id, name: String(it.name || "").slice(0, 40), summary: String(it.summary || "").slice(0, 70) })))}
+--- 이해관계자 요구 ---
+${JSON.stringify(grp.map(k => ({ k: k.id, text: k.text, type: k.type })))}`, 5000);
+        } catch (_) { r = null; }
+        (Array.isArray(r?.results) ? r.results : []).forEach(x => {
+          const k = grp.find(g => g.id === String(x?.k || "")); if (!k) return;
+          if (list.some(it => (it.stkIds || []).includes(k.id))) return;
+          if (x?.item && String(x.item.name || "").trim()) {
+            const it = x.item;
+            list.push({ id: "", type: ["기능", "비기능", "인터페이스"].includes(it.type) ? it.type : "기능", name: String(it.name).slice(0, 60), source: String(it.source || k.source || ""),
+              priority: ["상", "중", "하"].includes(it.priority) ? it.priority : "중", summary: String(it.summary || k.text), detail: "", acceptance: "", quality: "", assumptions: "", wbsNo: "공통",
+              actors: "", basicFlow: "", subFlow: "", exceptionFlow: "", precondition: "", postcondition: "", stkIds: [k.id], ...(it.class === "project" ? { reqClass: "project" } : {}) });
+            newIdx.push(list.length - 1); created++;
+          } else {
+            const tgt = list.find(it => it.id && it.id === String(x?.link || ""));
+            if (tgt) { tgt.stkIds = [...new Set([...(tgt.stkIds || []), k.id])]; linked++; }
+          }
+        });
+      }
+      // AI가 답하지 않은 것 — 원문 문장으로 초안
+      miss.filter(k => !list.some(it => (it.stkIds || []).includes(k.id))).forEach(k => {
+        const text = String(k.text || "").trim();
+        list.push({ id: "", type: ["기능", "비기능", "인터페이스"].includes(k.type) ? k.type : (k.type === "규제" ? "비기능" : "기능"), name: text.replace(/[.。]\s*$/, "").slice(0, 40),
+          source: k.source || k.id, priority: "중", summary: text, detail: text, acceptance: "", quality: "", assumptions: "", wbsNo: "공통",
+          actors: "", basicFlow: "", subFlow: "", exceptionFlow: "", precondition: "", postcondition: "", stkIds: [k.id] });
+        fallback++;
+      });
+      list = assignReqIds(list, reqIdFloor(requirements, items.map(x => x.id)));
+      // 새로 만든 요구의 상세 명세 (작성 가이드 SYS.2 적용)
+      const targets = newIdx.map(i => list[i]).filter(Boolean);
+      const B = 4;
+      for (let i = 0; i < targets.length; i += B) {
+        const grp = targets.slice(i, i + B);
+        setProg({ percent: 55 + (i / Math.max(1, targets.length)) * 43, label: `새 시스템 요구 명세 작성 중… (${Math.min(i + B, targets.length)}/${targets.length})` });
+        try {
+          const r = await callClaudeJson(`${RG.roleSpec || "당신은 요구사항 명세 전문가입니다."}
+규칙: id는 입력에 주어진 값을 그대로 반환(새 ID 부여·형식 변경 금지). 각 문자열 값은 줄바꿈 없이 한 문단으로 작성.
+${FIDELITY}
+JSON만 출력: {"items":[{"id":"...","detail":"상세 설명 2~3문장","acceptance":"측정 가능한 인수 기준 1~2문장","quality":"비기능이면 ${QSTD.name} 품질특성명, 아니면 빈 문자열","assumptions":"가정·제약(없으면 빈 문자열)"}]}
+${gb2}--- 요구사항 ---
+${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: g.summary })))}`, 5000);
+          const map = {}; (Array.isArray(r?.items) ? r.items : []).forEach(d => { if (d?.id) map[d.id] = d; });
+          list = list.map(it => map[it.id] ? { ...it, detail: String(map[it.id].detail || it.detail || ""), acceptance: String(map[it.id].acceptance || ""), quality: String(map[it.id].quality || ""), assumptions: String(map[it.id].assumptions || "") } : it);
+        } catch (_) { /* 명세 실패 — 개요만 있는 초안으로 남김 */ }
+      }
+      setItems(list);
+      setProg({ percent: 100, label: `미도출 ${miss.length}건 처리 — 기존 요구에 연결 ${linked} · 새 시스템 요구 ${created} · 원문 초안 ${fallback}. 검토 후 '확정·V-모델 반영'을 누르세요.` });
+    } catch (e) { setError("미도출 도출 실패: " + e.message); setProg(null); }
+    setBusy(false);
+  }
   // 이해관계자 요구(STK) → 시스템 요구 바로 처리: ① 새 시스템 요구로 도출(원문으로 초안 채움) ② 기존 시스템 요구에 근거로 연결
   const [stkMsg, setStkMsg] = useState(null);
   function deriveFromStk(k) {
@@ -9085,7 +9212,11 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
               </WhyBox></div>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
                 <div style={{ fontSize:12, fontWeight:600 }}>이해관계자 요구 (SYS.1) <span style={{ color:T.accent }}>{stk.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 원문 발췌(재작성 없음) · 합의 {stk.filter(k => k.status === "합의").length} · 검토 중 {stk.filter(k => !["합의", "보류", "해당 없음"].includes(k.status)).length} · 보류 {stk.filter(k => k.status === "보류").length}{stk.some(k => k.status === "해당 없음") ? ` · 해당 없음 ${stk.filter(k => k.status === "해당 없음").length}` : ""} · 시스템 요구 미도출 {stk.filter(k => !sysCount[k.id] && !AE.stkClosed(k)).length}</span></div>
-                <button onClick={addS} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>＋ 이해관계자 요구 추가</button>
+                <div style={{ display:"flex", gap:6 }}>
+                  {(() => { const n = stk.filter(k => !sysCount[k.id] && !AE.stkClosed(k) && String(k.text || "").trim()).length; return n ? (
+                    <button onClick={deriveMissingStk} disabled={busy} title="시스템 요구와 연결되지 않은 이해관계자 요구만 처리합니다 — 기존 시스템 요구가 다루면 연결, 아니면 새 시스템 요구를 만들고 명세까지 작성합니다. 전체를 다시 도출하지 않아 고친 내용은 그대로입니다" style={{ background:T.accent, border:"none", borderRadius:6, color:"#fff", cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit", fontWeight:600 }}>⚡ 미도출 {n}건 시스템 요구로 도출</button>) : null; })()}
+                  <button onClick={addS} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>＋ 이해관계자 요구 추가</button>
+                </div>
               </div>
               <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:14 }}>
                 <div style={{ display:"grid", gridTemplateColumns:"72px 1fr 130px 92px 90px 84px 150px 24px", gap:6, fontSize:10, color:T.muted, padding:"0 4px" }}>
