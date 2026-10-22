@@ -10601,23 +10601,30 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const reqNotStarted = !model.reqs.STK.length && !model.reqs.SYS.some(r => !/^DBC:/.test(String(r.source || "")));
   const procStates = React.useMemo(() => {
     const out = {};
+    // 프로세스별 커버리지 — SW·HW 단계를 하나로 묶어 판정하면, SWE.2의 할당 누락이 SWE.1·SWE.3까지 '진행 중'으로 보인다
+    const covMiss = Object.fromEntries(AE.coverageDetail(model).map(c => [c.key, c.total ? c.missing.length : 0]));
+    const ownKey = p => p.sub === "req" && (p.tab === "SW" || p.tab === "HW") ? `${p.tab.toLowerCase()}Derive`
+      : p.sub === "arch" && (p.tab === "SW" || p.tab === "HW") ? `${p.tab.toLowerCase()}Alloc`
+      : p.sub === "unit" ? "swUnit" : null;
     AE_PROCS.forEach(p => {
       if (p.tab === "verif") { const n = model.tests.filter(t => t.level === p.sub).length; out[p.id] = !n ? "todo" : AE.missingTestTargets(model, [p.sub]) > 0 ? "partial" : "done"; return; }
       const base = aeProg.steps.find(x => x.id === p.tab)?.state || "todo";
       if (p.id === "ARTIFACTS") { out[p.id] = "na"; return; }   // 산출물 보기는 열람 화면 — 진행 표시 대상 아님
-      if (p.id === "HWE.2") {   // HWE.2: 블록 + 회로 설계(hd)까지 있어야 완료
+      const own = ownKey(p);
+      const ownOk = own ? !covMiss[own] : base === "done";   // 이 프로세스 자신의 커버리지만 본다
+      if (p.id === "HWE.2") {   // HWE.2: 블록 + 요구 할당 + 회로 설계(hd)까지 있어야 완료
         const cs = model.comps.HW, hd = cs.filter(c => c.hd?.parts?.length).length;
-        out[p.id] = !cs.length ? "todo" : hd === cs.length && base === "done" ? "done" : "partial"; return;
+        out[p.id] = !cs.length ? "todo" : hd === cs.length && ownOk ? "done" : "partial"; return;
       }
-      if (p.sub === "unit") {   // SWE.3: 유닛 분해 + 상세설계(dd)까지 있어야 완료
+      if (p.sub === "unit") {   // SWE.3: 유닛 분해(SW 요구가 유닛까지) + 상세설계(dd)까지 있어야 완료
         const us = model.units.SW, dd = us.filter(u => u.dd?.classes?.length).length;
-        out[p.id] = !us.length ? "todo" : dd === us.length && base === "done" ? "done" : "partial"; return;
+        out[p.id] = !us.length ? "todo" : dd === us.length && ownOk ? "done" : "partial"; return;
       }
       // DBC에서 가져온 요구·통신 요소는 '작성'으로 세지 않음 (원문 도출·구조 설계 전에 초록불이 켜지지 않도록)
       const nSys = model.reqs.SYS.filter(r => !/^DBC:/.test(String(r.source || ""))).length;
       const nArch = p.tab === "SYS" ? model.comps.SYS.filter(c => c.origin !== "dbc").length : (model.comps[p.tab] || []).length;
       const cnt = p.sub === "STK" ? model.reqs.STK.length : p.sub === "SYS" ? nSys : p.sub === "req" ? model.reqs[p.tab].length : p.sub === "arch" ? nArch : null;
-      out[p.id] = cnt === null ? base : !cnt ? "todo" : base === "done" ? "done" : "partial";
+      out[p.id] = cnt === null ? base : !cnt ? "todo" : (own ? ownOk : base === "done") ? "done" : "partial";
     });
     return out;
   }, [model, aeProg]);
