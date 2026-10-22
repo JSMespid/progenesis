@@ -7272,7 +7272,7 @@ function aspiceCharAppendix(model, group, secNo) {
   list.forEach((c, i) => rows.push([String(i + 1), c.label, c.source, c.origin === "ASPICE" ? "ASPICE" : `${c.origin}(선택)`, charStateLabel[c.state] || c.state, [c.manual ? `수동 판정${c.note ? `: ${c.note}` : " (사유 미기록)"}` : c.byTplOnly ? "템플릿 절에서 작성" : c.byModel ? "모델 내용으로 확인" : "", !c.manual && c.state === "gap" ? "입력자료 확보 후 작성 (TBD)" : ""].filter(Boolean).join(" · ")]));
   const s = list.reduce((o, c) => { o[c.state] = (o[c.state] || 0) + 1; return o; }, {});
   return docxP(`${secNo}. 부록 — ASPICE WP 특성 충족 점검표`, { bold: true, size: 26, spacingAfter: 120 }) +
-    docxP(`충족 ${s.ok || 0} · 작성 대기 ${s.input || 0} · 누락(TBD) ${s.gap || 0} · 해당 없음 ${s.na || 0} — 판정은 모델 내용·입력자료 체크리스트·수동 판정 순으로 결정됨`, { size: 18, spacingAfter: 100 }) +
+    docxP(`충족 ${s.ok || 0} · 작성 대기 ${s.input || 0} · 누락(TBD) ${s.gap || 0} · 해당 없음 ${s.na || 0} — 판정은 모델 내용·확보 자료(첨부·DBC)·수동 판정 순으로 결정됨`, { size: 18, spacingAfter: 100 }) +
     docxTable(rows, -1);
 }
 
@@ -9362,6 +9362,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   // 첨부 파일명으로 입력자료 자동 감지 ('확보(자동)'로 표시 — 사용자가 눌러 확정해야 WP 충족도에 반영)
   const INPUT_HINTS = { in_cust: /요구\s*사양|사양서|RFQ|SOR|견적\s*요청|업무\s*범위|OEM|spec/i, in_reg: /법규|규격|표준|regulation|ISO|SAE|UN\s*R/i, in_diag: /진단|UDS|DTC/i, in_env: /환경|내구|EMC|온도|진동/i, in_mcu: /MCU|플랫폼|BSW|AUTOSAR/i, in_testenv: /HILS|벤치|시험\s*환경|계측/i, in_safety: /HARA|FSC|TSC|기능\s*안전|26262/i, in_cs: /TARA|사이버|21434/i, in_prev: /전대|과거|이슈\s*이력|Lessons/i };
   const autoInputs = (() => { const names = srcSig.split("|").filter(Boolean); const out = {}; Object.entries(INPUT_HINTS).forEach(([id, re]) => { const hit = names.filter(n => re.test(n)); if (hit.length) out[id] = hit; }); return out; })();
+  // 입력자료 체크리스트 화면은 제거됨 — SYS.1 첨부 파일명에서 감지한 자료는 자동으로 '확보' 처리 (사람이 바꾼 값은 유지)
+  useEffect(() => {
+    const pend = Object.keys(autoInputs).filter(id => !model.inputs[id]);
+    if (pend.length) set(n => { pend.forEach(id => { if (!n.inputs[id]) n.inputs[id] = "have"; }); });
+  }, [srcSig]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState(null);
   const [err, setErr] = useState(null);
@@ -10574,21 +10579,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               {(hiddenHW > 0 || hiddenSW > 0) && <div style={{ fontSize: 10.5, color: T.amber, marginTop: 6 }}>⚠ 범위 밖으로 숨겨진 데이터가 있습니다{hiddenSW ? ` — SW ${hiddenSW}건` : ""}{hiddenHW ? ` — HW ${hiddenHW}건` : ""}. 삭제되지 않고 보존되며, 개발 범위에 다시 포함하면 그대로 나타납니다.</div>}
               <div className="ae-hint" style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>※ SWE.3(상세설계)·SWE.4(유닛 검증)는 코드가 근거이므로 SWE.3 상세설계 탭에서 유닛 분해·요구 추적 골격과 헤더(.h) 기반 인터페이스만 생성하고 알고리즘·동적 동작은 TBD로 둡니다. HWE 상세설계는 회로 확정 후 OSSP 템플릿으로 작성합니다.</div>
             </AeSec>
-            <AeSec title="입력자료 체크리스트 — 확보한 자료를 표시하면 WP 충족도에 반영됩니다 (없는 자료는 AI가 지어내지 않고 TBD로 남깁니다)"
-              right={(() => { const pend = Object.keys(autoInputs).filter(id => !model.inputs[id]); return pend.length ? <button onClick={() => set(n => { pend.forEach(id => { n.inputs[id] = "have"; }); })} style={{ ...small, color: T.green, borderColor: T.green + "88" }}>감지된 {pend.length}건 모두 확보로 표시</button> : null; })()}>
-              {Object.keys(autoInputs).some(id => !model.inputs[id]) && <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 6 }}>SYS.1에 첨부한 파일명에서 자료를 감지했습니다 — <span style={{ color: T.accent }}>확보(자동)</span>는 추정이므로, 내용을 확인한 뒤 '확보'를 눌러 확정하세요. 확정된 것만 WP 충족도에 반영됩니다.</div>}
-              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                {AE.INPUT_CHECKLIST.map(it => (
-                  <div key={it.id} style={{ display: "grid", gridTemplateColumns: "1fr 230px", gap: 8, alignItems: "center", fontSize: 11 }}>
-                    <span>{it.label}{it.optional && <span style={{ color: T.muted }}> (선택)</span>} <span style={{ color: T.muted, fontSize: 9.5 }}>→ {it.feeds.map(f => AE.ASPICE_DOCS[f]?.title || "검증 명세").join(", ")}</span>
-                      {autoInputs[it.id] && !model.inputs[it.id] && <span title={`감지 파일: ${autoInputs[it.id].join(", ")}`} style={{ marginLeft: 6, fontSize: 9.5, color: T.accent, border: `1px solid ${T.accent}66`, borderRadius: 5, padding: "1px 6px" }}>확보(자동) · {autoInputs[it.id].length}개 파일</span>}</span>
-                    <div style={{ display: "flex", gap: 3 }}>
-                      {[["have", "확보", T.green], ["", "미확보", T.amber], ["na", "해당 없음", T.muted]].map(([v, l, c]) => { const on = (model.inputs[it.id] || "") === v; return (
-                        <button key={v || "none"} onClick={() => set(n => { if (v) n.inputs[it.id] = v; else delete n.inputs[it.id]; })} style={{ ...small, flex: 1, color: on ? "#fff" : T.muted, background: on ? c : "transparent", borderColor: on ? c : T.border }}>{l}</button>); })}
-                    </div>
-                  </div>))}
-              </div>
-            </AeSec>
+            {/* 입력자료 체크리스트는 화면 단순화를 위해 제거 (2026-10-22). DBC 가져오기·SYS.1 첨부로 자동 표시된 값(model.inputs)은 WP 충족도 판정에 그대로 쓰임 */}
             <AeSec title="통신 DB(DBC) 가져오기 — 메시지·시그널·주기를 인터페이스 요구·시스템 인터페이스로 결정적 변환 (AI 미사용)">
               <FileDrop accept=".dbc,.txt" onFiles={fs => onDbc(asFileEvent(fs))} dropLabel="여기에 놓으면 DBC를 해석합니다 (.dbc · .txt)">
               <label style={{ ...small, display: "inline-block", padding: "6px 12px" }}>📎 .dbc 파일 선택<input type="file" accept=".dbc,.txt" onChange={onDbc} style={{ display: "none" }} /></label>
