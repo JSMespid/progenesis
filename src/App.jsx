@@ -8484,6 +8484,16 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
   try { const hf = hw2ModelFiles(meta, ctx); if (hf.length) { hf.forEach(f => files.push(f)); manifest.push([hf[0].path.split("/")[0], "-", "HW4101", docCodeWithPrefix("HW4101", meta) || "-", "HWE.2 HW 설계 모델(블록도·회로도)", "폴더", "V-모델", `파일 ${hf.length}개`]); total += 1; } } catch (_) {}
   try { const mf = swe3ModelFiles(meta, ctx); if (mf.length) { report(93, `SWE.3 상세설계 모델 ${mf.length}개 파일 추가 중…`); mf.forEach(f => files.push(f)); manifest.push([mf[0].path.split("/")[0], "-", "SW4101", docCodeWithPrefix("SW4101", meta) || "-", "SWE.3 상세설계 모델(XMI·다이어그램·소스·MISRA)", "폴더", "V-모델", `파일 ${mf.length}개 — EA 17.x XMI 가져오기 · ${AE.ddSettings(AE.normalizeModel(ctx?.requirements?.aspice)).target} 소스`]); total += 1; } } catch (_) {}
   try { const tf = swe4HostFiles(meta, ctx); if (tf.length) { tf.forEach(f => files.push(f)); manifest.push([tf[0].path.split("/")[0], "-", "SW4106", docCodeWithPrefix("SW4106", meta) || "-", "SWE.4 유닛 시험 호스트 실행 패키지(RTE 스텁·시험 케이스·실행 스크립트)", "폴더", "V-모델", `파일 ${tf.length}개 — gcc로 run_tests 실행`]); total += 1; } } catch (_) {}
+  // 입력자료 원본 — SYS.1 고객 원문(첨부 파일의 추출 텍스트·붙여넣은 원문)과 DBC 원본. 산출물의 출처 증거
+  try {
+    const src = ctx?.requirements?.source;
+    const inFolder = "00_입력자료";
+    let nIn = 0;
+    (src?.files || []).forEach(f => { if (String(f.text || "").trim()) { files.push({ path: `${inFolder}/SYS1_원문_${sanitize(f.name)}.txt`, content: new TextEncoder().encode(f.text) }); nIn++; } });
+    if (String(src?.text || "").trim()) { files.push({ path: `${inFolder}/SYS1_원문_붙여넣기.txt`, content: new TextEncoder().encode(src.text) }); nIn++; }
+    (ctx?.requirements?.aspice?.dbcFiles || []).forEach(f => { if (String(f.text || "").trim()) { files.push({ path: `${inFolder}/${sanitize(f.fileName)}`, content: new TextEncoder().encode(f.text) }); nIn++; } });
+    if (nIn) manifest.push([inFolder, "-", "-", "-", `입력자료 원본 ${nIn}건 (SYS.1 고객 원문 텍스트 · 통신 DB)`, "TXT/DBC", "입력", "요구·인터페이스 산출물의 출처 원본. 첨부 docx·xlsx는 추출 텍스트로 보관됩니다"]);
+  } catch (e) { console.warn("입력자료 포함 실패:", e?.message); }
   report(94, "산출물 목록 작성·ZIP 압축 중…");
   files.unshift({ path: "00_산출물목록.xlsx", content: makeXlsx({ sheetName: "산출물목록", rows: [
     ["프로젝트", meta.name || ""], ["고객사", meta.client || ""], ["PM", meta.pm || ""],
@@ -10108,10 +10118,37 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     const f = (e.target.files || [])[0]; e.target.value = "";
     if (!f) return;
     try {
-      const parsed = AE.parseDbc(await f.text());
+      const text = await f.text();
+      const parsed = AE.parseDbc(text);
       if (!parsed.messages.length) throw new Error("메시지(BO_)를 찾지 못했습니다.");
-      setDbc({ fileName: f.name, parsed, own: parsed.nodes[0] || "" });
+      // 원본을 프로젝트(V-모델)에 보관 — 같은 이름은 최신본으로 교체. 사양서 원문과 같은 상한(파일당 40만 자)
+      const DBC_CAP = 400000;
+      set(n => {
+        const keep = (n.dbcFiles || []).filter(x => x.fileName !== f.name);
+        keep.push({ fileName: f.name, text: text.slice(0, DBC_CAP), truncated: text.length > DBC_CAP, size: f.size, at: new Date().toISOString(), messages: parsed.messages.length, nodes: parsed.nodes.length });
+        n.dbcFiles = keep.slice(-5);
+      });
+      setDbc({ fileName: f.name, parsed, own: (model.dbcImports || []).filter(h => h.fileName === f.name).slice(-1)[0]?.own || parsed.nodes[0] || "" });
     } catch (x) { setErr(`DBC 해석 실패: ${x.message}`); }
+  }
+  // 저장된 DBC로 다시 변환 (노드만 바꿔 재적용 등)
+  function reopenDbc(fileName) {
+    const f = (model.dbcFiles || []).find(x => x.fileName === fileName); if (!f) return;
+    try {
+      const parsed = AE.parseDbc(f.text);
+      setDbc({ fileName: f.fileName, parsed, own: (model.dbcImports || []).filter(h => h.fileName === f.fileName).slice(-1)[0]?.own || parsed.nodes[0] || "" });
+    } catch (x) { setErr(`DBC 해석 실패: ${x.message}`); }
+  }
+  function downloadDbc(fileName) {
+    const f = (model.dbcFiles || []).find(x => x.fileName === fileName); if (!f) return;
+    const url = URL.createObjectURL(new Blob([f.text], { type: "text/plain;charset=utf-8" }));
+    const a = document.createElement("a"); a.href = url; a.download = f.fileName; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  }
+  function removeDbc(fileName) {
+    if (!window.confirm(`저장된 DBC '${fileName}'를 삭제할까요?\n이미 만들어진 인터페이스 요구·시스템 인터페이스는 그대로 남습니다.`)) return;
+    set(n => { n.dbcFiles = (n.dbcFiles || []).filter(x => x.fileName !== fileName); });
+    if (dbc?.fileName === fileName) setDbc(null);
   }
   // ── SWE.3 유닛 골격 (AI 미사용): 규칙 분해 / C 헤더 가져오기 ──
   function genUnits() {
@@ -10593,6 +10630,18 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   <select value={dbc.own} onChange={e => setDbc(d => ({ ...d, own: e.target.value }))} style={{ ...inp, width: 160 }}>{dbc.parsed.nodes.map(x => <option key={x}>{x}</option>)}</select>
                   <span style={{ color: T.muted }}>송신 {dbc.parsed.messages.filter(x => x.tx === dbc.own).length} · 수신 {dbc.parsed.messages.filter(x => x.tx !== dbc.own && x.signals.some(s => s.rx.includes(dbc.own))).length}</span>
                   <Btn onClick={applyDbc} title="DBC의 메시지마다 인터페이스 요구(SYS.2)와 시스템 인터페이스(SYS.3)를 만들어 V-모델에 넣습니다. 파일 자체는 저장하지 않고 변환 결과가 남습니다" style={{ fontSize: 11, padding: "4px 12px" }}>인터페이스 요구 추가</Btn>
+                </div>)}
+              {(model.dbcFiles || []).length > 0 && (
+                <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ fontSize: 10.5, color: T.muted }}>저장된 DBC</span>
+                  {(model.dbcFiles || []).map(f => (
+                    <span key={f.fileName} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10.5, color: T.accent, border: `1px solid ${T.accentDim}`, borderRadius: 6, padding: "2px 8px", background: T.bg }}>
+                      📄 {f.fileName}<span style={{ color: T.muted }}>· 메시지 {f.messages}개 · {String(f.at).slice(0, 10)}{f.truncated ? " · 잘림" : ""}</span>
+                      <button onClick={() => reopenDbc(f.fileName)} title="이 파일로 다시 변환 (노드 변경 등)" style={{ background: "none", border: "none", color: T.accent, cursor: "pointer", fontSize: 10.5, padding: 0 }}>↻ 다시 적용</button>
+                      <button onClick={() => downloadDbc(f.fileName)} title="원본 내려받기" style={{ background: "none", border: "none", color: T.accent, cursor: "pointer", fontSize: 10.5, padding: 0 }}>⬇</button>
+                      <button onClick={() => removeDbc(f.fileName)} title="저장된 파일 삭제 (만들어진 요구는 유지)" style={{ background: "none", border: "none", color: T.red, cursor: "pointer", fontSize: 10.5, padding: 0 }}>✕</button>
+                    </span>))}
+                  <span style={{ fontSize: 10, color: T.muted }}>V-모델 저장 시 프로젝트에 보관되며, 전체 ZIP의 00_입력자료 폴더에 포함됩니다</span>
                 </div>)}
               {!dbc && (model.dbcImports || []).length > 0 && (
                 <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3 }}>
