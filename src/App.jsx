@@ -3230,7 +3230,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
         <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>PDP (테일러링결과서) 생성</h2><p style={{ fontSize:11, color:T.muted }}>OSSP를 테일러링가이드 기준으로 테일러링한 결과를 정식 문서로 작성합니다.</p></div>
-        {!pdpData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ 생성</Btn>}
+        {!pdpData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ PDP 생성</Btn>}
       </div>
       {generating && <Spinner text="테일러링결과서 작성 중…" />}
       {genError && <div style={{ color:T.red, fontSize:12, padding:10, background:T.red+"11", borderRadius:9 }}>{genError}</div>}
@@ -3238,7 +3238,7 @@ function StepPDP({ pdpData, generating, genError, onGenerate, tailoring, setTail
         <div style={{ display:"flex", flexDirection:"column", gap:0, animation:"fadeIn .4s" }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
             <Badge color={T.green}>✓ 생성 완료</Badge>
-            <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
+            <Btn variant="outline" onClick={onGenerate} style={{ fontSize:11, padding:"4px 10px" }}>↻ PDP 다시 생성</Btn>
           </div>
 
           {/* 문서 본체 (테일러링결과서 양식) */}
@@ -4075,7 +4075,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>② 단계별 산출물 × 시스템 구성요소 매트릭스 <span style={{ color: T.muted, fontWeight: 400, fontSize: 11 }}>· 선택 {selectedCount}칸{commonCount > 0 ? ` · 공통 ${commonCount}건` : ""}</span></div>
           <div style={{ display: "flex", gap: 6 }}>
-            {isAspiceWbs && leaves.length > 0 && <Btn variant="outline" onClick={reapplyMatrixDefault} style={{ fontSize: 11, padding: "6px 10px" }}>기본값 다시 적용</Btn>}
+            {isAspiceWbs && leaves.length > 0 && <Btn variant="outline" onClick={reapplyMatrixDefault} title="매트릭스 선택을 기본값(공통 + SW 구성요소별 3행)으로 되돌립니다" style={{ fontSize: 11, padding: "6px 10px" }}>매트릭스 기본값으로</Btn>}
             <Btn onClick={buildWBS} disabled={selectedCount === 0 && commonCount === 0 && mgmtItems.length === 0} style={{ fontSize: 12, padding: "6px 12px" }}>⚙ WBS 생성</Btn>
           </div>
         </div>
@@ -9107,7 +9107,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                             style={{ fontSize:10.5, fontFamily: ds.length ? "monospace" : "inherit", color: ds.length ? T.green : T.muted, textAlign:"center", cursor: ds.length && onGoPart ? "pointer" : "default", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                             {ds.length ? `→ ${ds.slice(0, 2).join(", ")}${ds.length > 2 ? ` 외 ${ds.length - 2}` : ""}` : "N/A"}</span>; })()
                       : <span style={{ display:"flex", gap:3, alignItems:"center" }}>
-                          <button onClick={() => deriveFromStk(k)} title="이 원문으로 새 시스템 요구 초안을 만들고 근거로 연결합니다" style={{ background:T.accent, border:"none", borderRadius:5, color:"#fff", cursor:"pointer", fontSize:10, padding:"4px 6px", fontFamily:"inherit", whiteSpace:"nowrap" }}>＋ 도출</button>
+                          <button onClick={() => deriveFromStk(k)} title="이 원문으로 새 시스템 요구 초안을 만들고 근거로 연결합니다" style={{ background:T.accent, border:"none", borderRadius:5, color:"#fff", cursor:"pointer", fontSize:10, padding:"4px 6px", fontFamily:"inherit", whiteSpace:"nowrap" }}>＋ 시스템 요구로</button>
                           <select value="" onChange={e => linkStk(k, e.target.value)} title="이미 이 내용을 다루는 시스템 요구가 있으면 근거로 연결합니다" style={{ ...inp, fontSize:10, padding:"3px 2px", minWidth:0 }}>
                             <option value="">연결…</option>
                             {items.filter(it => it.id).map(it => <option key={it.id} value={it.id}>{it.id} {String(it.name || "").slice(0, 18)}</option>)}
@@ -10661,7 +10661,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           </>)}
 
           {tab === "SYS" && (<>
-            <AeSec title={`시스템 요소 ${model.comps.SYS.length}개 (${AE.procLabel("SYS.3", V)} · 정적 측면)`} right={<Btn variant={model.comps.SYS.length ? "outline" : undefined} onClick={() => { if (model.comps.SYS.length && !window.confirm(`시스템 구조를 ${model.useAI ? "AI로 " : ""}다시 만듭니다.\n· AI·규칙이 만든 요소 ${model.comps.SYS.filter(c => c.origin !== "manual" && c.origin !== "dbc").length}개·인터페이스·운영 모드가 새 결과로 바뀌고, 요구 할당 ${Object.keys(model.alloc.SYS || {}).length}건이 다시 계산됩니다(직접 추가·DBC 요소는 보존).\n· SW·HW 요구와 컴포넌트는 지금 요소 ID에 연결돼 있어 연결이 어긋날 수 있습니다 — '빠진 곳 점검'에서 확인하세요.\n\n계속할까요?`)) return; sysArch(); }} disabled={busy || !model.reqs.SYS.length} title="시스템 요구에서 시스템 요소·인터페이스·운영 모드를 설계하고 요구를 요소에 할당합니다" style={{ fontSize: 11, padding: "4px 12px" }}>{model.comps.SYS.length ? `↻ 시스템 구조 다시 만들기${model.useAI ? " (AI)" : ""}` : `${aiLabel} 시스템 구조·요구 할당 만들기`}</Btn>}>
+            <AeSec title={`시스템 요소 ${model.comps.SYS.length}개 (${AE.procLabel("SYS.3", V)} · 정적 측면)`} right={<Btn variant={model.comps.SYS.some(c => c.origin !== "manual" && c.origin !== "dbc") ? "outline" : undefined} onClick={() => { if (model.comps.SYS.some(c => c.origin !== "manual" && c.origin !== "dbc") && !window.confirm(`시스템 구조를 ${model.useAI ? "AI로 " : ""}다시 만듭니다.\n· AI·규칙이 만든 요소 ${model.comps.SYS.filter(c => c.origin !== "manual" && c.origin !== "dbc").length}개·인터페이스·운영 모드가 새 결과로 바뀌고, 요구 할당 ${Object.keys(model.alloc.SYS || {}).length}건이 다시 계산됩니다(직접 추가·DBC 요소는 보존).\n· SW·HW 요구와 컴포넌트는 지금 요소 ID에 연결돼 있어 연결이 어긋날 수 있습니다 — '빠진 곳 점검'에서 확인하세요.\n\n계속할까요?`)) return; sysArch(); }} disabled={busy || !model.reqs.SYS.length} title="시스템 요구에서 시스템 요소·인터페이스·운영 모드를 설계하고 요구를 요소에 할당합니다" style={{ fontSize: 11, padding: "4px 12px" }}>{model.comps.SYS.some(c => c.origin !== "manual" && c.origin !== "dbc") ? `↻ 시스템 구조 다시 만들기${model.useAI ? " (AI)" : ""}` : `${aiLabel} 시스템 구조·요구 할당 만들기`}</Btn>}>
               <div className="ae-hint" style={{ fontSize: 10, color: T.muted, marginBottom: 6 }}>구분: HW·SW·HW+SW·ME(기구)·외부(시스템 경계 밖). SW/HW 하위 요구는 'SW'·'HW'가 포함된 요소에 할당된 시스템 요구에서 파생됩니다. DBC로 추가된 요소·인터페이스는 재생성 시 보존됩니다.</div>
               {CompList({ lv: "SYS" })}
             </AeSec>
@@ -10728,7 +10728,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   {(() => { const r = AE.addMissingUnits(model); return model.units.SW.length > 0 && r.added.length > 0
                     ? <Btn onClick={() => { const x = AE.addMissingUnits(model); set(n => { n.units.SW = x.units; }); setNote(`유닛 ${x.added.join(", ")}을(를) 추가했습니다 — 기존 유닛은 그대로입니다. SWE.4 유닛 시험은 SWE.4 유닛 검증 탭의 [빠진 시험만 추가]로 추가하세요.`); }} disabled={busy} title="기존 유닛(수정·헤더 반영분 포함)은 그대로 두고, 유닛이 없는 SW 요구에만 골격을 추가합니다" style={{ fontSize: 11, padding: "4px 12px" }}>빠진 유닛만 추가 ({r.added.length})</Btn>
                     : null; })()}
-                  <Btn variant={model.units.SW.length ? "outline" : undefined} onClick={() => { if (model.units.SW.some(u => u.origin === "rule") && !window.confirm("규칙으로 만든 유닛을 모두 다시 만들고 유닛 번호를 다시 매깁니다.\n이 화면이나 교차검토에서 고친 유닛 설계, SWE.4 유닛 시험, 유닛 교차검토 기록이 바뀔 수 있습니다(헤더로 가져온 유닛은 유지).\n빠진 것만 채우려면 [빠진 유닛만 추가]를 쓰세요.\n\n계속할까요?")) return; genUnits(); }} disabled={busy || !model.comps.SW.length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.units.SW.length ? "↻ 유닛 골격 다시 만들기 (규칙)" : "⚙ 유닛 골격 만들기 (규칙)"}</Btn>
+                  <Btn variant={model.units.SW.some(u => u.origin === "rule") ? "outline" : undefined} onClick={() => { if (model.units.SW.some(u => u.origin === "rule") && !window.confirm("규칙으로 만든 유닛을 모두 다시 만들고 유닛 번호를 다시 매깁니다.\n이 화면이나 교차검토에서 고친 유닛 설계, SWE.4 유닛 시험, 유닛 교차검토 기록이 바뀔 수 있습니다(헤더로 가져온 유닛은 유지).\n빠진 것만 채우려면 [빠진 유닛만 추가]를 쓰세요.\n\n계속할까요?")) return; genUnits(); }} disabled={busy || !model.comps.SW.length} style={{ fontSize: 11, padding: "4px 12px" }}>{model.units.SW.some(u => u.origin === "rule") ? "↻ 유닛 골격 다시 만들기 (규칙)" : "⚙ 유닛 골격 만들기 (규칙)"}</Btn>
                 </div>}>
                 <WhyBox title="상세설계는 어떤 순서로 만들어지나요? (유닛 분해 → AI 전체 설계 → 코드)">
                   ① 먼저 SW 요구를 담당 컴포넌트별 <b>유닛</b>으로 나누어 요구↔유닛 추적을 잡습니다(규칙 기반). 기존 코드가 있으면 C 헤더(.h)에서 함수 원형·자료형·상수를 읽어 유닛 인터페이스로 삼습니다.
@@ -11117,15 +11117,15 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               <AeSec title={`전체 산출물 현황 — ${cov.length}종 · 검토 대상 항목 ${totItems}건 중 현재 내용으로 검토 끝남 ${totAny}건 · 판정 기다리는 의견 ${totOpen}건 · 맞음 판정 의견 ${totValid}건`}
                 right={rvRunning
                   ? <button onClick={() => { rvStop.current = true; }} title="지금 보내고 있는 묶음이 끝나면 멈춥니다. 그때까지 받은 의견은 반영되고, 남은 항목은 '변경분 검토'로 이어서 할 수 있습니다" style={{ ...small, color: T.red, borderColor: T.red + "88" }}>■ 검토 중지</button>
-                  : <button disabled={busy || !rvSel?.ready || !allChangedN} onClick={() => aiReviewMany(scopes.map(x => x.key), "changed")} title="개발 범위의 모든 산출물에서 아직 검토하지 않았거나 바뀐 항목만 차례로 보냅니다 (선택한 검토 AI 기준)" style={{ ...small, background: allChangedN ? T.accent : "none", color: allChangedN ? "#fff" : T.muted, borderColor: allChangedN ? T.accent : T.border }}>전체 산출물 변경분 검토 (항목 {allChangedN}건)</button>}>
+                  : <button disabled={busy || !rvSel?.ready || !allChangedN} onClick={() => aiReviewMany(scopes.map(x => x.key), "changed")} title="개발 범위의 모든 산출물에서 아직 검토하지 않았거나 바뀐 항목만 차례로 보냅니다 (선택한 검토 AI 기준)" style={{ ...small, background: allChangedN ? T.accent : "none", color: allChangedN ? "#fff" : T.muted, borderColor: allChangedN ? T.accent : T.border }}>전체 산출물 미검토·변경분 검토 (항목 {allChangedN}건)</button>}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 8, fontSize: 11 }}>
                   <span style={{ color: T.muted }} title="아래 표의 체크를 한 번에 고릅니다">빠른 선택:</span>
                   {[["요구", "요구"], ["설계", "설계"], ["검증", "검증 명세"], ["todo", "미검토 남은 것"]].map(([g, l]) => <button key={g} disabled={busy} onClick={() => pickGroup(g)} style={{ ...small, padding: "3px 9px" }}>{l}</button>)}
                   {pick.length > 0 && <button disabled={busy} onClick={() => setRvPick([])} style={{ ...small, padding: "3px 9px", color: T.muted }}>선택 해제</button>}
                   <span style={{ flex: 1 }} />
                   <span style={{ color: pick.length ? T.text : T.muted }}>{pick.length ? `${pick.length}종 선택 · 항목 ${pickAllN}건` : "아래 표에서 산출물을 체크하세요"}</span>
-                  <button disabled={busy || !rvSel?.ready || !pick.length || !pickChangedN} onClick={() => aiReviewMany(pick, "changed")} title="선택한 산출물에서 아직 검토하지 않았거나 바뀐 항목만 보냅니다" style={{ ...small, background: pick.length && pickChangedN ? T.accent : "none", color: pick.length && pickChangedN ? "#fff" : T.muted, borderColor: pick.length && pickChangedN ? T.accent : T.border }}>선택 변경분 검토 ({pickChangedN})</button>
-                  <button disabled={busy || !rvSel?.ready || !pick.length} onClick={() => { if (window.confirm(`선택한 산출물 ${pick.length}종의 항목 ${pickAllN}건을 변경 여부와 관계없이 모두 다시 검토합니다. 계속할까요?`)) aiReviewMany(pick, "all"); }} title="선택한 산출물의 항목을 모두 다시 보냅니다" style={{ ...small }}>선택 전체 검토 ({pickAllN})</button>
+                  <button disabled={busy || !rvSel?.ready || !pick.length || !pickChangedN} onClick={() => aiReviewMany(pick, "changed")} title="선택한 산출물에서 아직 검토하지 않았거나 바뀐 항목만 보냅니다" style={{ ...small, background: pick.length && pickChangedN ? T.accent : "none", color: pick.length && pickChangedN ? "#fff" : T.muted, borderColor: pick.length && pickChangedN ? T.accent : T.border }}>선택 미검토·변경분 검토 ({pickChangedN})</button>
+                  <button disabled={busy || !rvSel?.ready || !pick.length} onClick={() => { if (window.confirm(`선택한 산출물 ${pick.length}종의 항목 ${pickAllN}건을 변경 여부와 관계없이 모두 다시 검토합니다. 계속할까요?`)) aiReviewMany(pick, "all"); }} title="선택한 산출물의 항목을 모두 다시 보냅니다" style={{ ...small }}>선택 전체 다시 검토 ({pickAllN})</button>
                 </div>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
@@ -11259,8 +11259,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
 
               <div id="rv-ai" />
               <AeSec {...stepSec("ai")} title={`② 검토 AI 의견 — ${S.label} (참고 의견)`} right={rvRunning ? <button onClick={() => { rvStop.current = true; }} style={{ ...small, color: T.red, borderColor: T.red + "88" }}>■ 검토 중지</button> : <>
-                <button disabled={busy || !lvItems.length} onClick={() => aiReview("changed")} style={small} title="아직 검토하지 않았거나 마지막 검토 이후 바뀐 항목만 보냅니다 (선택한 검토 AI 기준)">변경분 검토 ({K.noun} {changedN}건)</button>
-                <button disabled={busy || !lvItems.length} onClick={() => aiReview("all")} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }} title="이 산출물의 항목을 변경 여부와 관계없이 모두 다시 보냅니다">전체 검토 ({K.noun} {lvItems.length}건)</button>
+                <button disabled={busy || !lvItems.length} onClick={() => aiReview("changed")} style={small} title="아직 검토하지 않았거나 마지막 검토 이후 바뀐 항목만 보냅니다 (선택한 검토 AI 기준)">미검토·변경분 검토 ({K.noun} {changedN}건)</button>
+                <button disabled={busy || !lvItems.length} onClick={() => aiReview("all")} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }} title="이 산출물의 항목을 변경 여부와 관계없이 모두 다시 보냅니다">전체 다시 검토 ({K.noun} {lvItems.length}건)</button>
               </>}>
                 {!rv && <div style={{ fontSize: 11, color: T.muted }}>검토 AI 설정을 불러오는 중…</div>}
                 {rv?.error && <div style={{ fontSize: 11, color: T.red }}>검토 AI 설정 조회 실패: {rv.error}</div>}
@@ -11936,7 +11936,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
         <div><h2 style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>산출물 자동생성</h2><p style={{ fontSize:11, color:T.muted }}>WBS에 반영되는 모든 단계의 산출물 문서 패키지를 구성합니다 (관리활동 + 개발산출물 전 단계).</p></div>
-        {!deliverablesData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ 생성</Btn>}
+        {!deliverablesData && <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:12, padding:"7px 12px" }}>⚡ 산출물 목록 생성</Btn>}
       </div>
       {(generating || genProgress) && (
         <GenProgressBar
@@ -11963,7 +11963,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
             <Badge color={T.green}>✓ 산출물 생성 완료</Badge>
             <div style={{ display:"flex", gap:6 }}>
               <Btn onClick={handleZipDownload} disabled={zipping} style={{ fontSize:11, padding:"4px 12px" }}>{zipping ? "⏳ 생성 중…" : "⬇ 전체 ZIP 다운로드"}</Btn>
-              <Btn variant="outline" onClick={onGenerate} disabled={generating || zipping} style={{ fontSize:11, padding:"4px 10px" }}>재생성</Btn>
+              <Btn variant="outline" onClick={onGenerate} disabled={generating || zipping} title="WBS 기준으로 산출물 목록을 다시 만듭니다" style={{ fontSize:11, padding:"4px 10px" }}>↻ 목록 다시 생성</Btn>
             </div>
           </div>
           {(zipping || zipProgress) && (
@@ -11975,7 +11975,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
           {deliverablesData.summary?.source !== "wbs" && (
             <div style={{ fontSize:11, color:T.amber, padding:"8px 12px", background:T.amber+"11", border:`1px solid ${T.amber}44`, borderRadius:8, marginBottom:12, display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
               <span>⚠ 이전 버전에서 생성된 결과입니다. WBS의 모든 산출물을 반영하려면 재생성하세요.</span>
-              <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:11, padding:"4px 12px" }}>지금 재생성</Btn>
+              <Btn onClick={onGenerate} disabled={generating} style={{ fontSize:11, padding:"4px 12px" }}>↻ 지금 다시 생성</Btn>
             </div>
           )}
           <div style={{ display:"flex", gap:8, marginBottom:8 }}>
@@ -12010,11 +12010,11 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
                     <span style={{ fontFamily:"monospace", fontSize:9, color:T.accent, background:T.accentDim, padding:"2px 5px", borderRadius:4, flexShrink:0, marginTop:2 }}>{doc.code}</span>
                     <div style={{ flex:1 }}><div style={{ fontSize:12, fontWeight:600 }}>{doc.name}</div><div style={{ fontSize:10, color:T.muted }}>{doc.taskName ? `${doc.taskName} — ` : ""}{doc.purpose}</div></div>
                     <Badge color={prioInfo(doc.priority).color}>{prioInfo(doc.priority).label}</Badge>
-                    {isAspice && aspiceCanBuild(AE.aspiceDocKind(doc.name), pdpCtx) && <span title="ASPICE V-모델 추적 모델에서 실문서로 생성됩니다" style={{ fontSize:10, color:T.green, border:`1px solid ${T.green}55`, borderRadius:6, padding:"3px 7px", flexShrink:0 }}>V모델 ✓</span>}
+                    {isAspice && aspiceCanBuild(AE.aspiceDocKind(doc.name), pdpCtx) && <span title="ASPICE V-모델 추적 모델에서 실문서로 생성됩니다" style={{ fontSize:10, color:T.green, border:`1px solid ${T.green}55`, borderRadius:6, padding:"3px 7px", flexShrink:0 }}>V-모델 ✓</span>}
                     {reqDocKind(doc.name) && !(isAspice && aspiceCanBuild(AE.aspiceDocKind(doc.name), pdpCtx)) && isAspice && (
                       <button onClick={()=>{ setAeInitTab("req"); setAeModal(true); }} title="ASPICE 과제: 요구 도출·명세는 V-모델 ② 탭에서 작성합니다"
                         style={{ background: requirements?.items?.length ? T.green+"14" : "none", border:`1px solid ${T.green}66`, borderRadius:6, color:T.green, cursor:"pointer", fontSize:11, padding:"3px 8px", flexShrink:0, fontFamily:"inherit" }}>
-                        {requirements?.items?.length ? `V모델 ✓ ${requirements.items.length}건` : "V-모델에서 작성"}
+                        {requirements?.items?.length ? `V-모델 ✓ ${requirements.items.length}건` : "V-모델에서 작성"}
                       </button>
                     )}
                     {reqDocKind(doc.name) && !isAspice && (
@@ -12321,7 +12321,7 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
         <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>{project.name}</h1><p style={{ fontSize:11, color:T.muted }}>{project.client} · {project.ossp?.label} · PM: {project.pm}</p></div>
         <Btn variant="outline" onClick={()=>onEdit && onEdit(project)} style={{ fontSize:12, padding:"6px 10px" }}>✎ 수정</Btn>
         {confirmDelete
-          ? <div style={{ display:"flex", gap:6 }}><Btn variant="danger" onClick={()=>onDelete(project.id)} style={{ fontSize:12, padding:"6px 10px" }}>삭제확인</Btn><Btn variant="ghost" onClick={()=>setConfirmDelete(false)} style={{ fontSize:12, padding:"6px 10px" }}>취소</Btn></div>
+          ? <div style={{ display:"flex", gap:6 }}><Btn variant="danger" onClick={()=>onDelete(project.id)} style={{ fontSize:12, padding:"6px 10px" }}>삭제 확인</Btn><Btn variant="ghost" onClick={()=>setConfirmDelete(false)} style={{ fontSize:12, padding:"6px 10px" }}>취소</Btn></div>
           : <Btn variant="ghost" onClick={()=>setConfirmDelete(true)} style={{ color:T.red, fontSize:12, padding:"6px 10px" }}>삭제</Btn>
         }
       </div>
@@ -13170,7 +13170,7 @@ function OSSPPage({ nav, customOSSP=[], builtinOSSP=[], onAdd, onDelete }) {
             <Btn variant="outline" onClick={()=>setExpanded(isOpen ? null : o.id)} style={{ fontSize:11, padding:"5px 10px" }}>
               {isOpen ? "자산 닫기" : "자산 관리"}
             </Btn>
-            <Btn variant="outline" onClick={()=>nav("new_project")} style={{ fontSize:11, padding:"5px 10px" }}>시작</Btn>
+            <Btn variant="outline" onClick={()=>nav("new_project")} style={{ fontSize:11, padding:"5px 10px" }}>새 프로젝트</Btn>
             {deletable && (
               <Btn variant="outline" onClick={()=>{ if(confirm(`'${o.label}'을(를) 삭제할까요? 등록된 파일도 함께 삭제됩니다.`)) onDelete(o.id); }} style={{ fontSize:11, padding:"5px 10px", color:T.red, borderColor:T.red+"55" }}>삭제</Btn>
             )}
