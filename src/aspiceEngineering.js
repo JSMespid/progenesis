@@ -2736,6 +2736,7 @@ const BANNER = (file, unit, meta, S, lang) => `/*
  * Standard : ${lang === "C" ? S.misraC : S.misraCpp + " / " + S.cppGuide}  — compliance to be confirmed with ${S.tools.join(", ")}
  * Traces   : ${(unit.reqs || []).join(", ") || "-"}
  * Generated: SPIDer QA Agent ${new Date().toISOString().slice(0, 10)} — generated from SWE.3 detailed design; review before release
+${CODE_NOTICE}
  */
 `;
 export function promptCode({ unit, model, settings, meta }) {
@@ -2857,6 +2858,44 @@ export function generateCode(unit, model, meta, settings, ai = null) {
   return { target: "AP", lang, files, notes, generatedAt: new Date().toISOString(), origin: ai ? "ai" : "rule" };
 }
 
+// ═══ 상표·이용 고지 (UI·생성 문서·생성 코드 공통) ═══
+//   상표는 지명적 사용(해당 표준·도구를 가리키기 위한 사용)에 한하며, 각 권리자의 귀속 문구를 함께 표시한다.
+//   VDA 상표 기준: 출판물에서 Automotive SPICE®가 처음 나올 때 귀속 문구를 눈에 띄게 표시해야 한다.
+export const LEGAL = {
+  tm: [
+    ["Automotive SPICE®", "Automotive SPICE® is a registered trademark of the Verband der Automobilindustrie e.V. (VDA)."],
+    ["PMBOK®", "PMBOK is a registered mark of Project Management Institute, Inc."],
+    ["CMMI®", "CMMI® is a registered trademark of ISACA."],
+    ["MISRA®", "MISRA® is a registered trademark of HORIBA MIRA Ltd, held on behalf of The MISRA Consortium."],
+    ["AUTOSAR®", "AUTOSAR® is a registered trademark of AUTOSAR GbR."],
+    ["Enterprise Architect", "Enterprise Architect is a trademark of Sparx Systems Pty Ltd."],
+    ["OrCAD · Allegro", "OrCAD and Allegro are trademarks of Cadence Design Systems, Inc."],
+  ],
+  vda: "Automotive SPICE® is a registered trademark of the Verband der Automobilindustrie e.V. (VDA).",
+  pmi: "PMBOK is a registered mark of Project Management Institute, Inc.",
+  noAffil: "SPIDer QA Agent는 위 권리자와 제휴·후원·보증 관계가 없으며, 상표는 해당 표준·도구를 가리키기 위해서만 사용합니다.",
+  content: "ASPICE BP 점검문·검토 기준·작성 원칙은 VDA PAM·PMBOK® 등 원문을 옮긴 것이 아니라 SPIDer가 점검 목적으로 요약·재구성한 것입니다. 원문과 심사 기준은 각 발행처의 정식 문서를 참조하십시오.",
+  autosar: "SWE.3 생성 코드는 AUTOSAR 인터페이스 명명 규칙(Rte_*, Std_ReturnType, ara::* 등)을 따르는 응용 SW 골격이며, AUTOSAR 규격 문서의 내용을 포함·재배포하지 않습니다. 타깃 통합에는 사용자 조직이 보유한 AUTOSAR 스택·RTE 생성기와 그 라이선스를 사용해야 하며, 생성 결과는 AUTOSAR 적합성(conformance)을 주장하거나 인증하지 않습니다.",
+  misra: "MISRA 관련 산출물은 규칙 번호와 SPIDer 자체 요약만 기재하고 규칙 원문·예제는 포함하지 않습니다. 준수 여부의 최종 판정은 라이선스를 보유한 정적분석 도구와 MISRA 정식 문서로 하십시오.",
+  eda: "EA·EDA 교환 파일은 공개 교환 형식(XMI 2.1, EDIF, IPC-2581, Gerber 등)으로 생성하며, Sparx Systems·Cadence의 라이브러리·심볼·아이콘·프로파일 자산은 포함하지 않습니다.",
+  uploads: "사용자가 등록·업로드하는 자료(작성 가이드, OSSP 자산, 규제·Best Practice 문서, 고객 원문)는 업로더가 이용 권한을 보유한 자료여야 합니다. 구매한 표준 원문(ISO·VDA PAM·MISRA 등)은 라이선스상 조직 내 공유가 제한될 수 있습니다. 작성 가이드는 원문을 저장하지 않고 AI가 추출한 작성 규칙 요약만 저장합니다.",
+  oss: [
+    ["React · React DOM 18", "MIT License", "화면 구성 (번들 포함)"],
+    ["@yowasp/clang", "ISC License (포함된 LLVM/Clang: Apache-2.0 WITH LLVM-exception)", "SWE.4 브라우저 실행 — 실행 시 CDN에서 받음"],
+    ["DM Sans", "SIL Open Font License 1.1", "화면 글꼴 — Google Fonts에서 받음"],
+    ["Vite · @vitejs/plugin-react", "MIT License", "빌드 도구 (배포물에 미포함)"],
+  ],
+};
+// 생성 코드 주석용 (ASCII만 — 일부 MISRA 검사 도구가 주석의 비 ASCII 문자를 경고하므로)
+const CODE_NOTICE = [
+  " * Notice   : Application code skeleton using AUTOSAR interface naming only; contains no",
+  " *            AUTOSAR specification text. Integrate with your own licensed AUTOSAR stack /",
+  " *            RTE generator. This is not an AUTOSAR conformance claim. MISRA references are",
+  " *            by rule number only; compliance is not certified by this generator.",
+  " *            AUTOSAR(R) is a registered trademark of AUTOSAR GbR. MISRA(R) is a registered",
+  " *            trademark of HORIBA MIRA Ltd, held on behalf of The MISRA Consortium.",
+].join("\n");
+
 // ═══ MISRA 적용 체크리스트 — 규칙 '번호'만 참조(원문은 MISRA 저작물). 생성기가 구조적으로 보장하는 항목 / 도구 확인 항목 구분 ═══
 export const MISRA_C_ROWS = [
   ["Dir 4.6", "필수", "고정폭 정수형 사용", "AUTOSAR Platform Types(uint8·uint16…)만 사용", "생성기 보장"],
@@ -2899,8 +2938,8 @@ export function misraChecklistRows(settings) {
   const S = { ...DD_DEFAULT, ...(settings || {}) };
   const rows = S.target === "CP" ? MISRA_C_ROWS : MISRA_CPP_ROWS;
   const std = S.target === "CP" ? S.misraC : `${S.misraCpp} · ${S.cppGuide}`;
-  return [[`MISRA 적용 체크리스트 — ${std}`], [`대상 플랫폼: ${DD_TARGETS[S.target].label}`, `정적분석: ${S.tools.join(" · ")}`, "규칙 원문은 MISRA 라이선스 문서를 참조(본 표는 번호와 적용 조치만 기재)"], [],
-    ["규칙 번호", "분류", "주제(요약)", "생성 코드의 조치", "보장 수준", `${S.tools[0]} 점검`, `${S.tools[1]} 점검`, "편차 번호", "비고"],
+  return [[`MISRA 적용 체크리스트 — ${std}`], [`대상 플랫폼: ${DD_TARGETS[S.target].label}`, `정적분석: ${S.tools.join(" · ")}`, "규칙 원문은 MISRA 라이선스 문서를 참조(본 표는 번호와 적용 조치만 기재)"], [LEGAL.misra], [LEGAL.tm.filter(t => /MISRA|AUTOSAR/.test(t[0])).map(t => t[1]).join(" ")], [],
+    ["규칙 번호", "분류", "주제(SPIDer 자체 요약 — 원문 아님)", "생성 코드의 조치", "보장 수준", `${S.tools[0]} 점검`, `${S.tools[1]} 점검`, "편차 번호", "비고"],
     ...rows.map(r => [...r, `${std} 룰셋`, `${std} 체커`, "", r[4].includes("도구") ? "도구 결과로 판정" : "구조적 회피, 도구 결과로 재확인"])];
 }
 
@@ -3780,7 +3819,9 @@ export function buildHostTestPackage(model, meta, settings, folder = "SW4106_유
     `주의`, `  · 호스트 실행(SIL)은 로직 검증입니다. 타깃 MCU의 타이밍·메모리·인터럽트 동작은 보증하지 않으며, 타깃·HILS 검증을 대체하지 않습니다.`,
     `  · stubs/Std_Types.h 는 시험 전용입니다. 타깃 빌드에는 BSW가 제공하는 헤더를 쓰세요.`,
     `  · 시험 파일은 유닛 .c 를 #include 해 내부 상태(static)까지 확인합니다 — 화이트박스 유닛 시험의 일반 기법입니다.`,
-    `  · MISRA 최종 판정은 ${S.tools.join(" · ")} 결과로 합니다.`, ``,
+    `  · MISRA 최종 판정은 ${S.tools.join(" · ")} 결과로 합니다.`,
+    `  · stubs/Std_Types.h 는 시험용 최소 정의를 SPIDer가 새로 작성한 것으로, AUTOSAR 규격 원문·BSW 헤더를 복제하지 않았습니다.`, ``,
+    `고지`, `  ${LEGAL.autosar}`, `  ${LEGAL.tm.filter(t => /MISRA|AUTOSAR/.test(t[0])).map(t => t[1]).join(" ")}`, ``,
     `유닛 ${units.length}개 · 케이스 ${units.reduce((a, x) => a + x.cases, 0)}건 (AI 초안 ${units.reduce((a, x) => a + x.ai, 0)}건)${skipped.length ? ` · 제외 ${skipped.length}개` : ""}`,
   ].join("\r\n") });
   return { files, units, skipped, note: "" };

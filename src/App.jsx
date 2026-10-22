@@ -11,7 +11,7 @@ import * as AE from './aspiceEngineering';
 // track이 없는 기존 프로젝트는 종전처럼 OSSP(이름에 ASPICE·자동차 포함 여부)로 판정한다.
 const PROJECT_TRACKS = [
   { id: "standard", icon: "🏢", label: "일반 SI 과제", desc: "공공·금융·기업 정보시스템 구축 — PMBOK 기반, 정보공학/UML·Agile·DevOps 등", note: "요구사항은 산출물 단계의 시스템 요구사항 명세서 행에서 AI로 작성" },
-  { id: "aspice", icon: "🚗", label: "ASPICE 자동차 과제", desc: "차량 전장 시스템·SW 개발 — Automotive SPICE 3.1 / 4.0", note: "요구 도출·명세부터 설계·검증·추적성까지 V-모델에서 작성" },
+  { id: "aspice", icon: "🚗", label: "ASPICE 자동차 과제", desc: "차량 전장 시스템·SW 개발 — Automotive SPICE® 3.1 / 4.0", note: "요구 도출·명세부터 설계·검증·추적성까지 V-모델에서 작성" },
 ];
 function getGuideForOSSP(ossp) {
   if (ossp && ossp.guideId && TAILORING_GUIDES[ossp.guideId]) return TAILORING_GUIDES[ossp.guideId];
@@ -309,6 +309,48 @@ const TAILORING_RULES = [
 // ── 제품 브랜드 ───────────────────────────────────────────────────────
 // 화면·산출물에 노출되는 도구 이름은 반드시 이 상수만 사용한다 (문자열 하드코딩 금지).
 const APP_NAME = "SPIDer QA Agent";
+
+// ── 상표·라이선스 고지: 사이드바·SDLC 화면 하단의 귀속 문구 + [상표·라이선스 고지] 전체 보기 ──
+function LegalNotice({ size = 8.5 }) {
+  const [open, setOpen] = useState(false);
+  const L = AE.LEGAL;
+  return (
+    <>
+      <div style={{ fontSize:size, color:T.muted, lineHeight:1.5, opacity:.85 }}>
+        {L.pmi} {L.vda} 본 서비스는 PMI·VDA 등 각 권리자와 제휴·보증 관계가 없습니다.{" "}
+        <button onClick={()=>setOpen(true)} style={{ background:"none", border:"none", padding:0, color:T.accent, cursor:"pointer", fontSize:size, fontFamily:"inherit", textDecoration:"underline" }}>상표·라이선스 고지</button>
+      </div>
+      {open && (
+        <div onClick={()=>setOpen(false)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.55)", zIndex:9999, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
+          <div onClick={e=>e.stopPropagation()} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, maxWidth:720, width:"100%", maxHeight:"85vh", overflowY:"auto", padding:"18px 20px", color:T.text, fontSize:12, lineHeight:1.65 }}>
+            <div style={{ display:"flex", alignItems:"center", marginBottom:10 }}>
+              <b style={{ fontSize:14 }}>상표·라이선스 고지</b><div style={{ flex:1 }} />
+              <button onClick={()=>setOpen(false)} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted, cursor:"pointer", padding:"2px 10px", fontFamily:"inherit" }}>닫기</button>
+            </div>
+            <div style={{ fontWeight:600, margin:"6px 0 4px" }}>1. 상표</div>
+            {L.tm.map(([k, v]) => <div key={k} style={{ fontSize:11 }}>· {v}</div>)}
+            <div style={{ fontSize:11, color:T.muted, marginTop:4 }}>{L.noAffil}</div>
+            <div style={{ fontWeight:600, margin:"12px 0 4px" }}>2. 표준·규격 내용의 사용</div>
+            <div style={{ fontSize:11 }}>· {L.content}</div>
+            <div style={{ fontSize:11 }}>· {L.autosar}</div>
+            <div style={{ fontSize:11 }}>· {L.misra}</div>
+            <div style={{ fontSize:11 }}>· {L.eda}</div>
+            <div style={{ fontWeight:600, margin:"12px 0 4px" }}>3. 사용자 등록 자료</div>
+            <div style={{ fontSize:11 }}>· {L.uploads}</div>
+            <div style={{ fontSize:11 }}>· AI가 생성한 산출물은 초안이며, 사용 전 사용자가 검토·확정해야 합니다.</div>
+            <div style={{ fontWeight:600, margin:"12px 0 4px" }}>4. 오픈소스 라이선스</div>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+              <tbody>{L.oss.map(([n, lic, use]) => (
+                <tr key={n}><td style={{ padding:"3px 6px", borderBottom:`1px solid ${T.border}`, whiteSpace:"nowrap" }}>{n}</td><td style={{ padding:"3px 6px", borderBottom:`1px solid ${T.border}` }}>{lic}</td><td style={{ padding:"3px 6px", borderBottom:`1px solid ${T.border}`, color:T.muted }}>{use}</td></tr>
+              ))}</tbody>
+            </table>
+            <div style={{ fontSize:10.5, color:T.muted, marginTop:6 }}>각 라이선스 전문은 해당 프로젝트 저장소(npm·GitHub·Google Fonts)에서 확인할 수 있습니다.</div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 const APP_TAGLINE = "v1.0 · AI Platform";
 const APP_MARK = "S";                       // 로고 이니셜
 
@@ -1660,10 +1702,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
             <button onClick={logout} style={{ marginTop:12, display:"flex", alignItems:"center", gap:6, padding:"7px 10px", borderRadius:8, background:"transparent", color:T.muted, border:`1px solid ${T.border}`, cursor:"pointer", fontSize:12, fontFamily:"inherit", width:"100%" }}>
               <span>⏻</span> 로그아웃
             </button>
-            {/* 상표 귀속 문구 (PMI Trademark Usage Guidelines 준수) */}
-            <div style={{ marginTop:12, fontSize:8.5, color:T.muted, lineHeight:1.5, opacity:.8 }}>
-              PMBOK is a registered mark of Project Management Institute, Inc. 본 서비스는 PMI와 제휴·보증 관계가 없습니다.
-            </div>
+            {/* 상표 귀속 문구 (PMI·VDA 상표 사용 기준) + 상표·라이선스 고지 전체 보기 */}
+            <div style={{ marginTop:12 }}><LegalNotice size={8.5} /></div>
           </div>
         </aside>
 
@@ -2724,9 +2764,7 @@ function StepSDLC({ factors, setFactors, selected, setSelected, recommendation, 
         })}
       </div>
       {/* 상표 귀속 문구 — PMBOK® 마크가 표시되는 화면에 상시 노출 (모바일 포함) */}
-      <div style={{ marginTop:16, fontSize:9, color:T.muted, lineHeight:1.5, opacity:.8 }}>
-        PMBOK is a registered mark of Project Management Institute, Inc. 본 서비스는 PMI와 제휴·보증 관계가 없습니다.
-      </div>
+      <div style={{ marginTop:16 }}><LegalNotice size={9} /></div>
     </div>
   );
 }
@@ -5951,14 +5989,36 @@ function docxFillLabeledCells(xml, values) {
   });
 }
 
+// 상표 귀속 문구 자동 추가 — 본문(word/document.xml)에 상표가 나오고 귀속 문구가 없을 때만, 마지막 구역 속성 앞에 작은 회색 문단으로 넣는다
+function docxAppendTmNotices(files) {
+  const f = files.find(x => x.path === "word/document.xml");
+  if (!f) return false;
+  const xml = typeof f.content === "string" ? f.content : new TextDecoder().decode(f.content);
+  const text = xml.replace(/<[^>]+>/g, "");
+  const need = [];
+  if (/Automotive SPICE|ASPICE/.test(text) && !/Verband der Automobilindustrie/.test(text)) need.push(AE.LEGAL.vda);
+  if (/PMBOK/.test(text) && !/Project Management Institute/.test(text)) need.push(AE.LEGAL.pmi);
+  if (/CMMI/.test(text) && !/ISACA/.test(text)) need.push(AE.LEGAL.tm.find(t => t[0] === "CMMI®")[1]);
+  if (!need.length) return false;
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const paras = need.map((t, i) => `<w:p><w:pPr><w:spacing w:before="${i ? 0 : 240}" w:after="0"/></w:pPr><w:r><w:rPr><w:color w:val="808080"/><w:sz w:val="14"/><w:szCs w:val="14"/></w:rPr><w:t xml:space="preserve">${esc(t)}</w:t></w:r></w:p>`).join("");
+  const bodyEnd = xml.lastIndexOf("</w:body>");
+  if (bodyEnd < 0) return false;
+  const sect = xml.lastIndexOf("<w:sectPr", bodyEnd);
+  const lastP = xml.lastIndexOf("</w:p>", bodyEnd), lastTbl = xml.lastIndexOf("</w:tbl>", bodyEnd);
+  const at = sect > Math.max(lastP, lastTbl) ? sect : bodyEnd;   // 본문 최종 sectPr(문단 밖) 앞, 없으면 </w:body> 앞
+  f.content = xml.slice(0, at) + paras + xml.slice(at);
+  return true;
+}
 function applyTemplateMeta(files, meta, doc) {
+  const tmAdded = docxAppendTmNotices(files);
   const docNo = templateDocNo(meta, doc);
   const pairs = reqTplPlaceholderPairs(meta, docNo);
   const labelVals = tableLabelValues(meta, docNo);
   const signNames = signLabelNames(meta);
-  if (!pairs.length && !Object.keys(labelVals).length && !Object.keys(signNames).length) return false;
+  if (!pairs.length && !Object.keys(labelVals).length && !Object.keys(signNames).length) return tmAdded;
   const td = new TextDecoder();
-  let changed = false;
+  let changed = tmAdded;
   files.forEach(f => {
     const isDocx = /^word\/(document|header\d+|footer\d+)\.xml$/.test(f.path);
     const isXlsx = f.path === "xl/sharedStrings.xml" || /^xl\/worksheets\/sheet\d+\.xml$/.test(f.path);
@@ -7068,7 +7128,9 @@ function xlsxStdParts({ title, docCode, phase, meta, infoRows = [] }) {
     ["", L("작성자"), V(ap.author), L("작성일자"), V(today)],
     ["", L("검토자"), V(ap.reviewer), L("승인자"), V(ap.approver)],
     ["", L("작성조직"), V(ap.org), L("배포구분"), V(ap.distribution)],
-    ...infoRows.map(([k, v]) => ["", L(k), V(v), L(""), V("")]),
+    ...infoRows.map(([k, v]) => ["", L(k), V(/Automotive SPICE(?!®)/.test(String(v || "")) ? String(v).replace(/Automotive SPICE(?!®)/g, "Automotive SPICE®") : v), L(""), V("")]),
+    // VDA 상표 기준: 출판물에서 처음 나오는 곳에 귀속 문구 표시
+    ...(infoRows.some(([, v]) => /Automotive SPICE/.test(String(v || ""))) ? [["", L("상표"), { v: AE.LEGAL.vda, s: 7 }, L(""), V("")]] : []),
     [],
     ["", { v: "사용 권한 — 본 문서는 작성·검토·승인하여 승인된 원본을 보관한다.", s: 10 }],
     ["", L("구분"), L("성명"), L("서명"), L("일자")],
@@ -7124,12 +7186,13 @@ function aspiceFrontBody({ kind, model, meta, doc, title, extraRows = [] }) {
     docxTable([
       ["문서번호", docNo], ["버전", "V0.1 (초안)"], ["고객사", meta.client || "-"], ["작성일", today],
       ["작성자", ap.author || "-"], ["검토·승인", [ap.reviewer, ap.approver].filter(Boolean).join(" / ") || "-"],
-      ["적용 기준", `Automotive SPICE ${ver}`],
+      ["적용 기준", `Automotive SPICE® ${ver}`],
       ["프로세스", AE.procLabel(D.proc.split("~")[0], model.version)],
       ["정보항목(WP)", AE.wpLabel(kind, model.version)],
       ...extraRows,
     ], 1) +
-    docxP(`※ 본 문서는 ${APP_NAME}의 ASPICE 추적 모델에서 생성된 초안입니다. 상태가 Draft인 항목은 검토·합의(GP 2.2.4) 후 확정하고, 'TBD'는 입력자료 확보 후 보완해야 합니다.`, { size: 18, spacingAfter: 200 });
+    docxP(`※ 본 문서는 ${APP_NAME}의 ASPICE 추적 모델에서 생성된 초안입니다. 상태가 Draft인 항목은 검토·합의(GP 2.2.4) 후 확정하고, 'TBD'는 입력자료 확보 후 보완해야 합니다.`, { size: 18, spacingAfter: 80 }) +
+    docxP(AE.LEGAL.vda, { size: 14, spacingAfter: 200 });
 }
 // WP 특성 충족 점검표 (부록) — 누락은 숨기지 않고 TBD로 드러낸다
 function aspiceCharAppendix(model, group, secNo) {
@@ -8013,7 +8076,7 @@ function swe3ModelFiles(meta, ctx, folder = "SW4101_상세설계_모델") {
     (code?.files || []).forEach(f => files.push({ path: `${folder}/src_${S.target}/${u.id}_${sanitize(u.name)}/${f.name}`, content: f.text }));
   });
   try { files.push({ path: `${folder}/MISRA_적용_체크리스트.xlsx`, content: makeXlsx({ sheetName: "MISRA", rows: AE.misraChecklistRows(S) }) }); } catch (_) {}
-  files.push({ path: `${folder}/README.txt`, content: [`SWE.3 상세설계 모델 — ${meta.name || ""}`, ``, `xmi/      : UML 2.x XMI 2.1 — Sparx Systems Enterprise Architect 17.x에서 Publish › Model Exchange › Import › XMI File('Import Diagrams' 체크)로 가져오기`, `diagrams/ : 유닛별 다이어그램 7종(SVG) — 컴포넌트·클래스·시퀀스·상태 머신·액티비티·SysML BDD·IBD`, `src_${S.target}/ : ${AE.DD_TARGETS[S.target].label} 소스 (AUTOSAR ${S.release}) — ${S.target === "CP" ? "Rte_<Unit>.h는 RTE 생성기 출력으로 교체" : "ara::com proxy/skeleton은 생성기 출력 사용"}`, `MISRA_적용_체크리스트.xlsx : 규칙 번호별 조치·보장 수준 — 최종 준수 판정은 ${S.tools.join(" · ")} 결과로`, ``, `모든 요소·파일에 근거 SW 요구 ID가 기록되어 있습니다. 생성 결과는 QA 교차검토 후 확정하세요.`].join("\n") });
+  files.push({ path: `${folder}/README.txt`, content: [`SWE.3 상세설계 모델 — ${meta.name || ""}`, ``, `xmi/      : UML 2.x XMI 2.1 — Sparx Systems Enterprise Architect 17.x에서 Publish › Model Exchange › Import › XMI File('Import Diagrams' 체크)로 가져오기`, `diagrams/ : 유닛별 다이어그램 7종(SVG) — 컴포넌트·클래스·시퀀스·상태 머신·액티비티·SysML BDD·IBD`, `src_${S.target}/ : ${AE.DD_TARGETS[S.target].label} 소스 (AUTOSAR ${S.release}) — ${S.target === "CP" ? "Rte_<Unit>.h는 RTE 생성기 출력으로 교체" : "ara::com proxy/skeleton은 생성기 출력 사용"}`, `MISRA_적용_체크리스트.xlsx : 규칙 번호별 조치·보장 수준 — 최종 준수 판정은 ${S.tools.join(" · ")} 결과로`, ``, `모든 요소·파일에 근거 SW 요구 ID가 기록되어 있습니다. 생성 결과는 QA 교차검토 후 확정하세요.`, ``, `고지`, `  ${AE.LEGAL.autosar}`, `  ${AE.LEGAL.misra}`, `  ${AE.LEGAL.eda}`, `  ${AE.LEGAL.tm.filter(t => /MISRA|AUTOSAR|Enterprise/.test(t[0])).map(t => t[1]).join(" ")}`].join("\n") });
   return files;
 }
 // SWE.4 호스트 유닛 시험 실행 패키지 (ZIP 폴더용) — CP(C) 대상, 상세설계가 있을 때만
@@ -8030,7 +8093,7 @@ function hw2ModelFiles(meta, ctx, folder = "HW4101_HW설계_모델") {
   try { files.push({ path: `${folder}/top/HW_top_schematic.svg`, content: AE.hdSvg("top", null, model) }); } catch (_) {}
   comps.forEach(c => { try { files.push({ path: `${folder}/schematics/${c.id}_schematic.svg`, content: AE.hdSvg("schematic", c, model) }); } catch (_) {} try { files.push({ path: `${folder}/schematics/${c.id}_wired.svg`, content: AE.hdSvg("wired", c, model) }); } catch (_) {} });
   const S = AE.hdSettings(model);
-  files.push({ path: `${folder}/README.txt`, content: [`HWE.2 HW 설계 모델 — ${meta.name || ""}`, ``, `block/      : HW 아키텍처 블록도(04-52) SVG`, `top/        : HW 통합 회로도(전체 보드 · 최상위 계층 시트) SVG — 블록 = 상자, 블록 간 연결 = 선`, `schematics/ : 블록별 회로도(04-54) SVG — <id>_schematic.svg 넷 라벨 방식(EDA용) · <id>_wired.svg 연결선 회로도(모든 넷을 선으로, 보기용)`, `EDA 교환 파일(${S.schematicFmt} 회로도 · ${S.layoutFmt} · ${S.fabFmt})은 다음 생성 단계에서 같은 폴더에 추가됩니다.`, `부품 PN은 AI 후보(BOM 14-54 참조). 모든 부품·넷·특성에 근거 HW 요구 ID가 기록됩니다.`].join("\n") });
+  files.push({ path: `${folder}/README.txt`, content: [`HWE.2 HW 설계 모델 — ${meta.name || ""}`, ``, `block/      : HW 아키텍처 블록도(04-52) SVG`, `top/        : HW 통합 회로도(전체 보드 · 최상위 계층 시트) SVG — 블록 = 상자, 블록 간 연결 = 선`, `schematics/ : 블록별 회로도(04-54) SVG — <id>_schematic.svg 넷 라벨 방식(EDA용) · <id>_wired.svg 연결선 회로도(모든 넷을 선으로, 보기용)`, `EDA 교환 파일(${S.schematicFmt} 회로도 · ${S.layoutFmt} · ${S.fabFmt})은 다음 생성 단계에서 같은 폴더에 추가됩니다.`, `부품 PN은 AI 후보(BOM 14-54 참조). 모든 부품·넷·특성에 근거 HW 요구 ID가 기록됩니다.`, ``, `고지`, `  ${AE.LEGAL.eda}`, `  ${AE.LEGAL.tm.find(t => /OrCAD/.test(t[0]))[1]}`].join("\n") });
   return files;
 }
 // ── SVG 미리보기 배율: "fit" = 패널 너비에 맞춤(viewBox 유지), 숫자 = 원본 대비 배율 ──
@@ -8458,6 +8521,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, aspice = 
   const [gBusy, setGBusy] = useState(false);
   const [gProg, setGProg] = useState("");
   const [gErr, setGErr] = useState(null);
+  const [gRights, setGRights] = useState(false);   // 자료 이용 권한 확인 (등록 필수)
   const inp = { width:"100%", padding:"5px 7px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:11, fontFamily:"inherit", boxSizing:"border-box" };
   const applied = guides.filter(g => sel[g.id]).length;
   const appliedAt = sc => guides.filter(g => sel[g.id] && [sc, "ALL"].includes(guideScopeOf(g, scopes))).length;
@@ -8482,6 +8546,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, aspice = 
     if (!gName.trim()) { setGErr("가이드 이름을 입력해 주세요."); return; }
     const combined = [gText.trim(), ...gFiles.map(f => `[파일: ${f.name}]\n${f.text}`)].filter(Boolean).join("\n\n");
     if (combined.length < 50) { setGErr("가이드 내용을 50자 이상 입력하거나 파일을 업로드해 주세요."); return; }
+    if (!gRights) { setGErr("자료 이용 권한 확인란에 체크해 주세요."); return; }
     setGBusy(true); setGErr(null);
     try {
       const summary = await summarizeGuideText(gName.trim(), gCat, combined, setGProg);
@@ -8489,13 +8554,14 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, aspice = 
       setGProg("가이드 저장 중…");
       const r = await fetch("/api/writing-guides", {
         method:"POST", headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ name: gName.trim(), category: gCat, summary, content: combined.slice(0, 50000) }),
+        // 저작권 보호: 가이드 원문은 서버에 보내지 않고, AI가 추출한 작성 규칙 요약만 저장한다
+        body: JSON.stringify({ name: gName.trim(), category: gCat, summary, rightsConfirmed: true }),
       });
       const created = await r.json().catch(() => null);
       if (!r.ok || !created?.id) throw new Error(created?.error || `저장 실패 (status ${r.status})`);
       setGuides(gs => [...gs, created]);
       setSel(s => ({ ...s, [created.id]: true }));
-      setGName(""); setGText(""); setGFiles([]); setGCat(GUIDE_CATEGORIES[0]); setAdding(false);
+      setGName(""); setGText(""); setGFiles([]); setGCat(GUIDE_CATEGORIES[0]); setGRights(false); setAdding(false);
     } catch (e) { setGErr("가이드 등록 실패: " + e.message); }
     setGBusy(false); setGProg("");
   }
@@ -8574,6 +8640,10 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, aspice = 
                 ))}
                 {gBusy && gProg && <span style={{ fontSize:10.5, color:T.amber }}>⏳ {gProg}</span>}
                 <div style={{ flex:1 }} />
+                <label title={AE.LEGAL.uploads} style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10, color: gRights ? T.green : T.amber, cursor:"pointer" }}>
+                  <input type="checkbox" checked={gRights} onChange={e=>setGRights(e.target.checked)} disabled={gBusy} />
+                  이 자료를 사용할 권한이 있습니다 (자사 저작물 또는 이용 허락 자료 · 원문은 저장하지 않고 규칙 요약만 저장)
+                </label>
                 <button onClick={()=>{ setAdding(false); setGErr(null); }} disabled={gBusy} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.muted, cursor:"pointer", fontSize:10.5, padding:"4px 10px", fontFamily:"inherit" }}>취소</button>
                 <button onClick={register} disabled={gBusy} style={{ background:T.accent, border:"none", borderRadius:6, color:"#fff", cursor:"pointer", fontSize:10.5, padding:"4px 12px", fontFamily:"inherit", fontWeight:600 }}>{gBusy ? "등록 중…" : "✓ 등록"}</button>
               </div>
@@ -10494,7 +10564,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 <WhyBox title="상세설계는 어떤 순서로 만들어지나요? (유닛 분해 → AI 전체 설계 → 코드)">
                   ① 먼저 SW 요구를 담당 컴포넌트별 <b>유닛</b>으로 나누어 요구↔유닛 추적을 잡습니다(규칙 기반). 기존 코드가 있으면 C 헤더(.h)에서 함수 원형·자료형·상수를 읽어 유닛 인터페이스로 삼습니다.
                   ② 아래 <b>SWE.3 상세설계</b>에서 AI가 유닛마다 정적 구조(클래스·포트·Runnable·자료형·알고리즘)와 동적 동작(상태 머신·시퀀스·액티비티)을 <b>전부</b> 작성합니다. 지어내는 것이 아니라 할당 SW 요구·상위 시스템 요구·컴포넌트 인터페이스·운영 모드를 근거로 쓰고, 모든 요소에 <b>근거 요구 ID</b>를 남겨 심사에서 "설계 근거"에 답할 수 있게 합니다.
-                  ③ 그 설계가 다이어그램 7종(UML·SysML)·XMI 2.1(EA 17.2 가져오기)·MISRA 준거 코드(AUTOSAR CP C / AP C++)의 단일 입력이 되므로 설계와 코드가 어긋나지 않습니다. 생성된 설계는 QA 교차검토(검토 AI + 사람 판정)를 거친 뒤 확정하세요.
+                  ③ 그 설계가 다이어그램 7종(UML·SysML)·XMI 2.1(EA 17.2 가져오기)·MISRA 대응을 고려한 코드(AUTOSAR 인터페이스 규칙 기반 CP C / AP C++ 골격 — 준수 최종 판정은 정적분석 도구, AUTOSAR 적합성 인증 아님)의 단일 입력이 되므로 설계와 코드가 어긋나지 않습니다. 생성된 설계는 QA 교차검토(검토 AI + 사람 판정)를 거친 뒤 확정하세요.
                 </WhyBox>
                 {!model.comps.SW.length && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 6 }}>SW 컴포넌트를 먼저 설계하세요. 유닛은 컴포넌트 아래에 만들어집니다.</div>}
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -12532,6 +12602,7 @@ function OSSPAssets({ osspId, osspLabel }) {
   async function uploadMany(category, fileList) {
     const arr = Array.from(fileList || []).filter(f => f && f.size >= 0);
     if (arr.length === 0) return;
+    if (!window.confirm(`파일 ${arr.length}개를 조직 라이브러리에 올려 구성원과 공유합니다.\n\n이 파일들을 저장·공유할 권한이 있습니까?\n· 자사 저작물이거나 권리자의 이용 허락을 받은 자료만 올려 주세요.\n· 구매한 표준 원문(ISO·VDA PAM·MISRA·AUTOSAR 등)은 라이선스상 조직 내 공유가 제한될 수 있습니다.`)) return;
     setBusy(category); setErr(null);
     setProgress({ done: 0, total: arr.length });
     const failed = [];
@@ -12547,7 +12618,7 @@ function OSSPAssets({ osspId, osspLabel }) {
         // 1) 서명된 업로드 URL 발급
         const signRes = await fetch("/api/ossp-files", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "sign-upload", ossp_id: osspId, category, file_name: rel }),
+          body: JSON.stringify({ action: "sign-upload", ossp_id: osspId, category, file_name: rel, rights_confirmed: true }),
         });
         if (!signRes.ok) {
           const e = await signRes.json().catch(()=>({}));
@@ -12750,6 +12821,7 @@ function LibraryPage({ nav, kind, title, subtitle, categories }) {
   async function uploadMany(category, fileList) {
     const arr = Array.from(fileList || []).filter(f => f && f.size >= 0);
     if (arr.length === 0) return;
+    if (!window.confirm(`파일 ${arr.length}개를 조직 라이브러리에 올려 구성원과 공유합니다.\n\n이 파일들을 저장·공유할 권한이 있습니까?\n· 자사 저작물이거나 권리자의 이용 허락을 받은 자료만 올려 주세요.\n· 구매한 표준 원문(ISO·VDA PAM·MISRA·AUTOSAR 등)은 라이선스상 조직 내 공유가 제한될 수 있습니다.`)) return;
     setBusy(category); setErr(null);
     setProgress({ done:0, total:arr.length });
     const failed = [];
@@ -12761,7 +12833,7 @@ function LibraryPage({ nav, kind, title, subtitle, categories }) {
           : (file.webkitRelativePath && file.webkitRelativePath !== file.name ? file.webkitRelativePath : file.name);
         const signRes = await fetch("/api/library-files", {
           method:"POST", headers:{ "Content-Type":"application/json" },
-          body:JSON.stringify({ action:"sign-upload", kind, category, file_name:rel }),
+          body:JSON.stringify({ action:"sign-upload", kind, category, file_name:rel, rights_confirmed:true }),
         });
         if (!signRes.ok){ const e=await signRes.json().catch(()=>({})); throw new Error(e.error||"업로드 URL 발급 실패"); }
         const { storage_path, upload_url } = await signRes.json();
