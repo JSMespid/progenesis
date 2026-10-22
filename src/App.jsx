@@ -1936,11 +1936,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       return { ...t, reuAuto: false, aspiceScope: { ...sc, REU: false } };
     });
   }, [isAspiceTrack, form.type]);   // eslint-disable-line react-hooks/exhaustive-deps
-  // 빈 위저드로 들어오면 작성 중 항목(여러 건) 안내 — 고르면 이어서 작성, '닫기'는 안내만 닫는다 (임시저장본은 지우지 않음)
-  const [draftList, setDraftList] = useState(() => {
-    const ds = loadDrafts ? loadDrafts() : [];
-    return ds.length && !form.name && !form.track ? ds : null;
-  });
+  // 작성 중 항목(임시저장본)은 대시보드의 '작성 중' 목록에서만 이어서 작성·삭제한다 — 새 프로젝트 화면에는 안내 패널을 두지 않는다 (2026-10-22)
 
   function handleSave() {
     if (onSaveDraft && onSaveDraft()) {
@@ -1960,24 +1956,6 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         </div>
       </div>
 
-      {/* 임시저장본 복원 안내 */}
-      {draftList && (
-        <Card style={{ padding:14, marginBottom:16, border:`1px solid ${T.accent}55`, background:T.bg }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, marginBottom:8 }}>
-            <div style={{ fontSize:12, color:T.text }}>작성 중인 항목이 {draftList.length}건 있습니다. 이어서 작성하려면 고르고, 새로 시작하려면 닫으세요 (작성 중 항목은 지워지지 않습니다).</div>
-            <Btn variant="ghost" onClick={()=>setDraftList(null)} style={{ fontSize:11, padding:"5px 10px" }}>닫고 새로 시작</Btn>
-          </div>
-          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-            {draftList.slice(0, 5).map(d => (
-              <div key={d.draftId} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12 }}>
-                <Btn variant="primary" onClick={()=>{ onRestoreDraft && onRestoreDraft(d.draftId); }} style={{ fontSize:11, padding:"3px 10px" }}>이어서 작성</Btn>
-                <b>{d.projectForm?.name || "(제목 미입력)"}</b>
-                <span style={{ color:T.muted }}>{d.projectForm?.client || "고객사 미입력"}{d.savedAt ? ` · ${new Date(d.savedAt).toLocaleString("ko-KR")}` : ""}</span>
-              </div>))}
-            {draftList.length > 5 && <div style={{ fontSize:11, color:T.muted }}>외 {draftList.length - 5}건은 대시보드에서 볼 수 있습니다.</div>}
-          </div>
-        </Card>
-      )}
       {showTrackPicker && <TrackPicker onChoose={chooseTrack} />}
       {!showTrackPicker && (<>
       {/* 진행 표시 */}
