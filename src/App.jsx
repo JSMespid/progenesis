@@ -9500,8 +9500,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   // 내부 탭 이동: s를 주면 그 섹션(프로세스), null이면 탭 전체, 생략하면 비어 있는 첫 프로세스
   const setTab = (id, s) => { setTabRaw(id); setSub(s === undefined ? aeInitSub(id, model) : s); setNote(null); };
   const [itemsVer, setItemsVer] = useState(0);
-  const [reqDraft, setReqDraft] = useState(null);   // SYS.1·SYS.2 확정 전 편집 내용 (탭을 옮겨도 유지)
-  useEffect(() => { setReqDraft(null); }, [itemsVer]);   // V-모델 쪽에서 요구 목록이 바뀌면(DBC 등) ① 탭 패널을 새 목록으로 다시 연다
+  // SYS.1·SYS.2 확정 전 편집 내용 — 탭을 옮기거나 창을 닫았다 열어도, DBC 가져오기·교차검토 수정이 있어도 사라지지 않도록
+  //   브라우저에 프로젝트별로 보관하고, V-모델 쪽 변경(DBC 추가·수정안 적용)은 초안에 합쳐 넣는다
+  const reqDraftKey = `spider.reqDraft.${form?.name || ""}.${form?.client || ""}`;
+  const [reqDraft, setReqDraft] = useState(() => { try { const v = JSON.parse(localStorage.getItem(reqDraftKey) || "null"); return v && Array.isArray(v.items) ? v : null; } catch (_) { return null; } });
+  useEffect(() => { try { if (reqDraft) localStorage.setItem(reqDraftKey, JSON.stringify(reqDraft)); else localStorage.removeItem(reqDraftKey); } catch (_) {} }, [reqDraft, reqDraftKey]);
   const srcRef = useRef(requirements?.source || null);   // ② 탭의 원문·파일 (확정 전이라도 저장에 포함)
   const [srcSig, setSrcSig] = useState(() => ((requirements?.source?.files) || []).map(f => f.name).join("|"));   // 파일명 변경 감지용
   // 첨부 파일명으로 입력자료 자동 감지 ('확보(자동)'로 표시 — 사용자가 눌러 확정해야 WP 충족도에 반영)
@@ -9636,7 +9639,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     const S = AE.reviewScope(key);
     if (S?.kind === "req" && S.lv === "SYS" && ("title" in p || "text" in p)) {
       // 확정 요구(items)도 같이 고친다 — 여러 건을 연속 적용해도 서로 덮어쓰지 않도록 함수형 갱신
-      setItems(list => list.map(it => it.id !== id ? it : { ...it, ...("title" in p ? { name: p.title } : {}), ...("text" in p ? { detail: p.text } : {}) }));
+      const fix = it => it.id !== id ? it : { ...it, ...("title" in p ? { name: p.title } : {}), ...("text" in p ? { detail: p.text } : {}) };
+      setItems(list => list.map(fix));
+      setReqDraft(d => d ? { ...d, items: (d.items || []).map(fix) } : d);
       setItemsVer(v => v + 1);
     }
     setModel(m => AE.applyReviewEdit(m, key, id, p, { via }));
@@ -10322,8 +10327,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     // 이미 가져온 메시지(같은 메시지명·방향)는 중복 추가하지 않음
     const exists = new Set(items.filter(i => i._dbc).map(i => `${i._dbc.msg}|${i._dbc.tx}`));
     const add = reqs.filter(r => !exists.has(`${r._dbc.msg}|${r._dbc.tx}`));
-    const newItems = assignReqIds([...items, ...add], reqIdFloor(requirements));
+    const newItems = assignReqIds([...items, ...add], reqIdFloor(requirements, (reqDraft?.items || []).map(x => x.id)));
     setItems(newItems);
+    const addedWithId = newItems.slice(items.length);
+    setReqDraft(d => d ? { ...d, items: [...(d.items || []), ...addedWithId.filter(a => !(d.items || []).some(x => x._dbc && x._dbc.msg === a._dbc?.msg && x._dbc.tx === a._dbc?.tx))] } : d);
     setItemsVer(v => v + 1);
     set(n => {
       n.reqs.SYS = AE.syncSysReqs(newItems, n.reqs.SYS);
@@ -10412,7 +10419,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   function requestClose() {
     // 진행 중인 작업·저장 안 된 변경·아직 처리하지 않은 수정안(저장 대상이 아닌 임시 결과)이 있으면 확인
     const warn = [];
-    if (reqDirty) warn.push("· SYS.1·SYS.2 요구 편집 내용을 아직 [확정·V-모델 반영]하지 않았습니다 (닫으면 사라집니다)");
+    if (reqDirty) warn.push("· SYS.1·SYS.2 요구 편집 내용을 아직 [확정·V-모델 반영]하지 않았습니다 (이 브라우저에 초안으로 보관되어 다시 열면 이어서 할 수 있지만, 확정 전에는 V-모델·저장에 포함되지 않습니다)");
     if (busy || brBusy || rvRunning) warn.push("· 지금 실행 중인 작업이 있습니다 (닫으면 중단되고 결과가 반영되지 않습니다)");
     if (dirty) warn.push("· 저장하지 않은 변경 내용이 있습니다");
     const pendFix = fixQ ? fixQ.cards.filter(c => c.status === "pending").length : 0;
