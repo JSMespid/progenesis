@@ -1,4 +1,5 @@
 import { requireRole, audit, READ_ROLES, WRITE_ROLES, MANAGE_ROLES } from './_auth.js';
+import { deleteBlob, validBlobPath } from './project-blobs.js';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 // RLS 활성화 대응: 서버 전용 service_role 키 사용 (RLS 우회는 서버에서만, requireRole로 접근 통제)
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -104,12 +105,25 @@ export default async function handler(req, res) {
     if (req.method === 'DELETE') {
       const { id } = req.query;
       if (!id) return res.status(400).json({ error: 'id가 필요합니다.' });
+      // 이 행이 Storage에 분리 보관한 V-모델 데이터 경로 (삭제 성공 후 정리) — 수정 저장 시 새 행은 새 경로를 쓰므로 안전
+      let blobPath = null;
+      try {
+        const cur = await supabase(`/projects?id=eq.${encodeURIComponent(id)}&select=blob:tailoring->requirementsBlob->>path`);
+        blobPath = Array.isArray(cur) && cur[0] ? cur[0].blob : null;
+      } catch (_) { /* 조회 실패해도 삭제는 진행 */ }
       // return=representation: 삭제된 행을 돌려받아 실제 삭제 건수를 확인
       // (0건이면 해당 id가 없거나 RLS/권한으로 삭제되지 않은 것)
       const deleted = await supabase(`/projects?id=eq.${encodeURIComponent(id)}`, 'DELETE', null, 'return=representation');
       const count = Array.isArray(deleted) ? deleted.length : 0;
       if (count === 0) {
         return res.status(404).json({ error: '삭제된 행이 없습니다. (id 불일치 또는 권한/RLS 확인 필요)', id });
+      }
+      if (blobPath && validBlobPath(blobPath)) {
+        // 같은 경로를 참조하는 다른 행이 없을 때만 지운다 (방어적 확인)
+        try {
+          const refs = await supabase(`/projects?select=id&tailoring->requirementsBlob->>path=eq.${encodeURIComponent(blobPath)}`);
+          if (!Array.isArray(refs) || refs.length === 0) await deleteBlob(blobPath);
+        } catch (_) { /* 정리 실패는 삭제 결과에 영향 없음 */ }
       }
       return res.status(200).json({ success: true, deleted: count });
     }
