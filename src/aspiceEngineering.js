@@ -1680,7 +1680,7 @@ export function reviewView(model) {
   });
   const count = (lv) => {
     const xs = list.filter(f => !lv || f.level === lv);
-    return { total: xs.length, open: xs.filter(f => !f.judge).length, valid: xs.filter(f => f.judge?.state === "valid").length,
+    return { total: xs.length, open: xs.filter(f => !f.judge && !f.removed).length,   // 대상이 삭제된 의견은 판정 대기로 세지 않음 valid: xs.filter(f => f.judge?.state === "valid").length,
       invalid: xs.filter(f => f.judge?.state === "invalid").length, opinion: xs.filter(f => f.judge?.state === "opinion").length,
       stale: xs.filter(f => f.stale).length, edited: xs.filter(f => f.edits.length).length };
   };

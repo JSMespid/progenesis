@@ -10590,6 +10590,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const rvOpen = AE.reviewView(model).count().open;
   // ── 프로세스 탭 상태(✓ 완료 · ● 진행 중 · ○ 아직) — 시험 레벨은 '빠진 시험' 기준 ──
   const procVisible = AE_PROCS.filter(p => { const g = AE_GROUPS.find(x => x.id === p.grp); return !g.scope || model.scope[g.scope]; });
+  // 고객 요구(SYS.1·2)를 아직 도출하지 않은 상태 — DBC 인터페이스 요구만 있어도 '시작 전'으로 본다
+  const reqNotStarted = !model.reqs.STK.length && !model.reqs.SYS.some(r => !/^DBC:/.test(String(r.source || "")));
   const procStates = React.useMemo(() => {
     const out = {};
     AE_PROCS.forEach(p => {
@@ -10666,7 +10668,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                   {st !== "na" && <span style={{ color: procColor(st), marginRight: 4 }}>{procMark(st)}</span>}
                   {p.id !== "TRACE" && p.id !== "ARTIFACTS" && <b style={{ fontFamily: "monospace", marginRight: 4 }}>{p.id}</b>}{p.short}
                   {p.pair && <span style={{ fontSize: 9.5, color: T.muted, marginLeft: 4 }}>↔{p.pair}</span>}
-                  {p.id === "TRACE" && errCount ? <span style={{ color: T.red, marginLeft: 3 }}>({errCount})</span> : null}
+                  {p.id === "TRACE" && errCount && !reqNotStarted ? <span style={{ color: T.red, marginLeft: 3 }}>({errCount})</span> : null}
                   {p.id === "SUP.1" && rvOpen ? <span title="판정을 기다리는 검토 AI 의견 수 (전체 산출물)" style={{ color: T.amber, marginLeft: 3 }}>(미판정 {rvOpen})</span> : null}
                 </button>); })}
             </div>)}
@@ -11781,6 +11783,14 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           })()}
 
           {tab === "trace" && (<>
+            {reqNotStarted && (
+              <div style={{ border: `1px solid ${T.accent}55`, background: T.accent + "12", borderRadius: 9, padding: "10px 14px", marginBottom: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 260, fontSize: 12, color: T.text }}>
+                  아직 고객 요구에서 시스템 요구를 도출하지 않았습니다. 빠진 곳 점검은 SYS.1·2 도출 후에 의미가 있습니다.
+                  {model.reqs.SYS.length ? <span style={{ color: T.muted }}> 아래 결과는 DBC에서 가져온 인터페이스 요구 {model.reqs.SYS.length}건만 기준으로 계산한 것입니다.</span> : null}
+                </div>
+                <Btn onClick={() => goProc("SYS.1")} style={{ fontSize: 11, padding: "5px 12px" }}>SYS.1 고객 요구로 →</Btn>
+              </div>)}
             {(lstat.open.length > 0 || model.reviewLog.length > 0) && (() => {
               const groups = {};
               lstat.open.forEach(l => { (groups[l.up] = groups[l.up] || []).push(l); });
