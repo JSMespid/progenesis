@@ -11,7 +11,8 @@
 //     summary text not null default '',
 //     content text not null default '',
 //     is_active boolean not null default true,
-//     created_at timestamptz not null default now()
+//     created_at timestamptz not null default now(),
+//     scope text not null default ''        -- 적용 대상 (2026-10 추가: alter table writing_guides add column if not exists scope text not null default '';)
 //   );
 //   alter table writing_guides disable row level security;
 
@@ -35,6 +36,9 @@ async function db(path, method = 'GET', body = null) {
   const t = await r.text();
   if (!r.ok) {
     // 테이블 미생성(PGRST205): 사전 조건 SQL 미실행 상태 — 조치 방법을 그대로 안내
+    if (/scope/.test(t) && /column|schema cache/i.test(t)) {
+      throw new Error("writing_guides 테이블에 scope 칼럼이 없습니다. Supabase 대시보드 → SQL Editor에서 다음 SQL을 1회 실행하세요: alter table writing_guides add column if not exists scope text not null default '';");
+    }
     if (t.includes('PGRST205') || t.includes('writing_guides')) {
       throw new Error("writing_guides 테이블이 아직 생성되지 않았습니다. Supabase 대시보드 → SQL Editor에서 다음 SQL을 1회 실행한 뒤 다시 시도하세요: create table if not exists writing_guides (id uuid primary key default gen_random_uuid(), name text not null, category text not null default '기타', summary text not null default '', content text not null default '', is_active boolean not null default true, created_at timestamptz not null default now()); alter table writing_guides disable row level security;");
     }
@@ -52,13 +56,13 @@ export default async function handler(req, res) {
   try {
     // ── 목록: 프롬프트 주입에 필요한 요약까지만 (원문 content는 용량 절감을 위해 제외) ──
     if (req.method === 'GET') {
-      const data = await db('/writing_guides?order=created_at.asc&select=id,name,category,summary,is_active,created_at');
+      const data = await db('/writing_guides?order=created_at.asc&select=id,name,category,summary,is_active,created_at,scope');
       return res.status(200).json(data);
     }
 
     // ── 등록: { name, category, summary, content } ──
     if (req.method === 'POST') {
-      const { name, category, summary, rightsConfirmed } = req.body || {};
+      const { name, category, summary, rightsConfirmed, scope } = req.body || {};
       if (!name || !String(name).trim()) return res.status(400).json({ error: '가이드 이름이 필요합니다.' });
       // 저작권 보호: 등록자가 자료 이용 권한을 확인해야 하며, 가이드 원문(content)은 저장하지 않는다(규칙 요약만 저장)
       if (rightsConfirmed !== true) return res.status(400).json({ error: '자료 이용 권한 확인이 필요합니다.' });
@@ -67,6 +71,7 @@ export default async function handler(req, res) {
         category: String(category || '기타').slice(0, 40),
         summary: String(summary || '').slice(0, 4000),
         content: '',
+        scope: String(scope || '').slice(0, 40),   // 적용 대상: all | si | si:derive | si:spec | aspice | aspice:<프로세스>
       };
       audit(sess.login_id, 'writing-guides.rights-confirmed', row.name);
       const created = await db('/writing_guides', 'POST', row);
@@ -78,7 +83,7 @@ export default async function handler(req, res) {
       const { id, ...rest } = req.body || {};
       if (!id) return res.status(400).json({ error: 'id가 필요합니다.' });
       const allowed = {};
-      ['name', 'category', 'summary', 'is_active'].forEach(k => { if (rest[k] !== undefined) allowed[k] = rest[k]; });
+      ['name', 'category', 'summary', 'is_active', 'scope'].forEach(k => { if (rest[k] !== undefined) allowed[k] = k === 'scope' ? String(rest[k] || '').slice(0, 40) : rest[k]; });
       if (!Object.keys(allowed).length) return res.status(400).json({ error: '수정할 항목이 없습니다.' });
       await db(`/writing_guides?id=eq.${id}`, 'PATCH', allowed);
       return res.status(200).json({ ok: true });
