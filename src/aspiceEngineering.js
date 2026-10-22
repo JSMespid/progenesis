@@ -2196,13 +2196,16 @@ export function aeProgress(model, opts = {}) {
   const rcov = opts.reviewCov || reviewCoverage(m);
   const steps = [];
   const add = (id, state, note, next) => steps.push({ id, state, note, next });
+  // DBC에서 가져온 인터페이스 요구·통신 요소만 있는 상태는 SYS.2·SYS.3 '작성 전'으로 본다 (원문 도출·구조 설계를 아직 안 함)
+  const realSys = m.reqs.SYS.filter(r => !/^DBC:/.test(String(r.source || ""))).length;
+  const realSysComps = m.comps.SYS.filter(c => c.origin !== "dbc").length;
   add("setup", opts.saved || m.reqs.SYS.length ? "done" : (Object.keys(m.inputs || {}).length ? "partial" : "todo"), "적용 버전·개발 범위·입력자료 체크", { tab: "setup" });
-  { const mi = missOf(STEP_COV.req); add("req", !m.reqs.SYS.length ? "todo" : mi.length ? "partial" : "done", m.reqs.SYS.length ? `시스템 요구 ${m.reqs.SYS.length}건 확정` : "고객 요구에서 시스템 요구를 도출·확정", mi[0] ? { cov: mi[0] } : { tab: "req" }); }
-  { const mi = missOf(STEP_COV.SYS); add("SYS", !m.comps.SYS.length ? "todo" : mi.length ? "partial" : "done", m.comps.SYS.length ? `요소 ${m.comps.SYS.length}개 · 인터페이스 ${m.interfaces.SYS.length}건` : "시스템 요소를 나누고 요구를 할당", mi[0] ? { cov: mi[0] } : { tab: "SYS" }); }
+  { const mi = missOf(STEP_COV.req); add("req", !realSys ? "todo" : mi.length ? "partial" : "done", m.reqs.SYS.length ? `시스템 요구 ${m.reqs.SYS.length}건 확정` : "고객 요구에서 시스템 요구를 도출·확정", mi[0] ? { cov: mi[0] } : { tab: "req" }); }
+  { const mi = missOf(STEP_COV.SYS); add("SYS", !realSysComps ? "todo" : mi.length ? "partial" : "done", m.comps.SYS.length ? `요소 ${m.comps.SYS.length}개 · 인터페이스 ${m.interfaces.SYS.length}건` : "시스템 요소를 나누고 요구를 할당", mi[0] ? { cov: mi[0] } : { tab: "SYS" }); }
   ["SW", "HW"].forEach(lv => { if (!m.scope[lv]) return; const mi = missOf(STEP_COV[lv]); const n = m.reqs[lv].length;
     add(lv, !n ? "todo" : mi.length ? "partial" : "done", n ? `${lv} 요구 ${n}건 · 컴포넌트 ${m.comps[lv].length}개${lv === "SW" ? ` · 유닛 ${m.units.SW.length}개` : ""}` : `시스템 요구를 ${lv} 요구로 내리고 컴포넌트에 할당`, mi[0] ? { cov: mi[0] } : { tab: lv }); });
   { const mi = cov.filter(c => c.group === "verif" && c.missing.length); add("verif", !m.tests.length ? "todo" : mi.length ? "partial" : "done", m.tests.length ? `시험 ${m.tests.length}건` : "요구·인터페이스·유닛마다 시험 생성", mi[0] ? { cov: mi[0] } : { tab: "verif" }); }
-  add("trace", !m.reqs.SYS.length ? "todo" : errs.length || openLinks ? "partial" : "done", errs.length || openLinks ? `오류 ${errs.length} · 변경 영향 확인 대기 ${openLinks}` : "오류 없음", { tab: "trace" });
+  add("trace", !realSys ? "todo" : errs.length || openLinks ? "partial" : "done", errs.length || openLinks ? `오류 ${errs.length} · 변경 영향 확인 대기 ${openLinks}` : "오류 없음", { tab: "trace" });
   { const tot = rcov.reduce((a, c) => a + c.total, 0), rv = rcov.reduce((a, c) => a + c.reviewedAny, 0), op = rcov.reduce((a, c) => a + c.open, 0);
     add("review", tot && rv === tot && !op ? "done" : rv ? "partial" : "todo", tot ? `전체 항목 ${tot}건 중 검토 끝남 ${rv}건 · 판정 기다리는 의견 ${op}건` : "검토할 산출물 없음", { tab: "review" }); }
   // 다음 할 일: 순서상 첫 미완료 단계. 단, 앞 단계가 아직이면 뒤 단계의 '부분'은 보이지 않게 한다

@@ -9213,7 +9213,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
                 <div style={{ fontSize:12, fontWeight:600 }}>이해관계자 요구 (SYS.1) <span style={{ color:T.accent }}>{stk.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 원문 발췌(재작성 없음) · 합의 {stk.filter(k => k.status === "합의").length} · 검토 중 {stk.filter(k => !["합의", "보류", "해당 없음"].includes(k.status)).length} · 보류 {stk.filter(k => k.status === "보류").length}{stk.some(k => k.status === "해당 없음") ? ` · 해당 없음 ${stk.filter(k => k.status === "해당 없음").length}` : ""} · 시스템 요구 미도출 {stk.filter(k => !sysCount[k.id] && !AE.stkClosed(k)).length}</span></div>
                 <div style={{ display:"flex", gap:6 }}>
-                  {(() => { const n = stk.filter(k => !sysCount[k.id] && !AE.stkClosed(k) && String(k.text || "").trim()).length; return n ? (
+                  {(() => { const n = stk.filter(k => !sysCount[k.id] && !AE.stkClosed(k) && String(k.text || "").trim()).length; return n && !busy ? (
                     <button onClick={deriveMissingStk} disabled={busy} title="시스템 요구와 연결되지 않은 이해관계자 요구만 처리합니다 — 기존 시스템 요구가 다루면 연결, 아니면 새 시스템 요구를 만들고 명세까지 작성합니다. 전체를 다시 도출하지 않아 고친 내용은 그대로입니다" style={{ background:T.accent, border:"none", borderRadius:6, color:"#fff", cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit", fontWeight:600 }}>⚡ 미도출 {n}건 시스템 요구로 도출</button>) : null; })()}
                   <button onClick={addS} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>＋ 이해관계자 요구 추가</button>
                 </div>
@@ -10595,7 +10595,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     AE_PROCS.forEach(p => {
       if (p.tab === "verif") { const n = model.tests.filter(t => t.level === p.sub).length; out[p.id] = !n ? "todo" : AE.missingTestTargets(model, [p.sub]) > 0 ? "partial" : "done"; return; }
       const base = aeProg.steps.find(x => x.id === p.tab)?.state || "todo";
-      if (p.id === "ARTIFACTS") { out[p.id] = (model.units.SW.some(u => u.dd) || model.comps.HW.some(c => c.hd) || model.reqs.SYS.length) ? "done" : "todo"; return; }
+      if (p.id === "ARTIFACTS") { out[p.id] = "na"; return; }   // 산출물 보기는 열람 화면 — 진행 표시 대상 아님
       if (p.id === "HWE.2") {   // HWE.2: 블록 + 회로 설계(hd)까지 있어야 완료
         const cs = model.comps.HW, hd = cs.filter(c => c.hd?.parts?.length).length;
         out[p.id] = !cs.length ? "todo" : hd === cs.length && base === "done" ? "done" : "partial"; return;
@@ -10604,7 +10604,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         const us = model.units.SW, dd = us.filter(u => u.dd?.classes?.length).length;
         out[p.id] = !us.length ? "todo" : dd === us.length && base === "done" ? "done" : "partial"; return;
       }
-      const cnt = p.sub === "STK" ? model.reqs.STK.length : p.sub === "SYS" ? model.reqs.SYS.length : p.sub === "req" ? model.reqs[p.tab].length : p.sub === "arch" ? model.comps[p.tab].length : null;
+      // DBC에서 가져온 요구·통신 요소는 '작성'으로 세지 않음 (원문 도출·구조 설계 전에 초록불이 켜지지 않도록)
+      const nSys = model.reqs.SYS.filter(r => !/^DBC:/.test(String(r.source || ""))).length;
+      const nArch = p.tab === "SYS" ? model.comps.SYS.filter(c => c.origin !== "dbc").length : (model.comps[p.tab] || []).length;
+      const cnt = p.sub === "STK" ? model.reqs.STK.length : p.sub === "SYS" ? nSys : p.sub === "req" ? model.reqs[p.tab].length : p.sub === "arch" ? nArch : null;
       out[p.id] = cnt === null ? base : !cnt ? "todo" : base === "done" ? "done" : "partial";
     });
     return out;
@@ -10614,7 +10617,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const activeGrp = tab === "setup" ? null : activeProc ? activeProc.grp
     : tab === "req" || tab === "SYS" ? "SYS" : tab === "SW" ? "SWE" : tab === "HW" ? "HWE" : tab === "trace" || tab === "review" ? "QA" : null;
   const goProc = (id) => { const p = AE_PROCS.find(x => x.id === id); if (!p) return; setTabRaw(p.tab); setSub(p.sub || null); setFocus(null); if (p.tab === "verif") setVFilter(p.sub); };
-  const goGroup = (g) => { const ps = procVisible.filter(p => p.grp === g); const p = ps.find(x => procStates[x.id] !== "done") || ps[0]; if (p) goProc(p.id); };
+  const goGroup = (g) => { const ps = procVisible.filter(p => p.grp === g); const p = ps.find(x => procStates[x.id] !== "done" && procStates[x.id] !== "na") || ps[0]; if (p) goProc(p.id); };
   const procMark = st => st === "done" ? "✓" : st === "partial" ? "●" : "○";
   const procColor = st => st === "done" ? T.green : st === "partial" ? T.amber : T.muted;
   const runHere = !!(runAt && runAt.el && runAt.el.isConnected && runAt.tab === tab);
@@ -10648,7 +10651,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               <button key={g.id} onClick={() => goGroup(g.id)} title={ps.map(p => `${p.id === "TRACE" ? "" : p.id + " "}${p.short} · ${procStates[p.id] === "done" ? "완료" : procStates[p.id] === "partial" ? "진행 중" : "아직"}`).join("\n")}
                 style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12.5, fontWeight: on ? 700 : 500, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${on ? T.accent : T.border}`, background: on ? T.accent : "transparent", color: on ? "#fff" : T.text, display: "inline-flex", alignItems: "center", gap: 8 }}>
                 {g.label}{badge ? <span title="판정을 기다리는 검토 AI 의견 수 (전체 산출물)" style={{ fontSize: 10, color: on ? "#fff" : T.amber }}>(미판정 {badge})</span> : null}
-                <span style={{ fontSize: 9, letterSpacing: 1.5 }}>{ps.map(p => <span key={p.id} style={{ color: on ? (procStates[p.id] === "done" ? "#B9F6CA" : procStates[p.id] === "partial" ? "#FFE082" : "#fff") : procColor(procStates[p.id]), opacity: procStates[p.id] === "todo" ? 0.5 : 1 }}>{procStates[p.id] === "done" ? "●" : procStates[p.id] === "partial" ? "◐" : "○"}</span>)}</span>
+                <span style={{ fontSize: 9, letterSpacing: 1.5 }}>{ps.filter(p => procStates[p.id] !== "na").map(p => <span key={p.id} style={{ color: on ? (procStates[p.id] === "done" ? "#B9F6CA" : procStates[p.id] === "partial" ? "#FFE082" : "#fff") : procColor(procStates[p.id]), opacity: procStates[p.id] === "todo" ? 0.5 : 1 }}>{procStates[p.id] === "done" ? "●" : procStates[p.id] === "partial" ? "◐" : "○"}</span>)}</span>
               </button>); })}
             <div style={{ flex: 1 }} />
             <button onClick={() => setTab("setup")} title="준비 — ASPICE 버전·개발 범위·입력자료(DBC 등). 눌러서 확인·변경"
@@ -10658,9 +10661,9 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           {activeGrp && (
             <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "wrap" }}>
               {procVisible.filter(p => p.grp === activeGrp).map(p => { const on = activeProc?.id === p.id; const st = procStates[p.id]; return (
-                <button key={p.id} onClick={() => goProc(p.id)} title={`${p.id === "TRACE" || p.id === "ARTIFACTS" ? p.code : AE.procLabel(p.id, V)}${p.pair ? ` — ${p.pair} 검증` : ""} · ${st === "done" ? "완료" : st === "partial" ? "진행 중" : "아직"}`}
+                <button key={p.id} onClick={() => goProc(p.id)} title={`${p.id === "TRACE" || p.id === "ARTIFACTS" ? p.code : AE.procLabel(p.id, V)}${p.pair ? ` — ${p.pair} 검증` : ""} ${st === "na" ? "" : ` · ${st === "done" ? "완료" : st === "partial" ? "진행 중" : "아직"}`}`}
                   style={{ padding: "4px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: on ? 700 : 400, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${on ? T.accent : T.border}`, background: on ? T.accent + "22" : "transparent", color: T.text }}>
-                  <span style={{ color: procColor(st), marginRight: 4 }}>{procMark(st)}</span>
+                  {st !== "na" && <span style={{ color: procColor(st), marginRight: 4 }}>{procMark(st)}</span>}
                   {p.id !== "TRACE" && p.id !== "ARTIFACTS" && <b style={{ fontFamily: "monospace", marginRight: 4 }}>{p.id}</b>}{p.short}
                   {p.pair && <span style={{ fontSize: 9.5, color: T.muted, marginLeft: 4 }}>↔{p.pair}</span>}
                   {p.id === "TRACE" && errCount ? <span style={{ color: T.red, marginLeft: 3 }}>({errCount})</span> : null}
