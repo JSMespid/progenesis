@@ -381,12 +381,12 @@ export const TAILORING_GUIDES = {
     // 필수(●)/선택(○)은 output 산출물의 목표 능력수준 열(M/O)을 그대로 따른다.
     mgmtActivities: [
       { id: "M01", scope: "MAN3", area: "프로젝트 관리 (MAN.3)", process: "프로젝트 범위·생명주기 정의 및 계획 수립 (일정·자원·책임·의사소통)", output: "프로젝트 계획서" },
-      { id: "M02", scope: "MAN3", area: "프로젝트 관리 (MAN.3)", process: "프로젝트 착수 보고", output: "착수보고 자료" },
+      { id: "M02", scope: "MAN3", area: "프로젝트 관리 (MAN.3)", process: "프로젝트 계획 공유·합의 (착수 보고)", output: "착수보고 자료" },
       { id: "M03", scope: "MAN3", area: "프로젝트 관리 (MAN.3)", process: "진척 모니터링·보고 및 계획 조정", output: "프로젝트 진척 보고서" },
-      { id: "M04", scope: "MAN3", area: "프로젝트 관리 (MAN.3)", process: "프로젝트 종료 및 평가", output: "프로젝트 종료 보고서" },
+      { id: "M04", scope: "MAN3", area: "프로젝트 관리 (MAN.3)", process: "프로젝트 종료·교훈 정리 (조직 표준 추가 활동 — PAM BP 외)", output: "프로젝트 종료 보고서" },
       { id: "Q01", scope: "SUP", area: "품질보증 (SUP.1)", process: "품질보증 계획 수립", output: "품질보증 계획서" },
       { id: "Q02", scope: "SUP", area: "품질보증 (SUP.1)", process: "산출물·프로세스 품질보증 및 부적합 추적·에스컬레이션", output: "QA 평가 보고서" },
-      { id: "Q03", scope: "SUP", area: "산출물 검토 (PA 2.2)", process: "산출물 검토(동료검토)·시정 확인", output: "산출물 검토 기록부" },
+      { id: "Q03", scope: "SUP", area: "산출물 검토 (PA 2.2 산출물 관리 · 3.1 SUP.4)", process: "산출물 검토(동료검토)·시정 확인", output: "산출물 검토 기록부" },
       { id: "C01", scope: "SUP", area: "형상관리 (SUP.8)", process: "형상관리 계획 수립·베이스라인 관리", output: "형상관리 계획서" },
       { id: "C02", scope: "SUP", area: "형상관리 (SUP.8)", process: "형상 감사", output: "형상 감사 보고서" },
       { id: "P01", scope: "SUP", area: "문제·변경관리 (SUP.9·10)", process: "문제·변경관리 계획 수립", output: "문제·변경관리 계획서" },
