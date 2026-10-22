@@ -762,10 +762,15 @@ export const elemHasSW = e => /SW/.test(String(e?.kind || ""));
 export const elemHasHW = e => /HW/.test(String(e?.kind || ""));
 
 // 하위 레벨로 파생해야 하는 상위 요구 (SW: SW 포함 요소에 할당된 SYS 요구 / HW: HW 포함 요소)
+// 제품 기능이 아닌 '프로젝트 요구'로 보이는 문장 (심사·인증·납품·보고·일정 등) — 사람 확인용 힌트 (자동 분류에 쓰지 않음)
+export function looksProjectReq(text) {
+  return /(SPICE|CMMI|심사|인증\s*(취득|획득|심사)|판정서|납품|제출|보고서|보고\s*회|교육|일정|마일스톤|킥오프|회의|감리|산출물\s*제출|공정\s*관리)/i.test(String(text || ""));
+}
 export function parentsForLevel(model, level) {
   const sysComps = Object.fromEntries((model.comps.SYS || []).map(c => [c.id, c]));
   const want = level === "SW" ? elemHasSW : elemHasHW;
-  return (model.reqs.SYS || []).filter(r => (model.alloc.SYS[r.id] || []).some(cid => sysComps[cid] && want(sysComps[cid])))
+  // 프로젝트 요구(심사·인증·납품·보고 등 — 제품 기능 아님)는 SW·HW 요구로 내리지 않는다
+  return (model.reqs.SYS || []).filter(r => r?.reqClass !== "project" && (model.alloc.SYS[r.id] || []).some(cid => sysComps[cid] && want(sysComps[cid])))
     .map(r => ({ ...r, elems: (model.alloc.SYS[r.id] || []).filter(cid => sysComps[cid] && want(sysComps[cid])) }));
 }
 

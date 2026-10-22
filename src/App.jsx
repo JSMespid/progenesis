@@ -8880,11 +8880,12 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, 
 규칙: 요구사항 단위로 중복 없이 분할. 비기능은 ${QSTD.name} 품질특성(${QSTD.chars}) 관점으로 식별. 최대 40건. 발췌한 이해관계자 요구(stk)는 하나도 빠짐없이 어떤 시스템 요구의 stk에 포함되어야 한다(같은 내용의 stk 여러 개를 한 요구로 묶는 것은 허용).
 ${FIDELITY}
 ${STK_ON ? `먼저 원문에서 이해관계자 요구 문장을 고쳐 쓰지 말고 그대로 발췌해 stk 목록으로 만드세요(요구 주체: OEM|법규·표준|내부|기타, 유형: 기능|비기능|규제|인터페이스, 문장당 100자 이내). 그 다음 각 stk에서 시스템 요구(items)를 도출하고, 각 item의 stk에 근거가 된 stk의 k 값을 배열로 적으세요(한 stk가 여러 item으로 나뉘거나 여러 stk가 한 item이 될 수 있음).
-JSON만 출력: {"stk":[{"k":"s1","text":"원문 발췌","source":"조항·위치","stakeholder":"OEM","type":"기능"}],"items":[{"type":"기능|비기능|인터페이스","name":"요구사항명(25자 이내)","source":"원문 내 근거(15자 이내)","priority":"상|중|하","summary":"개요 1문장(50자 이내)","stk":["s1"]}]}` :
+JSON만 출력: {"stk":[{"k":"s1","text":"원문 발췌","source":"조항·위치","stakeholder":"OEM","type":"기능"}],"items":[{"type":"기능|비기능|인터페이스","name":"요구사항명(25자 이내)","source":"원문 내 근거(15자 이내)","priority":"상|중|하","summary":"개요 1문장(50자 이내)","class":"product|project","stk":["s1"]}]}
+심사·인증·납품·보고·일정·교육처럼 제품(시스템)이 수행하는 기능·성능이 아닌 요구는 class를 "project"로 하세요 — 프로젝트 요구는 SW·HW 요구로 내리지 않습니다.` :
 `JSON만 출력: {"items":[{"type":"기능|비기능|인터페이스","name":"요구사항명(25자 이내)","source":"원문 내 근거(15자 이내)","priority":"상|중|하","summary":"개요 1문장(50자 이내)"}]}`}
 ${guideBlock}--- 원문 ---
 ${chunks[i]}`, 6000);
-        const its = Array.isArray(r?.items) ? r.items : [];
+        const its = (Array.isArray(r?.items) ? r.items : []).map(it => it && it.class === "project" ? { ...it, reqClass: "project" } : it);
         if (STK_ON) {
           // 청크별 임시 키(s1…)를 전역 키(i:s1)로 바꿔 충돌 방지
           (Array.isArray(r?.stk) ? r.stk : []).forEach(k => { if (k && String(k.text || "").trim()) stkRaw.push({ _k: `${i}:${k.k}`, text: String(k.text).slice(0, 300), source: String(k.source || ""), stakeholder: ["OEM", "법규·표준", "내부", "기타"].includes(k.stakeholder) ? k.stakeholder : "OEM", type: ["기능", "비기능", "규제", "인터페이스"].includes(k.type) ? k.type : "기능", status: "검토 중" }); });
@@ -10271,6 +10272,26 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       setDbc({ fileName: f.name, parsed, own: (model.dbcImports || []).filter(h => h.fileName === f.name).slice(-1)[0]?.own || parsed.nodes[0] || "" });
     } catch (x) { setErr(`DBC 해석 실패: ${x.message}`); }
   }
+  // SW·HW로 구현할 내용이 아닌 하위 요구 정리 — 하위 요구를 지우고, 상위 시스템 요구를 '프로젝트 요구'로 표시해 다시 내려오지 않게 한다
+  function markNotImpl(lv, reqId) {
+    const r = model.reqs[lv].find(x => x.id === reqId); if (!r) return;
+    const parents = (r.parents || []).filter(pid => !model.reqs[lv].some(x => x.id !== reqId && (x.parents || []).includes(pid)));
+    const pTxt = parents.length ? `\n상위 시스템 요구 ${parents.join(", ")}는 '프로젝트 요구'(심사·인증·납품·보고 등 — SW·HW로 내리지 않음)로 표시됩니다.` : "";
+    if (!window.confirm(`${reqId} '${r.title || ""}'는 ${lv}로 구현할 요구가 아닌 것으로 정리합니다.\n이 ${lv} 요구와 할당·유닛 연결을 지웁니다.${pTxt}\n\n계속할까요?`)) return;
+    set(n => {
+      n.reqs[lv] = n.reqs[lv].filter(x => x.id !== reqId);
+      delete n.alloc[lv][reqId];
+      if (lv === "SW") n.units.SW.forEach(u => { u.reqs = (u.reqs || []).filter(id => id !== reqId); });
+      n.tests.forEach(t => { if (Array.isArray(t.targets)) t.targets = t.targets.filter(id => id !== reqId); });
+      n.reqs.SYS.forEach(sr => { if (parents.includes(sr.id)) sr.reqClass = "project"; });
+    });
+    if (parents.length) {
+      const fix = it => parents.includes(it.id) ? { ...it, reqClass: "project" } : it;
+      setItems(list => list.map(fix));
+      setReqDraft(d => d ? { ...d, items: (d.items || []).map(fix) } : d);
+    }
+    setNote(`${reqId} 정리 완료${parents.length ? ` — ${parents.join(", ")}를 프로젝트 요구로 표시했습니다 (추적 매트릭스의 프로젝트 요구 시트에서 관리)` : ""}. [저장]을 눌러 반영하세요.`);
+  }
   // 저장된 DBC로 다시 변환 (노드만 바꿔 재적용 등)
   function reopenDbc(fileName) {
     const f = (model.dbcFiles || []).find(x => x.fileName === fileName); if (!f) return;
@@ -10873,16 +10894,18 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               if (!un.length || !model.comps[lv].length) return null;
               return (
                 <div style={{ border: `1px solid ${T.amber}66`, background: T.amber + "10", borderRadius: 9, padding: "10px 14px", marginBottom: 10 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700, color: T.amber, marginBottom: 6 }}>담당 {L.compLabel}가 정해지지 않은 {lv} 요구 {un.length}건 — 골라서 할당하면 {L.archProc} 완료(●)가 됩니다</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: T.amber, marginBottom: 6 }}>담당 {L.compLabel}가 정해지지 않은 {lv} 요구 {un.length}건 — 컴포넌트를 고르거나, {lv}로 구현할 내용이 아니면 '{lv} 구현 대상 아님'으로 정리하세요</div>
                   {un.map(r => (
                     <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", fontSize: 11.5 }}>
                       <span style={{ fontFamily: "monospace", color: T.accent, minWidth: 74 }}>{r.id}</span>
                       <span style={{ flex: 1, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.text || ""}>{r.title || r.text || ""}</span>
+                      {AE.looksProjectReq(`${r.title || ""} ${r.text || ""}`) && <span title="심사·인증·납품·보고처럼 제품 기능이 아닌 요구로 보입니다" style={{ fontSize: 10, color: T.amber, border: `1px solid ${T.amber}66`, borderRadius: 4, padding: "0 5px", whiteSpace: "nowrap" }}>프로젝트 요구로 보임</span>}
                       <select defaultValue="" onChange={e => { const cid = e.target.value; if (!cid) return; set(n => { n.alloc[lv][r.id] = [...new Set([...(n.alloc[lv][r.id] || []).filter(c => n.comps[lv].some(x => x.id === c)), cid])]; }); }}
-                        style={{ background: T.bg, color: T.text, border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 11, padding: "3px 6px", fontFamily: "inherit", maxWidth: 260 }}>
+                        style={{ background: T.bg, color: T.text, border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 11, padding: "3px 6px", fontFamily: "inherit", maxWidth: 240 }}>
                         <option value="">{L.compLabel} 선택…</option>
                         {model.comps[lv].map(c => <option key={c.id} value={c.id}>{c.id} {c.name}</option>)}
                       </select>
+                      <button onClick={() => markNotImpl(lv, r.id)} title={`${lv}로 구현할 요구가 아니면 이 ${lv} 요구를 지우고 상위 시스템 요구를 '프로젝트 요구'로 표시합니다`} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, color: T.muted, cursor: "pointer", fontSize: 10.5, padding: "3px 8px", fontFamily: "inherit", whiteSpace: "nowrap" }}>{lv} 구현 대상 아님</button>
                     </div>))}
                 </div>);
             })()}
