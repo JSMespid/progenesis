@@ -3496,6 +3496,84 @@ function recalcSchedule(tasks, holidays) {
   return tasks;
 }
 
+// ── 기본 공휴일 (대한민국 법정 공휴일 · 대체공휴일 · 선거일) ──
+// 공휴일을 등록하지 않은 WBS에 자동으로 넣는다. 음력 공휴일·대체공휴일·선거일은 정부 발표로 바뀔 수 있으므로 화면에서 검토·수정 전제.
+const KR_HOLIDAYS = {
+  2026: ["2026-01-01", "2026-02-16", "2026-02-17", "2026-02-18", "2026-03-01", "2026-03-02", "2026-05-05", "2026-05-24", "2026-05-25", "2026-06-03", "2026-06-06", "2026-08-15", "2026-08-17", "2026-09-24", "2026-09-25", "2026-09-26", "2026-10-03", "2026-10-05", "2026-10-09", "2026-12-25"],
+  2027: ["2027-01-01", "2027-02-05", "2027-02-06", "2027-02-07", "2027-02-08", "2027-03-01", "2027-05-05", "2027-05-13", "2027-06-06", "2027-08-15", "2027-08-16", "2027-09-14", "2027-09-15", "2027-09-16", "2027-10-03", "2027-10-04", "2027-10-09", "2027-10-11", "2027-12-25", "2027-12-27"],
+  2028: ["2028-01-01", "2028-01-25", "2028-01-26", "2028-01-27", "2028-03-01", "2028-04-12", "2028-05-02", "2028-05-05", "2028-06-06", "2028-08-15", "2028-10-02", "2028-10-03", "2028-10-04", "2028-10-05", "2028-10-09", "2028-12-25"],
+};
+function defaultKrHolidays(startDate, endDate) {
+  const a = String(startDate || "").slice(0, 10), b = String(endDate || "").slice(0, 10);
+  const y0 = a ? +a.slice(0, 4) : new Date().getFullYear(), y1 = b ? +b.slice(0, 4) : y0 + 1;
+  const out = [];
+  for (let y = y0; y <= y1; y++) (KR_HOLIDAYS[y] || []).forEach(d => { if ((!a || d >= a) && (!b || d <= b)) out.push(d); });
+  return out;
+}
+// ── 기본 일정 자동 배치 ──
+// 공수·선행·시작일이 비어 있는 작업에만 기본값을 넣는다(사람이 입력한 값은 그대로). 결정적 규칙 — AI 미사용.
+//  · 관리활동(계획서·착수) → 프로젝트 시작에 짧게, (진척·평가·대장·기록부·감사) → 프로젝트 전 기간, 종료 보고 → 마지막 5일
+//  · 개발 단계 → 단계 안의 작업은 첫 작업과 동시 시작(SS), 다음 단계는 앞 단계에서 가장 긴 작업이 끝난 뒤(FS)
+//  · 전체가 프로젝트 기간에 맞도록 단계 공수를 비례 조정
+function defaultEffortFor(name) {
+  const n = String(name || "");
+  if (/소스\s*코드/.test(n)) return 20;
+  if (/상세\s*설계/.test(n)) return 15;
+  if (/요구사항\s*(명세|목록|정의)|아키텍처|설계서|인터페이스\s*정의/.test(n)) return 10;
+  if (/검증\s*명세|시험\s*명세|테스트\s*(케이스|계획)/.test(n)) return 8;
+  if (/가이드라인|릴리즈|승인서/.test(n)) return 3;
+  return 5;
+}
+function autoScheduleWbs(tasks, startDate, endDate, holidays) {
+  const hol = holidays || [];
+  const all = []; (tasks || []).forEach(t => (t.subtasks || []).forEach(s => all.push(s)));
+  if (!all.length || !startDate) return { tasks, changed: 0 };
+  const touched = s => s.start || s.pred || Number(s.effort) > 0;
+  let changed = 0;
+  const pStart = nextWorkday(startDate, hol);
+  const totalWd = endDate && endDate > pStart ? countWorkdays(pStart, endDate, hol) : 0;
+  const mgmt = (tasks || []).filter(t => t.mgmt), dev = (tasks || []).filter(t => !t.mgmt);
+  // 관리활동
+  mgmt.forEach(t => (t.subtasks || []).forEach(s => {
+    if (touched(s)) return;
+    const d = `${s.deliverable || ""} ${s.task || ""}`;
+    if (/종료/.test(d) && totalWd > 10) { s.start = shiftWorkdays(pStart, totalWd - 5, hol); s.effort = 5; }
+    else if (/진척|평가\s*보고|대장|기록부|감사|모니터링/.test(d) && totalWd) { s.start = pStart; s.effort = totalWd; }
+    else { s.start = pStart; s.effort = 5; }
+    s.autoSched = true; changed++;
+  }));
+  // 개발 단계 — SYS·SW는 직렬, HW는 '시스템 요구·설계' 이후 SW와 병행, 시스템 통합·릴리즈는 SW·HW 양쪽이 끝난 뒤.
+  //   단계 길이(가장 긴 작업)의 주 경로 합을 프로젝트 기간에 맞춰 비례 조정
+  const devTasks = dev.filter(t => (t.subtasks || []).length);
+  const isHW = t => /HW|하드웨어/.test(t.phase || "");
+  const isJoin = t => /시스템\s*통합|릴리즈|양산|밸리데이션/.test(t.phase || "");
+  const lenOf = t => Math.max(...t.subtasks.map(s => Number(s.effort) > 0 ? Number(s.effort) : defaultEffortFor(s.deliverable || s.task)));
+  const mainLen = devTasks.filter(t => !isHW(t)).reduce((a, t) => a + lenOf(t), 0) || 1;
+  const factor = totalWd ? Math.max(0.3, Math.min(4, (totalWd - 5) / mainLen)) : 1;
+  let mainPrev = null, hwPrev = null, sysReqLast = null;
+  devTasks.forEach(t => {
+    const subs = t.subtasks, first = subs[0];
+    const hw = isHW(t), join = isJoin(t);
+    const firstPred = join ? [mainPrev, hwPrev].filter(Boolean).join(", ") : hw ? (hwPrev || sysReqLast || mainPrev) : mainPrev;
+    let longest = null, longestEff = -1;
+    subs.forEach((s, i) => {
+      if (!touched(s)) {
+        s.effort = Math.max(1, Math.round(defaultEffortFor(s.deliverable || s.task) * factor));
+        if (i === 0) { if (firstPred) s.pred = firstPred; else s.start = pStart; }
+        else s.pred = `${first.wbsCode}SS`;
+        s.autoSched = true; changed++;
+      }
+      const e = Number(s.effort) || 0;
+      if (e > longestEff) { longestEff = e; longest = s; }
+    });
+    if (!longest) return;
+    if (hw) hwPrev = longest.wbsCode;
+    else { mainPrev = longest.wbsCode; if (join) hwPrev = null; }
+    if (/시스템\s*요구/.test(t.phase || "")) sysReqLast = longest.wbsCode;
+  });
+  if (changed) recalcSchedule(tasks, hol);
+  return { tasks, changed };
+}
 // 선행 입력 검증 — 표기 오류 / 미존재 WBS / 자기 참조 / 순환 참조를 wbsCode별 메시지로 반환
 function scheduleIssues(tasks) {
   const all = []; (tasks || []).forEach(t => (t.subtasks || []).forEach(s => all.push(s)));
@@ -3891,10 +3969,15 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
           assignee: "", pred: "", start: "", finish: "", effort: "", duration: "", status: "대기" });
       }
     });
+    // 공휴일을 등록하지 않았으면 프로젝트 기간의 법정 공휴일을 기본으로 넣는다 (화면에서 수정 가능)
+    const hol = holidays.length ? holidays : defaultKrHolidays(form?.startDate, form?.endDate);
+    if (!holidays.length && hol.length) setWbsSetup(su => ({ ...su, holidays: hol }));
+    // 기본 일정 자동 배치 — 공수·선행이 빈 작업에만 (사람이 고친 값이 우선)
+    const auto = autoScheduleWbs(tasks, form?.startDate, form?.endDate, hol);
     // 매트릭스 선택(selected·common)도 함께 보관 — 프로젝트 저장 후 다시 열 때 매트릭스가 비어 보이지 않도록
-    setWbsData({ tasks, pbsText, holidays, selected: { ...selected }, common: { ...common } });
+    setWbsData({ tasks, pbsText, holidays: hol, selected: { ...selected }, common: { ...common } });
     const leafCnt = tasks.reduce((n,t)=>n+(t.subtasks||[]).length, 0);
-    setBuildMsg({ ok:true, text:`WBS 생성 완료 — 단계 ${tasks.length}개 · Task ${leafCnt}건. 아래 ④ 일정 계획에서 일정을 입력하세요.` });
+    setBuildMsg({ ok:true, text:`WBS 생성 완료 — 단계 ${tasks.length}개 · Task ${leafCnt}건${auto.changed ? ` · 기본 일정 자동 배치 ${auto.changed}건(공수·선행)` : ""}${!holidays.length && hol.length ? ` · 기본 공휴일 ${hol.length}일` : ""}. 아래 ④ 일정 계획에서 공수·선행·작업자를 고치면 일정이 다시 계산됩니다.` });
     setTimeout(() => scheduleRef.current?.scrollIntoView({ behavior:"smooth", block:"start" }), 100);
     } catch (e) {
       console.error(e);
@@ -6340,7 +6423,16 @@ function xlDateFn(s) {
   return `DATE(${+m[1]},${+m[2]},${+m[3]})`;
 }
 
-function makeWbsGanttXlsx(wbs, meta) {
+function makeWbsGanttXlsx(wbs0, meta) {
+  // 일정이 하나도 없는 WBS(기본 일정 기능 이전 생성분 등)는 저장본을 바꾸지 않고 복사본에 기본 일정·공휴일을 채워 내보낸다
+  let wbs = wbs0;
+  const noSched = (wbs0?.tasks || []).every(t => (t.subtasks || []).every(s => !s.start && !(Number(s.effort) > 0)));
+  if (noSched && (wbs0?.tasks || []).length && meta?.startDate) {
+    const hol = (wbs0.holidays || []).length ? wbs0.holidays : defaultKrHolidays(meta.startDate, meta.endDate);
+    const tasks = wbs0.tasks.map(t => ({ ...t, subtasks: (t.subtasks || []).map(s => ({ ...s })) }));
+    autoScheduleWbs(tasks, meta.startDate, meta.endDate, hol);
+    wbs = { ...wbs0, tasks, holidays: hol };
+  }
   const tasks = wbs?.tasks || [];
   const holidays = (wbs?.holidays || []).slice().sort();
   const today = new Date().toLocaleDateString("ko-KR");
