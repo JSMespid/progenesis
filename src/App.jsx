@@ -10647,7 +10647,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3 }}>
                   {(model.dbcImports || []).slice().reverse().map(h => (
                     <div key={h.fileName + h.own} style={{ fontSize: 10.5, color: T.text }}>
-                      <span style={{ color: T.green }}>✓ 가져옴</span> {h.fileName} · 노드 {h.own} · 메시지 {h.messages}개 → 인터페이스 요구 {h.added}건 추가{h.dup ? ` (이미 있던 ${h.dup}건 제외)` : ""} · <span style={{ color: T.muted }}>{String(h.at).replace("T", " ").slice(0, 16)}</span>
+                      <span style={{ color: T.green }}>✓ 가져옴</span> {h.fileName} · 노드 {h.own} · 메시지 {h.messages}개 → 인터페이스 요구 {h.added}건 추가{h.dup ? ` (이미 있던 ${h.dup}건 제외)` : ""} · <span style={{ color: T.muted }}>{(d => isNaN(d) ? String(h.at).slice(0, 16) : `${d.toLocaleDateString("sv-SE")} ${d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false })}`)(new Date(h.at))}</span>
                     </div>))}
                   <div style={{ fontSize: 10, color: T.muted }}>결과는 SYS.2 시스템 요구(출처 DBC)와 SYS.3 시스템 인터페이스에 있습니다. DBC가 개정되면 새 파일을 다시 올리세요 — 새로 생긴 메시지만 추가됩니다.</div>
                 </div>)}
@@ -11882,8 +11882,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           </div>)}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px", borderTop: `1px solid ${T.border}`, flexShrink: 0, gap: 8 }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 10.5, color: T.muted }}>{model.reqs.STK?.length ? `이해관계자 요구 ${model.reqs.STK.length} · ` : ""}시스템 요구 {model.reqs.SYS.length} · 시스템 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW 요구 ${model.reqs.SW.length} · SW 구성요소 ${model.comps.SW.length}${model.units.SW.length ? ` · SW 유닛 ${model.units.SW.length}` : ""}` : ""}{model.scope.HW ? ` · HW 요구 ${model.reqs.HW.length} · HW 구성요소 ${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}{requirements?.aspice?.updatedAt ? ` · 저장본 ${(d => isNaN(d) ? String(requirements.aspice.updatedAt).slice(0, 10) : `${d.toLocaleDateString("sv-SE")} ${d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false })}`)(new Date(requirements.aspice.updatedAt))}` : ""}</div>
-            <div className="ae-hint" style={{ fontSize: 9.5, color: T.muted, opacity: 0.8, marginTop: 2 }}>SYS = 시스템 요구 수 · 요소 = 시스템 구성요소 수 · SW/HW = 하위 요구 수 / 컴포넌트 수 (/ SW 유닛 수) · 검증 수단 = 시험 항목(TC) 수</div>
+            <div className="ae-hint" title="이 프로젝트 V-모델에 지금까지 만들어진 항목 수입니다" style={{ fontSize: 10.5, color: T.muted }}>모델 현황 — {model.reqs.STK?.length ? `이해관계자 요구 ${model.reqs.STK.length} · ` : ""}시스템 요구 {model.reqs.SYS.length} · 시스템 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW 요구 ${model.reqs.SW.length} · SW 구성요소 ${model.comps.SW.length}${model.units.SW.length ? ` · SW 유닛 ${model.units.SW.length}` : ""}` : ""}{model.scope.HW ? ` · HW 요구 ${model.reqs.HW.length} · HW 구성요소 ${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}</div>
             {(() => {
               // 규칙 기반 상속 초안(시스템 요구를 그대로 복사한 하위 요구)이 남아 있으면 한 줄로 안내
               const inh = ["SW", "HW"].filter(lv => model.scope[lv]).map(lv => [lv, model.reqs[lv].filter(r => /관점 구체화 필요/.test(r.text || "")).length]).filter(([, n]) => n > 0);
@@ -11893,7 +11892,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           <div style={{ display: "flex", gap: 8 }}>
             <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="이해관계자 요구 목록·시스템 요구사항 명세서·아키텍처·하위 요구·상세설계·검증 명세·추적 매트릭스를 한 번에 내려받습니다 (저장 전 편집 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 V-모델 산출물 ZIP</Btn>
             {reqDirty && <button onClick={() => setTab("req", "STK")} title="SYS.1·SYS.2에서 고친 요구를 아직 확정하지 않았습니다 — [확정·V-모델 반영]을 눌러야 V-모델과 저장에 포함됩니다" style={{ alignSelf: "center", fontSize: 10.5, color: T.amber, background: "none", border: `1px solid ${T.amber}88`, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>● 요구 확정 안 됨 →</button>}
-            <span style={{ alignSelf: "center", fontSize: 10.5, color: dirty ? T.amber : T.green, whiteSpace: "nowrap" }}>{dirty ? "● 저장 안 된 변경 있음" : "✓ 저장됨"}</span>
+            <span style={{ alignSelf: "center", fontSize: 10.5, color: dirty ? T.amber : T.green, whiteSpace: "nowrap" }}>{dirty ? "● 저장 안 된 변경 있음" : `✓ 저장됨${requirements?.aspice?.updatedAt ? ` ${(d => isNaN(d) ? "" : d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }))(new Date(requirements.aspice.updatedAt))}` : ""}`}</span>
             <Btn variant="outline" onClick={requestClose} style={{ fontSize: 12, padding: "7px 14px" }}>닫기</Btn>
             <Btn onClick={() => save()} disabled={busy} title="작업 내용을 프로젝트에 반영하고 브라우저 임시저장본에도 보관합니다. 창은 닫히지 않습니다." style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
           </div>
