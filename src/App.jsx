@@ -372,29 +372,170 @@ const _LEGACY_KEYS = [["progenesis_auth", AUTH_KEY], ["progenesis_wizard_draft",
 })();
 
 // ── 위저드 임시저장본: 여러 건 보관 (작성 중 항목마다 draftId) ──
-// 이전에는 슬롯이 1개(DRAFT_KEY)라 새 프로젝트를 임시저장하면 기존 작성 중 과제가 덮어써져 사라졌다.
-// 이제 spiderqa_wizard_drafts 배열에 건별로 보관하고, 구버전 단일 슬롯은 처음 읽을 때 배열로 이관한다.
-const DRAFTS_KEY = "spiderqa_wizard_drafts";
+// 2026-10-23: 저장소를 localStorage(사이트당 약 5MB) → IndexedDB로 이전.
+//   SWE.3 소스코드·HWE.2 회로 설계까지 담은 V-모델은 5MB를 넘어, localStorage 쓰기가 조용히 실패하고
+//   다음에 열면 '마지막으로 성공한 옛 저장본'이 복원되는 결함이 있었다.
+//   구조: 메모리 캐시(_draftCache)를 기준으로 동기 조회하고, 기록은 IndexedDB에 비동기로 한다.
+//   기록 결과(성공·실패)는 draftStatus로 화면(V-모델 하단)에 그대로 표시한다 — '저장됨'은 실제 성공 시에만.
+const DRAFTS_KEY = "spiderqa_wizard_drafts";   // 구버전(localStorage) 키 — 최초 1회 IndexedDB로 이관 후 삭제
 const newDraftId = () => "d" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const draftHasContent = d => !!(d && (d.projectForm?.name || d.projectForm?.client || d.projectForm?.track || d.selectedOSSP || d.selectedSDLC));
-function readDrafts() {
-  let arr = [];
-  try { const raw = localStorage.getItem(DRAFTS_KEY); const v = raw ? JSON.parse(raw) : []; if (Array.isArray(v)) arr = v.filter(d => d && typeof d === "object"); } catch (e) { console.error(e); }
-  try {
-    const legacy = localStorage.getItem(DRAFT_KEY);
-    if (legacy) {
-      const d = JSON.parse(legacy);
-      if (d && typeof d === "object" && !arr.some(x => x.draftId && x.draftId === d.draftId)) {
-        arr.push({ ...d, draftId: d.draftId || newDraftId() });
-        localStorage.setItem(DRAFTS_KEY, JSON.stringify(arr));
-      }
-      localStorage.removeItem(DRAFT_KEY);   // 이관 성공 후에만 제거 (setItem 실패 시 예외로 여기까지 오지 않음)
+const IDB_NAME = "spiderqa", IDB_STORE = "drafts";
+let _idbP = null;
+function draftDb() {
+  if (_idbP) return _idbP;
+  _idbP = new Promise((resolve, reject) => {
+    try {
+      if (typeof indexedDB === "undefined") throw new Error("이 브라우저는 IndexedDB를 지원하지 않습니다");
+      const r = indexedDB.open(IDB_NAME, 1);
+      r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains(IDB_STORE)) r.result.createObjectStore(IDB_STORE, { keyPath: "draftId" }); };
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error || new Error("IndexedDB 열기 실패"));
+      r.onblocked = () => reject(new Error("IndexedDB가 다른 탭에 의해 잠겨 있습니다 — 다른 SPIDer 탭을 닫고 새로고침하세요"));
+    } catch (e) { reject(e); }
+  });
+  _idbP.catch(() => { _idbP = null; });   // 실패하면 다음 호출에서 다시 시도
+  return _idbP;
+}
+function idbTx(mode, fn) {
+  return draftDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, mode);
+    let out;
+    try { out = fn(tx.objectStore(IDB_STORE)); }
+    catch (e) { try { tx.abort(); } catch (_) {} reject(e); return; }
+    tx.oncomplete = () => resolve(out && "result" in out ? out.result : undefined);
+    tx.onerror = () => reject(tx.error || new Error("IndexedDB 기록 실패"));
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB 기록 중단(저장 공간 부족 가능)"));
+  }));
+}
+// 기록 상태 — 구독형(작은 저장소). V-모델 하단 표시·실패 경고에 쓴다.
+const draftStatus = { state: "idle", at: null, err: "" };   // state: idle | pending | ok | error
+const _draftSubs = new Set();
+function setDraftStatus(p) { Object.assign(draftStatus, p); _draftSubs.forEach(f => { try { f({ ...draftStatus }); } catch (_) {} }); }
+function useDraftStatus() {
+  const [st, setSt] = useState(() => ({ ...draftStatus }));
+  useEffect(() => { _draftSubs.add(setSt); return () => { _draftSubs.delete(setSt); }; }, []);
+  return st;
+}
+let _draftCache = null;          // null = 아직 IndexedDB에서 읽지 않음
+const _draftReadyCbs = new Set();
+// 앱 시작 시 1회: IndexedDB 로드 + 구버전 localStorage 저장본 이관(이관이 성공한 경우에만 localStorage에서 삭제)
+let _draftInitP = null;
+function initDrafts() {
+  if (_draftInitP) return _draftInitP;
+  _draftInitP = (async () => {
+    let arr = [];
+    try { arr = (await idbTx("readonly", st => st.getAll())) || []; }
+    catch (e) { console.error(e); setDraftStatus({ state: "error", err: "브라우저 임시저장소(IndexedDB)를 열지 못했습니다: " + (e?.message || e) }); }
+    const legacy = [];
+    try { const raw = localStorage.getItem(DRAFTS_KEY); const v = raw ? JSON.parse(raw) : []; if (Array.isArray(v)) legacy.push(...v.filter(d => d && typeof d === "object")); } catch (e) { console.error(e); }
+    try { const one = localStorage.getItem(DRAFT_KEY); if (one) { const d = JSON.parse(one); if (d && typeof d === "object") legacy.push(d); } } catch (e) { console.error(e); }
+    if (legacy.length) {
+      legacy.forEach(d => { if (!d.draftId) d.draftId = newDraftId(); });
+      const have = Object.fromEntries(arr.map(d => [d.draftId, d]));
+      const move = legacy.filter(d => !have[d.draftId] || String(d.savedAt || "") > String(have[d.draftId].savedAt || ""));
+      try {
+        if (move.length) await idbTx("readwrite", st => { move.forEach(d => st.put(d)); });
+        localStorage.removeItem(DRAFTS_KEY); localStorage.removeItem(DRAFT_KEY);   // 이관 성공 후에만 제거 → localStorage 공간도 비워진다
+        move.forEach(d => { have[d.draftId] = d; });
+        arr = Object.values(have);
+      } catch (e) { console.error("임시저장본 이관 실패:", e); arr = [...arr, ...move.filter(d => !arr.some(x => x.draftId === d.draftId))]; }
     }
-  } catch (e) { console.error(e); }
-  arr.forEach(d => { if (!d.draftId) d.draftId = newDraftId(); });
+    _draftCache = arr.filter(d => d && d.draftId);
+    try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (_) {}   // 브라우저가 저장소를 임의로 비우지 않도록 요청
+    _draftReadyCbs.forEach(f => { try { f(); } catch (_) {} });
+    return _draftCache;
+  })();
+  return _draftInitP;
+}
+function readDrafts() {
+  const arr = (_draftCache || []).map(d => d);
   return arr.sort((a, b) => String(b.savedAt || "").localeCompare(String(a.savedAt || "")));
 }
-function writeDrafts(arr) { localStorage.setItem(DRAFTS_KEY, JSON.stringify(arr)); }   // 공간 부족 시 예외 — 호출부에서 처리
+// 1건 기록 — 캐시는 즉시 갱신, IndexedDB 기록은 비동기(결과는 draftStatus로 알린다). 반환: Promise<boolean>
+let _draftWriteSeq = 0;
+function putDraft(draft) {
+  _draftCache = [draft, ...(_draftCache || []).filter(d => d.draftId !== draft.draftId)];
+  const seq = ++_draftWriteSeq;
+  setDraftStatus({ state: "pending", err: "" });
+  // 구조화 복제가 안 되는 값(함수 등)이 섞여 있으면 JSON 왕복본으로 기록 (기존 localStorage 방식과 같은 결과)
+  const putOnce = rec => idbTx("readwrite", st => { st.put(rec); });
+  return initDrafts().then(() => putOnce(draft).catch(e => {
+      if (e && e.name === "DataCloneError") return putOnce(JSON.parse(JSON.stringify(draft)));
+      throw e;
+    }))
+    .then(() => { if (seq === _draftWriteSeq) setDraftStatus({ state: "ok", at: new Date().toISOString(), err: "" }); return true; })
+    .catch(e => {
+      console.error("임시저장 실패:", e);
+      const quota = /quota/i.test(String(e?.name || "") + String(e?.message || ""));
+      setDraftStatus({ state: "error", err: quota ? "브라우저 저장 공간이 부족합니다" : (e?.message || String(e)) });
+      return false;
+    });
+}
+function deleteDraftRec(id) {
+  _draftCache = (_draftCache || []).filter(d => d.draftId !== id);
+  return initDrafts().then(() => idbTx("readwrite", st => { st.delete(id); })).then(() => true).catch(e => { console.error(e); return false; });
+}
+
+// ── 큰 요구사항·V-모델 데이터의 서버 저장: gzip 압축 → Supabase Storage(project-data 버킷) ──
+// Vercel 함수 요청 본문 한도(4.5MB, 모든 플랜 공통)를 넘는 프로젝트는 /api/projects POST가 413으로 실패한다.
+// 요구사항(requirements) JSON이 일정 크기를 넘으면 압축해 Storage에 직접 올리고(서명 URL PUT — Vercel 우회),
+// projects 행에는 tailoring.requirementsBlob = { path, bytes, rawChars, savedAt } 포인터만 남긴다. DB 스키마 변경 없음.
+const REQ_BLOB_MIN_CHARS = 300000;   // 이보다 크면 Storage로 분리 (작은 과제는 기존처럼 행 안에 보관)
+async function gzipText(text) {
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function gunzipToText(buf) {
+  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return await new Response(stream).text();
+}
+async function uploadRequirementsBlob(req) {
+  const json = JSON.stringify(req);
+  const gz = await gzipText(json);
+  const sign = await fetch("/api/project-blobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "sign-upload" }) });
+  const sj = await sign.json().catch(() => ({}));
+  if (!sign.ok || !sj.upload_url) throw new Error(sj.error || `업로드 URL 발급 실패 (HTTP ${sign.status})`);
+  const put = await fetch(sj.upload_url, { method: "PUT", headers: { "Content-Type": "application/gzip" }, body: gz });
+  if (!put.ok) { const t = await put.text().catch(() => ""); throw new Error(`Storage 업로드 실패 (${put.status}) ${t.slice(0, 120)}`); }
+  return { path: sj.storage_path, bytes: gz.length, rawChars: json.length, savedAt: new Date().toISOString() };
+}
+const _reqBlobCache = new Map();   // path → requirements (같은 세션에서 반복 다운로드 방지)
+async function downloadRequirementsBlob(blob) {
+  if (!blob || !blob.path) return null;
+  if (_reqBlobCache.has(blob.path)) return _reqBlobCache.get(blob.path);
+  const r = await fetch(`/api/project-blobs?path=${encodeURIComponent(blob.path)}`);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.url) throw new Error(j.error || `다운로드 URL 발급 실패 (HTTP ${r.status})`);
+  const d = await fetch(j.url);
+  if (!d.ok) throw new Error(`V-모델 데이터 다운로드 실패 (HTTP ${d.status})`);
+  const req = JSON.parse(await gunzipToText(new Uint8Array(await d.arrayBuffer())));
+  _reqBlobCache.set(blob.path, req);
+  return req;
+}
+// 저장된 프로젝트의 요구사항 — 행 안(구버전·작은 과제) 또는 Storage 포인터. 포인터면 내려받아 채운다.
+async function hydrateProjectRequirements(p) {
+  const t = p?.tailoring;
+  if (!t || t.requirements || !t.requirementsBlob?.path) return p;
+  const req = await downloadRequirementsBlob(t.requirementsBlob);
+  return { ...p, tailoring: { ...t, requirements: req } };
+}
+// 위저드 tailoring 상태에는 요구사항 사본을 두지 않는다 (requirements 상태가 원본 — 임시저장본 용량이 2배가 되던 문제 방지)
+const stripReqFromTailoring = t => { if (!t || typeof t !== "object") return t; const { requirements: _r, requirementsBlob: _b, ...rest } = t; return rest; };
+
+// ── V-모델 백업 파일(JSON) — 내보내기·가져오기, V-모델 ZIP에도 함께 넣는다 ──
+const VMODEL_BACKUP_SCHEMA = "spiderqa-vmodel-backup";
+function makeVmodelBackup(meta, req) {
+  return { schema: VMODEL_BACKUP_SCHEMA, version: 1, exportedAt: new Date().toISOString(),
+    project: { name: meta?.name || "", client: meta?.client || "", systemName: meta?.systemName || "" },
+    requirements: req || null };
+}
+function parseVmodelBackup(text) {
+  const j = JSON.parse(text);
+  if (!j || j.schema !== VMODEL_BACKUP_SCHEMA || !j.requirements || typeof j.requirements !== "object") throw new Error("SPIDer V-모델 백업 파일이 아닙니다");
+  if (!j.requirements.aspice) throw new Error("백업 파일에 V-모델 데이터가 없습니다");
+  return j;
+}
 
 function b64urlDecode(s) {
   let x = String(s || "").replace(/-/g, "+").replace(/_/g, "/");
@@ -1376,12 +1517,20 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         draftId: draftIdRef.current, editingId: editingId || null,   // 수정 중 저장본이면 원본 프로젝트 id를 함께 보관
         wizardStep, projectForm, selectedOSSP,
         sdlcFactors, selectedSDLC, sdlcRecommendation,
-        tailoring, pdpData, wbsData, wbsSetup, deliverablesData, requirements,
+        tailoring: stripReqFromTailoring(tailoring), pdpData, wbsData, wbsSetup, deliverablesData, requirements,
         savedAt: new Date().toISOString(),
       };
-      writeDrafts([draft, ...readDrafts().filter(d => d.draftId !== draft.draftId)]);
+      // 캐시는 즉시 반영(true 반환), IndexedDB 기록은 비동기 — 실패는 draftStatus·경고로 알린다
+      putDraft(draft).then(ok => {
+        if (!ok && !draftWarned.current) {
+          draftWarned.current = true;
+          alert("브라우저 임시저장에 실패했습니다: " + (draftStatus.err || "알 수 없는 오류") +
+            "\n작업을 잃지 않으려면 V-모델 창의 [💾 백업]으로 파일을 내려받거나, 위저드 마지막 단계에서 '완료'로 서버에 저장하세요.");
+        }
+        if (ok) draftWarned.current = false;   // 회복되면 다음 실패 때 다시 알린다
+      });
       return true;
-    } catch (e) { console.error(e); return false; }
+    } catch (e) { console.error(e); setDraftStatus({ state: "error", err: e?.message || String(e) }); return false; }
   }
 
   // V-모델(요구사항·검토 결과·판정)이 바뀌면 임시저장본에 자동 저장 — 새로고침·탭 닫힘으로 AI 검토 결과를 잃지 않도록.
@@ -1394,13 +1543,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     // 불러오기(프로젝트 수정 시작·임시저장본 복원)로 처음 채워진 경우는 저장하지 않고, 위저드 안에서 바뀐 경우만 저장
     if (!requirements?.aspice || !prev) return;
     clearTimeout(draftTimer.current);
-    draftTimer.current = setTimeout(() => {
-      const ok = saveDraft();
-      if (!ok && !draftWarned.current) {
-        draftWarned.current = true;
-        alert("브라우저 임시저장 공간이 부족해 V-모델 작업 내용을 자동 저장하지 못했습니다.\n작업을 잃지 않으려면 위저드 마지막 단계에서 '완료'로 서버에 저장하세요.");
-      }
-    }, 800);
+    setDraftStatus({ state: "pending", err: "" });   // 기록 대기 — 하단 표시가 '저장 중'으로 바뀐다
+    draftTimer.current = setTimeout(() => { saveDraft(); }, 500);
     return () => clearTimeout(draftTimer.current);
   }, [requirements]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1410,7 +1554,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   // 해당 작성 건 1개만 지운다 (다른 작성 중 항목은 보존)
   function clearDraft(id) {
     if (!id) return;
-    try { writeDrafts(readDrafts().filter(d => d.draftId !== id)); } catch (e) { console.error(e); }
+    deleteDraftRec(id);
   }
 
   function restoreDraft(id) {
@@ -1427,7 +1571,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     if (d.sdlcFactors) setSdlcFactors(d.sdlcFactors);
     setSelectedSDLC(d.selectedSDLC || null);
     setSdlcRecommendation(d.sdlcRecommendation || null);
-    if (d.tailoring) setTailoring(d.tailoring);
+    if (d.tailoring) setTailoring(stripReqFromTailoring(d.tailoring));
     setPdpData(d.pdpData || null);
     setWbsData(d.wbsData || null);
     setWbsSetup(d.wbsSetup || { pbsText: "", selected: {} });
@@ -1436,7 +1580,17 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   }
 
   // 완료(저장)된 프로젝트를 위저드로 다시 열어 수정 — 저장된 데이터를 위저드 상태로 복원
-  function editProject(p) {
+  async function editProject(p0) {
+    let p = p0;
+    if (p0?.tailoring?.requirementsBlob?.path && !p0.tailoring.requirements) {
+      setBusyOp({ label: "V-모델 데이터 불러오는 중…", percent: 40 });
+      try { p = await hydrateProjectRequirements(p0); setBusyOp(null); }
+      catch (e) {
+        setBusyOp(null);
+        alert("V-모델 데이터를 불러오지 못해 수정을 시작하지 않았습니다: " + e.message + "\n(이대로 열면 V-모델이 빈 상태로 저장될 수 있습니다.) 네트워크를 확인한 뒤 다시 시도하세요.");
+        return;
+      }
+    }
     clearTimeout(draftTimer.current);
     // 같은 프로젝트를 수정하다 임시저장한 건이 있으면 그 슬롯을 이어서 쓴다 (작성 중 항목이 중복으로 쌓이지 않도록)
     draftIdRef.current = (readDrafts().find(d => d.editingId === p.id) || {}).draftId || null;
@@ -1453,7 +1607,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     setSelectedSDLC(t.sdlc||null);
     setSdlcFactors(t.sdlc_factors||{ req_clarity:"보통", req_volatility:"보통", delivery:"단계적", risk:"보통", regulation:"보통", team:"집중" });
     setSdlcRecommendation(null);
-    setTailoring({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준", review_cycle:"격주", test_level:"통합", risk:"강화", ...t });
+    setTailoring({ scale:"중형", method:"UML", excluded:{}, doc_level:"표준", review_cycle:"격주", test_level:"통합", risk:"강화", ...stripReqFromTailoring(t) });
     setPdpData(p.pdp||null);
     setWbsData(p.wbs||null);
     // 매트릭스 선택(selected·common)은 WBS 생성 시 wbsData에 함께 저장됨 — 구버전 프로젝트(미저장)는 빈 매트릭스로 복원
@@ -1471,12 +1625,25 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     if (savingRef.current) return;
     savingRef.current = true;
     setSavingProject(true);
+    // 큰 요구사항·V-모델은 압축해 Storage로 분리 (Vercel 요청 본문 4.5MB 한도 회피) — 실패하면 저장하지 않고 위저드 상태 유지
+    let reqInRow = requirements || null, reqBlob = null;
+    if (reqInRow) {
+      let chars = 0; try { chars = JSON.stringify(reqInRow).length; } catch (_) {}
+      if (chars > REQ_BLOB_MIN_CHARS) {
+        try { reqBlob = await uploadRequirementsBlob(reqInRow); reqInRow = null; }
+        catch (e) {
+          alert("V-모델 데이터를 서버 저장소에 올리지 못해 저장을 중단했습니다: " + e.message + "\n작성 내용은 그대로 유지됩니다. V-모델 창의 [💾 백업]으로 파일을 먼저 받아 두세요.");
+          savingRef.current = false; setSavingProject(false);
+          return;
+        }
+      }
+    }
     const newProject = {
       name:projectForm.name, client:projectForm.client, type:projectForm.type,
       start_date:projectForm.startDate, end_date:projectForm.endDate, pm:projectForm.pm,
       status:"진행중", ossp:selectedOSSP,
       // sdlc 전용 컬럼 없이 tailoring(JSON)에 함께 보존 → DB 스키마 변경 불필요
-      tailoring:{ ...tailoring, sdlc:selectedSDLC, sdlc_factors:sdlcFactors, requirements: requirements||null,
+      tailoring:{ ...stripReqFromTailoring(tailoring), sdlc:selectedSDLC, sdlc_factors:sdlcFactors, requirements: reqInRow, requirementsBlob: reqBlob,
         // 과제 유형(일반 SI / ASPICE)과 ASPICE 적용 기준 — tailoring(JSON)에 보존 (DB 스키마 변경 없음)
         track: projectForm.track || "", aspiceVersion: projectForm.aspiceVersion || "", aspiceCL: projectForm.track === "aspice" ? aspiceClOf(projectForm) : "",
         // 시스템명 — 전용 컬럼 없이 tailoring(JSON)에 보존 (DB 스키마 변경 불필요)
@@ -1489,7 +1656,15 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       pdp:pdpData, wbs:wbsData, deliverables:deliverablesData,
     };
     try {
-      const res = await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(newProject) });
+      const bodyText = JSON.stringify(newProject);
+      const bodyBytes = new Blob([bodyText]).size;
+      if (bodyBytes > 4.3 * 1024 * 1024) {
+        alert(`저장할 프로젝트 데이터가 ${(bodyBytes / 1048576).toFixed(1)}MB로 서버 요청 한도(4.5MB)를 넘습니다.\n로고 이미지·산출물 데이터 크기를 확인해 주세요. 작성 내용은 그대로 유지됩니다.`);
+        savingRef.current = false; setSavingProject(false);
+        return;
+      }
+      if (reqBlob) _reqBlobCache.set(reqBlob.path, requirements);   // 방금 올린 데이터는 다시 내려받지 않는다
+      const res = await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body:bodyText });
       if (!res.ok) {
         const err = await res.json().catch(()=>({}));
         alert("프로젝트 저장에 실패했습니다: " + (err.error || `HTTP ${res.status}`) + "\n작성 내용은 그대로 유지됩니다.");
@@ -1552,9 +1727,22 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
   // 하위 화면에 넘기는 nav — '새 프로젝트' 이동만 startNewProject로 보낸다 (이어서 작성·수정 진입은 기존 nav 그대로)
   const navFromMenu = (p) => (p === "new_project" ? startNewProject() : nav(p));
 
+  // 저장된 프로젝트를 열면 Storage에 분리 보관한 V-모델 데이터를 내려받아 채운다 (산출물 생성·ZIP에 필요)
+  const [reqLoad, setReqLoad] = useState(null);   // null | { state: "loading" | "error", msg }
+  useEffect(() => {
+    const p = currentProject;
+    if (!p?.tailoring?.requirementsBlob?.path || p.tailoring.requirements) { setReqLoad(null); return; }
+    let alive = true;
+    setReqLoad({ state: "loading" });
+    hydrateProjectRequirements(p).then(h => { if (!alive) return; setReqLoad(null); setCurrentProject(cp => (cp && cp.id === h.id ? h : cp)); })
+      .catch(e => { if (alive) setReqLoad({ state: "error", msg: e.message }); });
+    return () => { alive = false; };
+  }, [currentProject?.id, currentProject?.tailoring?.requirementsBlob?.path]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   // 삭제 진행 표시 (작성 중 항목·저장된 프로젝트 공통)
   const [busyOp, setBusyOp] = useState(null);   // { label, percent, error? }
   const [, setDraftVer] = useState(0);          // 작성 중 항목 삭제 후 대시보드 즉시 갱신용
+  useEffect(() => { initDrafts().then(() => setDraftVer(v => v + 1)); }, []);   // IndexedDB 임시저장본 로드(구버전 이관 포함) 후 목록 갱신
   const finishBusy = (label) => { setBusyOp({ label, percent: 100 }); setTimeout(() => setBusyOp(null), 900); };
 
   // 작성 중(임시저장) 항목 삭제: 브라우저 임시저장본 + 메모리의 위저드 상태를 함께 비운다.
@@ -1604,7 +1792,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       sdlcRecommendation={sdlcRecommendation} recommending={recommending} onRecommendSDLC={recommendSDLC}
       editing={!!editingId} saving={savingProject}
       onSaveDraft={saveDraft} loadDrafts={loadDrafts} onRestoreDraft={(id)=>{ restoreDraft(id); setWizardKey(k => k + 1); }} />,
-    project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} onEdit={editProject} />,
+    project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} onEdit={editProject} reqLoad={reqLoad} />,
     ossp: <OSSPPage nav={navFromMenu} customOSSP={customOSSP} builtinOSSP={builtinOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
     regulation: <LibraryPage nav={nav} kind="regulation"
       title="규제 (Regulation / Compliance)" subtitle="프로젝트가 준수해야 할 규제·컴플라이언스 자산"
@@ -8250,6 +8438,8 @@ async function downloadAspicePackage(meta, ctx) {
   try { swe3ModelFiles(meta, ctx, `${String(order.length + 1).padStart(2, "0")}_SW4101_상세설계_모델`).forEach(f => files.push(f)); } catch (_) {}
   try { hw2ModelFiles(meta, ctx, `${String(order.length + 2).padStart(2, "0")}_HW4101_HW설계_모델`).forEach(f => files.push(f)); } catch (_) {}
   try { swe4HostFiles(meta, ctx, `${String(order.length + 3).padStart(2, "0")}_SW4106_유닛시험_호스트실행`).forEach(f => files.push(f)); } catch (_) {}
+  // SPIDer 복원용 백업 — V-모델 창의 [📂 백업 가져오기]로 이 ZIP을 받은 시점의 상태를 그대로 되살린다
+  try { if (ctx?.requirements?.aspice) files.push({ path: "99_SPIDer_V모델_백업.json", content: new TextEncoder().encode(JSON.stringify(makeVmodelBackup(meta, ctx.requirements))) }); } catch (e) { console.warn("백업 JSON 포함 실패:", e?.message); }
   if (!files.length) throw new Error("생성할 수 있는 ASPICE 산출물이 없습니다. 시스템 요소·하위 요구·검증 수단을 먼저 작성하세요.");
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
   const url = URL.createObjectURL(blob);
@@ -9479,7 +9669,8 @@ function AeFlags({ r }) {
   return f.length ? <span title={f.map(x => x.msg).join("\n")} style={{ fontSize: 9.5, color: T.amber, whiteSpace: "nowrap" }}>⚠ {f.length}</span> : <span style={{ fontSize: 9.5, color: T.green }}>✓</span>;
 }
 
-function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, ossp, initTab, tailoring }) {
+function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequirements, ossp, initTab, tailoring }) {
+  const draftSt = useDraftStatus();   // 브라우저 임시저장(IndexedDB) 실제 기록 결과
   const [items, setItems] = useState(() => (requirements?.items || []).map(x => ({ ...x })));
   const [model, setModel] = useState(() => {
     // 기존 연결의 기준선을 현재 저장본 내용으로 먼저 등록한 뒤 확정 요구로 동기화 (변경 감지)
@@ -10406,19 +10597,56 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     } catch (x) { setErr("OSSP 템플릿 점검 실패: " + x.message); }
   }
 
-  function save(quiet) {
+  // 저장 묶음 — 저장·백업 내보내기 공용
+  function buildSaveOut() {
     // 저장 시: 이번 세션에 새로 생긴 연결만 기준선 등록 (미해결 '변경 검토 필요' 연결은 그대로 유지), 사라진 연결 기록 정리
     const out = { ...AE.baselineLinks({ ...model, reqs: { ...model.reqs, STK: AE.syncStkReqs(requirements?.stk?.items || [], model.reqs.STK), SYS: AE.syncSysReqs(items, model.reqs.SYS) } }), updatedAt: new Date().toISOString() };
-    setRequirements({ ...(requirements || {}), items, aspice: out, idRegistry: nextIdRegistry(requirements, items), updatedAt: requirements?.updatedAt || new Date().toISOString(),
-      ...(srcRef.current ? { source: srcRef.current, sourceName: srcRef.current.files?.length ? srcRef.current.files.map(f => f.name).join(", ") : (requirements?.sourceName || "직접 입력") } : {}) });
+    const req = { ...(requirements || {}), items, aspice: out, idRegistry: nextIdRegistry(requirements, items), updatedAt: requirements?.updatedAt || new Date().toISOString(),
+      ...(srcRef.current ? { source: srcRef.current, sourceName: srcRef.current.files?.length ? srcRef.current.files.map(f => f.name).join(", ") : (requirements?.sourceName || "직접 입력") } : {}) };
+    return { out, req };
+  }
+  function save(quiet) {
+    const { out, req } = buildSaveOut();
+    setRequirements(req);
     // 저장해도 창은 닫지 않는다(작업 계속). 화면 모델도 저장본(기준선 등록 반영)과 같게 맞춘다.
     setModel(out);
     savedSig.current = aeSig(out, items);
     setErr(null);
     const hm = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+    // 브라우저 임시저장(IndexedDB) 기록은 곧바로 비동기로 진행된다 — 성공·실패는 하단 표시가 실제 결과로 알려 준다
     setNote(quiet === "review"
-      ? `검토 AI 결과를 자동 저장했습니다 (${hm}) — 브라우저 임시저장본에도 보관됩니다. 서버 저장은 위저드 마지막 단계의 '완료'에서 합니다.`
-      : `저장했습니다 (${hm}) — 프로젝트에 반영하고 브라우저 임시저장본에도 보관했습니다. 서버(DB) 저장은 위저드 마지막 단계의 '완료'에서 합니다.`);
+      ? `검토 AI 결과를 프로젝트에 반영했습니다 (${hm}) — 브라우저 임시저장 결과는 하단에 표시됩니다. 서버 저장은 위저드 마지막 단계의 '완료'에서 합니다.`
+      : `프로젝트에 반영했습니다 (${hm}) — 브라우저 임시저장 결과는 하단에 표시됩니다. 서버(DB) 저장은 위저드 마지막 단계의 '완료'에서 합니다.`);
+  }
+  // ── V-모델 백업: 지금 편집 내용을 저장한 뒤 JSON 파일로 내려받기 / 백업 파일에서 복원 ──
+  function exportBackup() {
+    try {
+      const { req } = buildSaveOut();
+      save();
+      const bak = makeVmodelBackup(form || {}, req);
+      const d = new Date(), pad = n => String(n).padStart(2, "0");
+      const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+      const name = `SPIDer_V모델백업_${String(form?.name || "프로젝트").replace(/[\\/:*?"<>|]/g, "_").trim()}_${stamp}.json`;
+      const url = URL.createObjectURL(new Blob([JSON.stringify(bak)], { type: "application/json" }));
+      const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setNote(`백업 파일을 내려받았습니다 — ${name}. 이 파일은 [📂 백업 가져오기]로 언제든 그대로 복원할 수 있습니다.`);
+    } catch (x) { setErr("백업 내보내기 실패: " + x.message); }
+  }
+  const bakInputRef = useRef(null);
+  async function importBackup(file) {
+    if (!file) return;
+    try {
+      const bak = parseVmodelBackup(await file.text());
+      const pn = bak.project || {};
+      const same = (!pn.name || pn.name === (form?.name || "")) && (!pn.client || pn.client === (form?.client || ""));
+      const m = AE.normalizeModel(bak.requirements.aspice);
+      const summary = `시스템 요구 ${m.reqs.SYS.length} · SW 요구 ${m.reqs.SW.length} · HW 요구 ${m.reqs.HW.length} · SW 유닛 ${m.units.SW.length} · HW 구성요소 ${m.comps.HW.length} · 검증 수단 ${m.tests.length}`;
+      const msg = `백업 파일로 V-모델을 복원합니다.\n\n· 백업 시각: ${new Date(bak.exportedAt).toLocaleString("ko-KR")}\n· 백업 프로젝트: ${pn.name || "-"} / ${pn.client || "-"}${same ? "" : "\n  ⚠ 지금 열린 프로젝트와 이름·고객사가 다릅니다"}\n· 내용: ${summary}\n\n지금 V-모델의 내용(요구사항·설계·시험·검토 결과)은 백업 내용으로 바뀝니다. 계속할까요?`;
+      if (!window.confirm(msg)) return;
+      setRequirements({ ...bak.requirements, aspice: { ...bak.requirements.aspice, updatedAt: new Date().toISOString() } });
+      if (onReload) onReload();   // 창을 새 데이터로 다시 구성 (key 변경 → 재마운트)
+    } catch (x) { setErr("백업 가져오기 실패: " + x.message); }
   }
   // 검토 AI 결과는 호출 비용·시간이 크므로 실행이 끝나면 자동 저장한다 (모델 반영이 끝난 다음 렌더에서 실행)
   const [autoSaveTick, setAutoSaveTick] = useState(0);
@@ -12087,6 +12315,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           </div>)}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px", borderTop: `1px solid ${T.border}`, flexShrink: 0, gap: 8 }}>
           <div style={{ minWidth: 0 }}>
+            {draftSt.state === "error" && <div style={{ fontSize: 10.5, color: T.red, marginBottom: 2 }}>⚠ 브라우저 임시저장 실패: {draftSt.err} — 창을 닫기 전에 💾 백업으로 파일을 받아 두세요.</div>}
             <div className="ae-hint" title="이 프로젝트 V-모델에 지금까지 만들어진 항목 수입니다" style={{ fontSize: 10.5, color: T.muted }}>모델 현황 — {model.reqs.STK?.length ? `이해관계자 요구 ${model.reqs.STK.length} · ` : ""}시스템 요구 {model.reqs.SYS.length} · 시스템 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW 요구 ${model.reqs.SW.length} · SW 구성요소 ${model.comps.SW.length}${model.units.SW.length ? ` · SW 유닛 ${model.units.SW.length}` : ""}` : ""}{model.scope.HW ? ` · HW 요구 ${model.reqs.HW.length} · HW 구성요소 ${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}</div>
             {(() => {
               // 규칙 기반 상속 초안(시스템 요구를 그대로 복사한 하위 요구)이 남아 있으면 한 줄로 안내
@@ -12097,7 +12326,18 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           <div style={{ display: "flex", gap: 8 }}>
             <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="이해관계자 요구 목록·시스템 요구사항 명세서·아키텍처·하위 요구·상세설계·검증 명세·추적 매트릭스를 한 번에 내려받습니다 (저장 전 편집 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 V-모델 산출물 ZIP</Btn>
             {reqDirty && <button onClick={() => setTab("req", "STK")} title="SYS.1·SYS.2에서 고친 요구를 아직 확정하지 않았습니다 — [확정·V-모델 반영]을 눌러야 V-모델과 저장에 포함됩니다" style={{ alignSelf: "center", fontSize: 10.5, color: T.amber, background: "none", border: `1px solid ${T.amber}88`, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>● 요구 확정 안 됨 →</button>}
-            <span style={{ alignSelf: "center", fontSize: 10.5, color: dirty ? T.amber : T.green, whiteSpace: "nowrap" }}>{dirty ? "● 저장 안 된 변경 있음" : `✓ 저장됨${requirements?.aspice?.updatedAt ? ` ${(d => isNaN(d) ? "" : d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }))(new Date(requirements.aspice.updatedAt))}` : ""}`}</span>
+            {(() => {
+              // 표시 기준: 편집 미반영(dirty) → 기록 중 → 기록 실패 → 실제 기록 성공(시각). '저장됨'은 IndexedDB 기록이 성공했을 때만.
+              const hm = iso => (d => isNaN(d) ? "" : d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }))(new Date(iso));
+              if (dirty) return <span style={{ alignSelf: "center", fontSize: 10.5, color: T.amber, whiteSpace: "nowrap" }}>● 저장 안 된 변경 있음</span>;
+              if (draftSt.state === "pending") return <span style={{ alignSelf: "center", fontSize: 10.5, color: T.muted, whiteSpace: "nowrap" }}>⏳ 브라우저에 저장 중…</span>;
+              if (draftSt.state === "error") return <span title={draftSt.err} style={{ alignSelf: "center", fontSize: 10.5, color: T.red, whiteSpace: "nowrap", fontWeight: 700 }}>⚠ 임시저장 실패 — 💾 백업을 받으세요</span>;
+              if (draftSt.state === "ok" && draftSt.at) return <span title="브라우저(IndexedDB)에 실제로 기록된 시각입니다. 서버(DB) 저장은 위저드 마지막 단계의 '완료'에서 합니다." style={{ alignSelf: "center", fontSize: 10.5, color: T.green, whiteSpace: "nowrap" }}>✓ 브라우저 저장됨 {hm(draftSt.at)}</span>;
+              return <span title="이 창을 연 뒤 아직 저장하지 않았습니다" style={{ alignSelf: "center", fontSize: 10.5, color: T.muted, whiteSpace: "nowrap" }}>변경 없음</span>;
+            })()}
+            <Btn variant="outline" onClick={exportBackup} disabled={busy || !model.reqs.SYS.length} title="지금 편집 내용을 저장하고, V-모델 전체(요구·설계·코드·회로·시험·검토 결과)를 JSON 백업 파일로 내려받습니다. 브라우저 저장이 실패해도 이 파일로 복원할 수 있습니다." style={{ fontSize: 12, padding: "7px 12px" }}>💾 백업</Btn>
+            <Btn variant="outline" onClick={() => bakInputRef.current && bakInputRef.current.click()} disabled={busy} title="💾 백업 파일(.json) 또는 V-모델 ZIP 안의 99_SPIDer_V모델_백업.json으로 V-모델을 복원합니다" style={{ fontSize: 12, padding: "7px 12px" }}>📂 백업 가져오기</Btn>
+            <input ref={bakInputRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; importBackup(f); }} />
             <Btn variant="outline" onClick={requestClose} style={{ fontSize: 12, padding: "7px 14px" }}>닫기</Btn>
             <Btn onClick={() => save()} disabled={busy} title="작업 내용을 프로젝트에 반영하고 브라우저 임시저장본에도 보관합니다. 창은 닫히지 않습니다." style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
           </div>
@@ -12116,6 +12356,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
   const [zipError, setZipError] = useState(null);
   const [reqModal, setReqModal] = useState(false);   // 요구사항 AI 작성 모달
   const [aeModal, setAeModal] = useState(false);     // ASPICE V-모델 엔지니어링 모달
+  const [aeKey, setAeKey] = useState(0);             // 백업 가져오기 후 V-모델 창 재구성용
   // ASPICE 여부: 과제 유형(시작 화면)이 유일한 기준, 유형이 없는 기존 과제만 OSSP로 판정
   const isAspice = form?.track ? form.track === "aspice" : getGuideForOSSP(pdpCtx?.ossp || {})?.id === "aspice";
   const [aeInitTab, setAeInitTab] = useState(null);
@@ -12239,7 +12480,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
         </div>
       )}
       {reqModal && <ReqGenModal onClose={()=>setReqModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} />}
-      {aeModal && <AspiceEngModal onClose={()=>setAeModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} initTab={aeInitTab} tailoring={pdpCtx?.tailoring} />}
+      {aeModal && <AspiceEngModal key={aeKey} onReload={()=>setAeKey(k=>k+1)} onClose={()=>setAeModal(false)} form={form} wbs={wbs} requirements={requirements} setRequirements={setRequirements} ossp={pdpCtx?.ossp} initTab={aeInitTab} tailoring={pdpCtx?.tailoring} />}
     </div>
   );
 }
@@ -12494,7 +12735,7 @@ function WbsScheduleView({ wbs }) {
   );
 }
 
-function ProjectDetail({ project, nav, onDelete, onEdit }) {
+function ProjectDetail({ project, nav, onDelete, onEdit, reqLoad }) {
   const [tab, setTab] = useState("overview");
   // 테일러링결과서 실문서 생성용 컨텍스트 (SDLC는 tailoring JSON에 함께 저장됨)
   const pdpCtx = { ossp:project.ossp||null, sdlc:project.tailoring?.sdlc||null, tailoring:project.tailoring||null, pdp:project.pdp||null, requirements:project.tailoring?.requirements||null };
@@ -12504,6 +12745,7 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
   const [zipError, setZipError] = useState(null);
   async function handleZipDownload() {
     if (zipping) return;
+    if (reqLoad) { setZipError(reqLoad.state === "loading" ? "V-모델 데이터를 불러오는 중입니다 — 잠시 후 다시 누르세요." : "V-모델 데이터를 불러오지 못했습니다: " + reqLoad.msg); return; }
     setZipping(true); setZipError(null);
     try {
       await downloadDeliverablesZip(project.deliverables, project, project.wbs, pdpCtx, setZipProgress);
@@ -12526,6 +12768,9 @@ function ProjectDetail({ project, nav, onDelete, onEdit }) {
           : <Btn variant="ghost" onClick={()=>setConfirmDelete(true)} style={{ color:T.red, fontSize:12, padding:"6px 10px" }}>삭제</Btn>
         }
       </div>
+      {reqLoad && <div style={{ marginBottom:12, padding:"8px 12px", borderRadius:8, fontSize:11.5, border:`1px solid ${(reqLoad.state === "error" ? T.red : T.amber)}66`, color:reqLoad.state === "error" ? T.red : T.amber }}>
+        {reqLoad.state === "loading" ? "⏳ 서버 저장소에서 V-모델 데이터를 불러오는 중입니다 — 끝나면 V-모델 산출물 생성·ZIP을 사용할 수 있습니다." : `⚠ V-모델 데이터를 불러오지 못했습니다: ${reqLoad.msg} — 새로고침 후 다시 열어 주세요. (이 상태에서는 V-모델 산출물이 빠진 채 생성됩니다)`}
+      </div>}
       <div style={{ display:"flex", gap:3, marginBottom:16, background:T.surface, borderRadius:10, padding:3, border:`1px solid ${T.border}` }}>
         {[["overview","개요"],["pdp","PDP"],["wbs","WBS"],["deliverables","산출물"]].filter(([id]) => !(id === "pdp" && project.tailoring?.track === "aspice" && project.tailoring?.aspiceCL && project.tailoring.aspiceCL !== "CL3")).map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{ flex:1, padding:"7px 0", borderRadius:7, fontSize:12, fontWeight:tab===id?700:400, background:tab===id?T.accent:"transparent", color:tab===id?"#fff":T.muted, border:"none", cursor:"pointer", fontFamily:"inherit" }}>{label}</button>
