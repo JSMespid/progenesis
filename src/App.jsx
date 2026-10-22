@@ -8362,6 +8362,18 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
       total += 1; if (pi.label === "필수(M)") mand += 1;
     }
   }
+  // WBS·일정 계획(간트 워크북)은 산출물 목록에 'WBS' 항목이 없는 OSSP(자동차 OSSP 등)에서도 ZIP에 반드시 담는다
+  // — MAN.3 계획 증적이며, 산출물 단계 화면의 WBS 생성 결과가 ZIP에서 빠지면 "WBS가 없다"고 보이기 때문
+  const hasWbsDoc = cats.some(c => (c.documents || []).some(d => String(d.name || "").replace(/\s/g, "").toUpperCase() === "WBS"));
+  if (!hasWbsDoc && wbs?.tasks?.length) {
+    try {
+      const folder0 = files.find(f => /^01_/.test(f.path))?.path.split("/")[0] || "01_착수·계획";
+      report(91, "WBS·일정 계획(간트) 워크북 생성 중…");
+      files.push({ path: `${folder0}/[필수(M)] 0.0_PM1104_WBS·일정 계획(간트).xlsx`, content: makeWbsGanttXlsx(wbs, meta) });
+      manifest.push([folder0, "-", "PM1104", docCodeWithPrefix("PM1104", meta) || "-", "WBS·일정 계획(간트)", "XLSX", "필수(M)", "3단계 WBS 생성 결과 전체 — 단계·Task·담당·선행·일정·간트(일/주 전환), 공휴일 시트. MAN.3 계획 증적"]);
+      total += 1; mand += 1;
+    } catch (e) { console.warn("WBS 워크북 생성 실패:", e?.message); }
+  }
   // ASPICE: WBS 산출물 목록에 없는 V-모델 문서도 함께 담는다 (V-모델 편집 결과 누락 방지)
   const extra = aspiceExtraKinds(deliverables, ctx);
   if (extra.length) {

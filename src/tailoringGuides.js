@@ -174,6 +174,7 @@ export const ASPICE_TAILORING_MATRIX = [
   {"code": "PM1101", "name": "프로젝트 계획서", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "MAN.3 · 08-53, 08-56, 08-61", "wp31": "08-12"},
   {"code": "PM1102", "name": "프로젝트 진척 보고서", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "MAN.3 · 15-06, 13-14", "wp31": "15-06, 13-14"},
   {"code": "PM1103", "name": "착수보고 자료", "phase": "착수·계획", "method": "공통", "large": "O", "medium": "M", "small": "O", "note": "MAN.3 · 13-52", "wp31": "13-04"},
+  {"code": "PM1104", "name": "WBS", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "MAN.3 · 14-10, 08-56 (WBS로 08-53 작업 범위 구체화)", "wp31": "14-09"},
   {"code": "RK1101", "name": "리스크 관리대장", "phase": "착수·계획", "method": "공통", "large": "O", "medium": "M", "small": "O", "note": "MAN.5 · 08-55, 15-09 · VDA 범위 외", "wp31": "08-19, 15-08, 15-09"},
   {"code": "QA1101", "name": "품질보증 계획서", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "M", "note": "SUP.1 · 18-07, 18-52", "wp31": "08-13"},
   {"code": "QA1102", "name": "산출물 검토 기록부", "phase": "착수·계획", "method": "공통", "large": "M", "medium": "M", "small": "O", "note": "PA 2.2 · 13-19 · CL2 이상 필수", "wp31": "13-19"},
