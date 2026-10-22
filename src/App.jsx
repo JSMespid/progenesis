@@ -10601,25 +10601,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 </div>)}
               </FileDrop>
             </AeSec>
-            <AeSec title="등록 템플릿 WP 특성 점검 — 고객사·조직 템플릿이 ASPICE 정보항목 특성을 담고 있는지 목차·항목 라벨로 결정적 점검">
-              <FileDrop accept=".docx" onFiles={fs => onTplFile(asFileEvent(fs))}
-                dropLabel={`여기에 놓으면 '${({ SYS_RS: "시스템 요구사항 명세서", SYS_AD: "시스템 아키텍처 설계서", SW_RS: "SW 요구사항 명세서", SW_AD: "SW 아키텍처 설계서", HW_RS: "HW 요구사항 명세서", HW_AD: "HW 아키텍처 설계서", VERIF: "검증 명세서(공통)" })[tplGroup] || tplGroup}' 기준으로 점검합니다 (.docx)`}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <select value={tplGroup} onChange={e => setTplGroup(e.target.value)} style={{ ...inp, width: 220 }}>
-                  {[["SYS_RS", "시스템 요구사항 명세서"], ["SYS_AD", "시스템 아키텍처 설계서"], ["SW_RS", "SW 요구사항 명세서"], ["SW_AD", "SW 아키텍처 설계서"], ["HW_RS", "HW 요구사항 명세서"], ["HW_AD", "HW 아키텍처 설계서"], ["VERIF", "검증 명세서(공통)"]].map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-                </select>
-                <label style={{ ...small, padding: "5px 12px" }}>📎 템플릿 docx 업로드<input type="file" accept=".docx" onChange={onTplFile} style={{ display: "none" }} /></label>
-                <button onClick={checkOsspTemplate} style={{ ...small, padding: "5px 12px" }}>OSSP 등록 템플릿으로 점검</button>
-              </div>
-              {model.templateChecks[tplGroup] && (() => { const tc = model.templateChecks[tplGroup]; const list = AE.charStatusList(model, tplGroup); return (
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 4 }}>{tc.fileName} · {tc.mode === "outline" ? `목차·항목 라벨 ${tc.outline}줄` : "본문"} 기준 · {String(tc.at).slice(0, 10)}</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                    {list.map(c => <span key={c.id} title={c.source} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, border: `1px solid ${c.byTpl ? T.green + "66" : (c.origin === "ASPICE" ? T.red + "66" : T.border)}`, color: c.byTpl ? T.green : (c.origin === "ASPICE" ? T.red : T.muted) }}>{c.byTpl ? "✓" : "✕"} {c.label}{c.origin !== "ASPICE" ? ` (${c.origin})` : ""}</span>)}
-                  </div>
-                </div>); })()}
-              </FileDrop>
-            </AeSec>
+            {/* 등록 템플릿 WP 특성 점검 섹션은 화면 단순화를 위해 제거 (2026-10-22). 기존 점검 결과(templateChecks)는 모델에 그대로 보존 */}
           </>)}
 
           {tab === "SYS" && (<>
@@ -11774,7 +11756,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               })}
               {!findings.length && <div style={{ fontSize: 11, color: T.green }}>✓ 발견된 문제 없음</div>}
             </AeSec>
-            <AeSec title="ASPICE WP 특성 충족도 — 모델 내용 · 입력자료 · 템플릿 점검 · 수동 판정 (각 문서 부록에 점검표로 수록)">
+            <AeSec title="ASPICE WP 특성 충족도 — 모델 내용 · 입력자료 · 수동 판정 (각 문서 부록에 점검표로 수록)">
               <div className="ae-hint" style={{ fontSize: 10.5, color: T.muted, marginBottom: 8, lineHeight: 1.6 }}>
                 ASPICE 정보항목(WP)이 요구하는 특성을 문서마다 점검합니다. <b style={{ color: T.green }}>충족</b> = V-모델 내용에 있음, 또는 등록 템플릿에 그 절이 있어 문서에서 작성됨(템플릿 항목) · <b style={{ color: T.accent }}>대기</b> = 입력자료는 있으나 아직 모델에 반영 안 됨 · <b style={{ color: T.red }}>누락</b> = 내용 없음(문서 부록에 TBD로 기록) · <b>N/A</b> = 이 과제에 해당 없음.
                 자동 판정은 요구·설계 문장의 키워드로 하므로, 실제로는 있는데 누락으로 나오거나 이 과제에 없는 특성(예: HMI가 없는 제어기의 사용자 인터페이스)은 오른쪽에서 <b>수동 판정</b>하고 사유를 적으세요. 수동 판정과 사유는 문서 부록 점검표에 그대로 실립니다.
