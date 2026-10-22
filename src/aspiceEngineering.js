@@ -1181,7 +1181,7 @@ ${L.compLabel} 목록: ${JSON.stringify(comps.map(c => ({ id: c.id, name: c.name
 --- 요구 ---
 ${JSON.stringify(reqs.map(r => ({ id: r.id, t: short(r.title, 40), d: short(r.text, 80) })))}`;
 }
-export function promptDerive({ level, parents, sysCompName, version }) {
+export function promptDerive({ level, parents, sysCompName, version, guideBlock = "" }) {
   const L = LEVELS[level];
   const hw = level === "HW";
   return `당신은 Automotive SPICE ${version === "3.1" && hw ? "4.0 HWE.1(3.1 PAM 확장 준용)" : L.reqProc}(${level} 요구사항 분석)에 정통한 차량 전장 ${hw ? "HW" : "SW"} 엔지니어입니다.
@@ -1190,10 +1190,11 @@ ${hw ? "HW 관점: 회로 기능 거동·전압/전류·소비전력·온도·�
 블랙박스 관점으로 작성하고 구현 결정(함수명·변수명)은 쓰지 말 것. verifCriteria는 측정 가능한 기준 1문장.
 ${AI_FIDELITY}
 JSON만 출력: {"items":[{"parent":"상위 id","title":"25자 이내","text":"~해야 한다 1~2문장","type":"기능|비기능|인터페이스","verifCriteria":""}]}
+${guideBlock}
 --- 시스템 요구 (할당 요소) ---
 ${JSON.stringify(parents.map(p => ({ id: p.id, type: p.type, t: short(p.title, 40), d: short(p.text, 110), crit: short(p.verifCriteria, 70), elems: (p.elems || []).map(e => sysCompName[e] || e) })))}`;
 }
-export function promptComponents({ level, reqs, sysElems, version }) {
+export function promptComponents({ level, reqs, sysElems, version, guideBlock = "" }) {
   const L = LEVELS[level];
   const hw = level === "HW";
   return `당신은 Automotive SPICE ${hw ? (version === "3.1" ? "4.0 HWE.2(PAM 확장 준용)" : "HWE.2") : "SWE.2"} ${hw ? "HW 아키텍처" : "SW 아키텍처"} 설계 전문가입니다.
@@ -1202,16 +1203,18 @@ kind 후보: ${COMP_KINDS[level].join("|")}. ${hw ? "전원·클럭·입력 회�
 sysElem은 아래 시스템 요소 id 중 구현 대상. 응답 분량 제한: 컴포넌트 최대 10개, 인터페이스 최대 15건, 설명류는 각 30자 이내. rationale은 구조 선정 근거 2문장. ${AI_FIDELITY}
 JSON만 출력: {"components":[{"name":"","kind":"","desc":"책임 1문장","behavior":"동적 거동 1문장","sysElem":"SYE-..."}],"interfaces":[{"from":"컴포넌트명","to":"컴포넌트명","kind":"${hw ? "전기 신호|전원|버스" : "API|RTE 포트|공유 데이터|콜백"}","signals":"","desc":""}],"rationale":""}
 시스템 요소: ${JSON.stringify(sysElems.map(e => ({ id: e.id, name: e.name, kind: e.kind })))}
+${guideBlock}
 --- ${level} 요구 ---
 ${JSON.stringify(reqs.slice(0, 60).map(r => ({ id: r.id, t: short(r.title, 40), d: short(r.text, 80) })))}`;
 }
-export function promptTests({ testLevel, reqs, version }) {
+export function promptTests({ testLevel, reqs, version, guideBlock = "" }) {
   const tl = TEST_LEVELS[testLevel];
   const term = version === "3.1" ? "테스트 케이스(08-50)" : version === "4.0" ? "검증 수단(08-60)" : "검증 수단(4.0 08-60 / 3.1 08-50)";
   return `당신은 Automotive SPICE ${tl.proc} ${tl.label} 전문가입니다. 각 요구의 정상 동작 ${term}를 1건씩 작성하세요.
 (경계값·결함주입 케이스는 규칙 엔진이 별도로 생성하므로 정상 시나리오만.) steps는 3~5단계를 '; '로 구분. passCriteria는 판정 가능한 기준.
 ${AI_FIDELITY}
 JSON만 출력: {"items":[{"target":"요구 id","title":"30자 이내","precondition":"","steps":"","expected":"","passCriteria":"","env":"HILS|벤치|실차|챔버|시뮬레이션 중 해당"}]}
+${guideBlock}
 --- 요구 ---
 ${JSON.stringify(reqs.map(r => ({ id: r.id, t: short(r.title, 40), d: short(r.text, 110), crit: short(r.verifCriteria, 80) })))}`;
 }
@@ -1537,29 +1540,37 @@ export const REVIEW_JUDGE = { valid: "지적 맞음 → 산출물 수정", inval
 export const REVIEW_JUDGE_SHORT = { valid: "✓ 맞음 → 고침", invalid: "✕ 틀림", opinion: "△ 보류" };
 export const REVIEW_BATCH = 4;   // 한 번에 보내는 요구 수 — Vercel 약 10초 제한 대응
 
+// ── 3차 검토 기준: 조직 작성 가이드(등록된 작성 가이드 요약) — 가이드가 있을 때만 프롬프트에 붙는다 ──
+export const ORG_GUIDE_CRITERION = { code: "ORG-GUIDE", label: "조직 작성 가이드 준수", desc: "등록된 작성 가이드의 규칙(용어·필수 항목·표기·측정 기준)과 어긋남" };
+export function orgGuideCriteria(guideBlock) {
+  const g = String(guideBlock || "").replace(/^\s*---[^\n]*---\s*/m, "").replace(/--- 작성 가이드 끝 ---[\s\S]*$/m, "").trim();
+  if (!g) return "";
+  return `\n\n[3차 — 조직 작성 가이드 (코드: ${ORG_GUIDE_CRITERION.code})]\n${ORG_GUIDE_CRITERION.desc}. 아래 규칙에 어긋나는 항목만 지적한다.\n${g.slice(0, 3000)}`;
+}
 export function reviewSystemPrompt() {
   return "You are an independent quality assurance reviewer for Automotive SPICE work products. " +
     "Review only what is given. Never invent requirement IDs, numbers, or quotes. Respond with valid JSON only, no markdown.";
 }
 
 // 검토 대상 요구(batch)와 상위 요구(parents)로 검토 프롬프트를 만든다.
-export function promptReview({ level, reqs, parents = [], version = "both" }) {
+export function promptReview({ level, reqs, parents = [], version = "both", guideBlock = "" }) {
   const proc = (LEVELS[level] || {}).reqProc || level;
   const vda = vdaCriteria(proc, version);
   const crit = `[1차 — ${vdaBasis(version)}]\n${vda.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}\n\n[2차 — ${REVIEW_CRITERIA_VER}, ${REVIEW_CRITERIA_BASIS}]\n${REVIEW_CRITERIA.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}`;
+  const crit3 = orgGuideCriteria(guideBlock);
   const brief = r => ({ id: r.id, title: nz(r.title), text: nz(r.text), type: r.type || "", verifCriteria: nz(r.verifCriteria), parents: r.parents || [] });
   const usedParents = new Set(reqs.flatMap(r => r.parents || []));
   const par = parents.filter(p => usedParents.has(p.id)).map(p => ({ id: p.id, title: nz(p.title), text: nz(p.text) }));
   return `역할: 당신은 ASPICE ${proc} (${procLabel(proc, version)}) 산출물을 검토하는 독립 품질보증(QA) 검토자입니다.
 아래 [검토 대상] 요구사항을 [검토 기준]에 따라 검토하고, 문제가 있는 것만 지적하세요.
-검토 순서: 먼저 1차 기준(Automotive SPICE PAM 프로세스 BP 요건)으로 항목마다 점검하고, 그 다음 2차 기준(요구 품질 특성)으로 점검한다. 같은 문제가 두 기준에 모두 해당하면 1차 기준 코드로 한 번만 지적한다.
+검토 순서: 먼저 1차 기준(Automotive SPICE PAM 프로세스 BP 요건)으로 항목마다 점검하고, 그 다음 2차 기준(요구 품질 특성)으로, 3차 기준(조직 작성 가이드)이 있으면 마지막으로 점검한다. 같은 문제가 두 기준에 모두 해당하면 1차 기준 코드로 한 번만 지적한다.
 
 [검토 기준]
-${crit}
+${crit}${crit3}
 
 [규칙]
 1) id는 반드시 [검토 대상]에 있는 ID만 사용한다. 다른 ID를 만들지 않는다.
-2) criterion은 위 1차·2차 기준 코드 중 하나만 쓴다(1차 코드는 VDA-로 시작).
+2) criterion은 위 1차·2차·3차 기준 코드 중 하나만 쓴다(1차 코드는 VDA-로 시작, 3차는 ORG-GUIDE).
 3) evidence는 해당 요구의 title·text·verifCriteria에서 그대로 복사한 짧은 구절(30자 이내)이다. 원문에 없는 문구를 쓰지 않는다. 빠진 정보를 지적할 때(COMPLETE·VERIF)는 빈 문자열로 둔다.
 4) severity는 major(검증·구현 불가 수준) / minor(수정 권장) / info(개선 제안) 중 하나.
 5) 문제가 없는 요구는 지적하지 않는다. 요구 하나당 최대 3건.
@@ -1823,28 +1834,28 @@ const KIND_NOTES = {
   test: "8) 'TBD'로 명시된 부분(예: 코드 확정 후 작성, 기준 등급 TBD)은 계획된 미작성이므로 지적하지 않는다. 시험이 [관련 항목]의 대상을 실제로 검증하는지, 기대 결과·합격 기준으로 합격·불합격을 판정할 수 있는지를 중심으로 본다.",
 };
 // 검토 프롬프트 — 요구는 기존 프롬프트(promptReview) 그대로, 그 밖의 산출물은 종류별 기준으로
-export function reviewPrompt(model, key, batch, version = "both") {
+export function reviewPrompt(model, key, batch, version = "both", guideBlock = "") {
   const S = reviewScope(key), K = reviewKindOf(key);
   const m = normalizeModel(model);
   if (S.kind === "req") {
     const parents = S.lv === "SYS" ? m.reqs.STK : parentsForLevel(m, S.lv);
-    return promptReview({ level: S.lv, reqs: batch.map(b => b.src), parents, version });
+    return promptReview({ level: S.lv, reqs: batch.map(b => b.src), parents, version, guideBlock });
   }
   const vda = vdaCriteria(S.proc, version);
-  const crit = `[1차 — ${vdaBasis(version)}]\n${vda.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}\n\n[2차 — ${K.ver}, ${K.basis}]\n${K.criteria.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}`;
+  const crit = `[1차 — ${vdaBasis(version)}]\n${vda.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}\n\n[2차 — ${K.ver}, ${K.basis}]\n${K.criteria.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}` + orgGuideCriteria(guideBlock);
   // 관련 항목은 판단 근거일 뿐이므로 길이를 제한한다 — 서버가 프롬프트를 24,000자에서 자르면 [출력 형식]이 잘려 응답 형식이 깨진다
   const ctx = reviewContext(m, batch.flatMap(b => b.refs || []));
   while (ctx.length && JSON.stringify(ctx).length > 9000) ctx.pop();
   return `역할: 당신은 ASPICE ${S.proc} (${procLabel(S.proc, version)}) 산출물 「${S.label}」을 검토하는 독립 품질보증(QA) 검토자입니다.
 아래 [검토 대상] ${K.noun}을 [검토 기준]에 따라 검토하고, 문제가 있는 것만 지적하세요.
-검토 순서: 먼저 1차 기준(Automotive SPICE PAM 프로세스 BP 요건)으로 항목마다 점검하고, 그 다음 2차 기준으로 점검한다. 같은 문제가 두 기준에 모두 해당하면 1차 기준 코드로 한 번만 지적한다.
+검토 순서: 먼저 1차 기준(Automotive SPICE PAM 프로세스 BP 요건)으로 항목마다 점검하고, 그 다음 2차 기준으로, 3차 기준(조직 작성 가이드)이 있으면 마지막으로 점검한다. 같은 문제가 두 기준에 모두 해당하면 1차 기준 코드로 한 번만 지적한다.
 
 [검토 기준]
 ${crit}
 
 [규칙]
 1) id는 반드시 [검토 대상]에 있는 ID만 사용한다. [관련 항목]의 ID로 지적하지 않는다. 다른 ID를 만들지 않는다.
-2) criterion은 위 1차·2차 기준 코드 중 하나만 쓴다(1차 코드는 VDA-로 시작).
+2) criterion은 위 1차·2차·3차 기준 코드 중 하나만 쓴다(1차 코드는 VDA-로 시작, 3차는 ORG-GUIDE).
 3) evidence는 해당 항목의 값에서 그대로 복사한 짧은 구절(30자 이내)이다. 원문에 없는 문구를 쓰지 않는다. 빠진 정보를 지적할 때는 빈 문자열로 둔다.
 4) severity는 major(검증·구현 불가 수준) / minor(수정 권장) / info(개선 제안) 중 하나.
 5) 문제가 없는 항목은 지적하지 않는다. 항목 하나당 최대 3건.
@@ -2372,7 +2383,7 @@ function ddContext(unit, model, version) {
     (unit.funcs || []).length ? `[기존 코드 헤더 ${unit.file}] ${unit.funcs.map(f => `${f.ret} ${f.name}(${f.params})`).join("; ")}` : "",
   ].filter(Boolean).join("\n");
 }
-export function promptDDStructure({ unit, model, version, settings }) {
+export function promptDDStructure({ unit, model, version, settings, guideBlock = "" }) {
   const s = { ...DD_DEFAULT, ...(settings || {}) };
   const T = DD_TARGETS[s.target] || DD_TARGETS.CP;
   return `역할: ASPICE SWE.3(소프트웨어 상세설계 및 유닛 구현) 담당 수석 SW 설계자. 대상 플랫폼 ${T.label} (${s.release}), 코딩 표준 ${s.target === "CP" ? s.misraC : s.misraCpp + " · " + s.cppGuide}.
@@ -2388,6 +2399,7 @@ ${ddContext(unit, model, version)}
 - classes: 유닛 자체(stereotype "SWC") 1개 + 필요한 내부 클래스(필터·디바운스·진단 등). ops.algo는 구현 가능한 단계별 의사코드 5~15줄 — 수치 조건(이상·이하·범위·시간)은 요구의 값을 그대로 쓴다.
 - assoc: 클래스 간 관계(comp 합성·agg 집합·dep 의존·assoc 연관).
 
+${guideBlock}
 JSON만 출력 (마크다운 금지):
 {"summary":"유닛 역할 2~3문장","dataTypes":[{"name":"","base":"uint16|enum|struct","desc":"","range":"","reqs":[]}],
 "classes":[{"name":"","stereotype":"SWC|class","desc":"","reqs":[],"attrs":[{"name":"","type":"","init":"","desc":"","vis":"-"}],"ops":[{"name":"","ret":"","vis":"+","params":[{"name":"","type":"","dir":"in|out|inout"}],"desc":"","pre":"","post":"","algo":["단계"],"reqs":[]}]}],
@@ -2395,7 +2407,7 @@ JSON만 출력 (마크다운 금지):
 "runnables":[{"name":"","trigger":"periodic|event|init","periodMs":10,"event":"","reads":[],"writes":[],"calls":[],"wcetUs":0,"desc":"","reqs":[]}],
 "assoc":[{"from":"","to":"","kind":"comp|agg|dep|assoc","label":"","mult":""}]}`;
 }
-export function promptDDBehavior({ unit, model, version, settings, structure }) {
+export function promptDDBehavior({ unit, model, version, settings, structure, guideBlock = "" }) {
   const s = { ...DD_DEFAULT, ...(settings || {}) };
   const st = structure || emptyDD();
   const brief = {
@@ -2415,6 +2427,7 @@ ${JSON.stringify(brief)}
 - sequences.steps의 from/to는 lifelines의 이름(RTE·유닛 클래스·내부 클래스·다른 유닛), msg는 연산/포트 이름.
 - activities.nodes의 kind: start|action|decision|merge|end|fork|join, edges.guard는 decision 분기 조건. 각 액티비티는 op(연산 이름)에 대응.
 
+${guideBlock}
 JSON만 출력:
 {"states":{"initial":"","states":[{"name":"","entry":"","do":"","exit":"","desc":"","reqs":[]}],"transitions":[{"from":"","to":"","trigger":"","guard":"","effect":"","reqs":[]}]},
 "sequences":[{"name":"","desc":"","lifelines":[],"steps":[{"from":"","to":"","msg":"","args":"","ret":"","kind":"sync|async","note":""}],"reqs":[]}],
@@ -2739,7 +2752,7 @@ const BANNER = (file, unit, meta, S, lang) => `/*
 ${CODE_NOTICE}
  */
 `;
-export function promptCode({ unit, model, settings, meta }) {
+export function promptCode({ unit, model, settings, meta, guideBlock = "" }) {
   const S = { ...DD_DEFAULT, ...(settings || {}) }; const dd = unit.dd; const lang = S.target === "CP" ? "C" : "C++17";
   const ctx = ddContext(unit, model, model.version);
   const ops = dd.classes.flatMap(c => c.ops.map(o => ({ cls: c.name, name: o.name, ret: o.ret, params: o.params, algo: o.algo, desc: o.desc, pre: o.pre, post: o.post })));
@@ -2762,6 +2775,7 @@ ${ops.map(o => `- ${o.cls}::${o.name}(${o.params.map(p => `${p.dir} ${p.type} ${
 - 상태 전이 조건식(guards)은 클래스 속성·포트 값·상수로 쓴 불리언 식 1줄(${lang}).
 - 길이: 연산 1개당 10~40줄.
 
+${guideBlock}
 JSON만 출력:
 {"ops":[{"name":"","body":"함수 본문만(선언·중괄호 제외, 줄바꿈 \\n)"}],"guards":[{"index":0,"expr":"불리언 식"}],"consts":[{"name":"","type":"","value":"","desc":""}],"notes":["MISRA 편차가 필요할 수 있는 지점"]}`;
 }
@@ -3073,7 +3087,7 @@ function hdContext(comp, model) {
     ifs.length ? `[HW 인터페이스]\n${ifs.map(i => `- ${i.id} ${cn[i.from] || i.from} → ${cn[i.to] || i.to}: ${i.kind || ""} ${i.signals || ""} ${i.desc || ""}`).join("\n")}` : "",
     `[환경·기준] ${S.env} · 부품 등급 AEC-Q100/Q200 · EDA ${S.eda}`].filter(Boolean).join("\n");
 }
-export function promptHDCircuit({ comp, model }) {
+export function promptHDCircuit({ comp, model, guideBlock = "" }) {
   return `역할: 자동차 전장 ECU 수석 HW 설계자(ASPICE HWE.2 담당). 아래 근거 자료로 회로 블록 1개의 **회로 설계**(부품·핀·넷·연결·외부 인터페이스)를 완전하게 작성하세요. 제조사 부품번호(mpn)는 실제 유통되는 자동차용(AEC-Q) 부품을 **후보**로 적되 값 끝에 " (후보)"를 붙이세요. 추측한 값은 desc에 "(가정)".
 
 ${hdContext(comp, model)}
@@ -3085,12 +3099,13 @@ ${hdContext(comp, model)}
 - ifs: 블록 밖으로 나가는 신호·전원(name·dir·net·connector·spec·source 인터페이스 ID·reqs).
 - 수치(전압·전류·주파수·저항값)는 요구 문장의 값을 그대로 쓰고, 계산이 필요하면 desc에 식을 적는다.
 
+${guideBlock}
 JSON만 출력:
 {"summary":"블록 역할 2~3문장","parts":[{"ref":"U1","kind":"IC|MCU|트랜지스터|다이오드|저항|커패시터|인덕터|커넥터|크리스탈|퓨즈|TVS|릴레이|기타","value":"","pkg":"","mfr":"","mpn":"xxx (후보)","rating":"","grade":"AEC-Q100","desc":"","special":false,"reqs":[],"pins":[{"num":"1","name":"VIN","type":"pwr"}]}],
 "ifs":[{"name":"","dir":"in|out|io","net":"","connector":"J1.1","spec":"","source":"HWIF-001","reqs":[]}]}`;
 }
 // 넷(연결) 전용 — 넷 이름 → 핀 목록의 압축 형식으로 받아 응답 잘림을 피한다
-export function promptHDNets({ comp, model, circuit }) {
+export function promptHDNets({ comp, model, circuit, guideBlock = "" }) {
   const c = circuit || emptyHD();
   return `역할: 자동차 전장 ECU 수석 HW 설계자(ASPICE HWE.2). 아래 회로 블록의 부품·핀 목록으로 **넷(전기적 연결)**을 빠짐없이 작성하세요.
 
@@ -3106,6 +3121,7 @@ ${c.ifs.length ? `[블록 밖 인터페이스 — 이 신호 이름을 넷 이�
 - 쓰지 않는 핀은 어떤 넷에도 넣지 말 것(NC로 표시됨). 한 핀은 한 넷에만.
 - 넷 이름은 영문 대문자·숫자·_ (예 3V3, GND, MCU_RESET_N, CAN1_TX). kind는 power|gnd|signal|bus|analog.
 
+${guideBlock}
 JSON만 출력:
 {"nets":[{"name":"3V3","kind":"power","voltage":"3.3V","pins":["U1.1","C1.1"]}]}`;
 }
@@ -3149,7 +3165,7 @@ export function rulePowerNets(hd0) {
 }
 export const hdPinStats = hd => { const total = (hd?.parts || []).reduce((s, p) => s + p.pins.length, 0); const con = new Set((hd?.conns || []).filter(c => c.net && c.net !== "NC").map(c => `${c.ref}.${c.pin}`)).size; return { total, con }; };
 export const hdNeedsNets = hd => !!(hd && hd.parts?.length && hdPinStats(hd).con === 0);
-export function promptHDAnalysis({ comp, model, circuit }) {
+export function promptHDAnalysis({ comp, model, circuit, guideBlock = "" }) {
   const c = circuit || emptyHD();
   return `역할: 자동차 전장 ECU 수석 HW 설계자(ASPICE HWE.2). 아래 회로 블록에 대해 **특별 특성(17-57)**과 **설계 분석 결과(15-51: Derating·열·타이밍·최악조건)**, **설계 근거**를 작성하세요. 수치는 부품 정격(rating)과 요구 값을 대입해 계산식과 함께 적으세요(가정값은 "(가정)").
 
@@ -3158,6 +3174,7 @@ ${hdContext(comp, model)}
 [회로 — 부품] ${c.parts.map(p => `${p.ref} ${p.kind} ${p.value} ${p.pkg} ${p.mpn} 정격:${p.rating}`).join("; ")}
 [넷] ${c.nets.map(n => `${n.name}(${n.kind}${n.voltage ? " " + n.voltage : ""})`).join(", ")}
 
+${guideBlock}
 JSON만 출력:
 {"specials":[{"id":"SC-01","char":"특성 설명","type":"안전|법규|기능|품질","target":"부품 ref 또는 넷","value":"관리 값·공차","control":"관리 방법(수입검사·공정검사·추적)","verify":"검증 방법(HWE.3/4)","reqs":[]}],
 "analysis":{"derating":[{"ref":"","param":"정격 전압|전력|전류|온도","rated":"","applied":"","ratio":"%","limit":"80%","ok":true,"note":"계산식"}],
@@ -3454,7 +3471,7 @@ export const isVdaCode = code => /^VDA-/.test(String(code || ""));
 // 검토 범위 key의 전체 기준(1차 VDA + 2차 기존) — 화면 표기·의견 라벨·검증용
 export function reviewCriteriaFor(key, version = "both") {
   const S = reviewScope(key); const K = reviewKindOf(key);
-  return { vda: S ? vdaCriteria(S.proc, version) : [], base: K.criteria, all: [...(S ? vdaCriteria(S.proc, version) : []), ...K.criteria], ver: `${vdaVersionLabel(version)} + ${K.ver}`, baseVer: K.ver };
+  return { vda: S ? vdaCriteria(S.proc, version) : [], base: K.criteria, all: [...(S ? vdaCriteria(S.proc, version) : []), ...K.criteria, ORG_GUIDE_CRITERION], ver: `${vdaVersionLabel(version)} + ${K.ver}`, baseVer: K.ver };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3513,7 +3530,7 @@ export function ruleUnitTests(unit) {
   return cs;
 }
 // ② AI 케이스 프롬프트 — 요구·상세설계만 제공(코드는 주지 않음)
-export function promptUnitTests({ unit, model }) {
+export function promptUnitTests({ unit, model, guideBlock = "" }) {
   const m = normalizeModel(model); const x = utContext(unit); const dd = unit.dd;
   const reqs = (m.reqs.SW || []).filter(r => ids(unit.reqs).includes(r.id));
   return `역할: ASPICE SWE.4 유닛 검증 엔지니어. 아래 SW 유닛의 할당 요구와 상세설계(SWE.3)로부터 호스트에서 실행할 유닛 시험 케이스를 작성하세요.
@@ -3533,6 +3550,7 @@ ${reqs.map(r => `- ${r.id} ${r.title}: ${r.text || ""}${r.verifCriteria ? ` / �
 - basis에는 근거가 된 요구 원문 구절을 그대로 인용(20자 이내).
 - 경계값(조건 직전·직후)과 이상 입력 케이스를 우선한다. ${AI_FIDELITY}
 
+${guideBlock}
 JSON만 출력:
 {"cases":[{"title":"","reqs":["SWR-..."],"basis":"","state":"","inputs":{"Rp_X.y":0},"runnable":"","times":1,"expect":[{"port":"Pp_X.y","op":"==","value":0},{"state":"RUN"}]}]}`;
 }

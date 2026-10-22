@@ -8425,24 +8425,58 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
 // AI가 산출물을 작성할 때 프롬프트에 주입되어 준수 기준으로 사용됨 — 모든 AI 작성 기능 공용 헬퍼
 const GUIDE_CATEGORIES = ["방법론 작성가이드", "글로벌 표준", "글로벌 규제", "기타"];
 
-// ── ASPICE: 작성 가이드별 적용 단계 (라이브러리는 전역 공용, 적용 단계만 가이드별 지정) ──
-//   SYS1 = SYS.1 이해관계자 요구 도출(1차 AI 호출, 방법론 RD1200 요구사항 정의에 대응)
-//   SYS2 = SYS.2 시스템 요구 명세(2차 AI 호출, 방법론 RD1300 요구사항 명세에 대응)
-//   ALL  = 요구 단계 공통 + V-모델 이후 단계(SYS.3 아키텍처 등)에도 적용
-// 기본값은 가이드 이름의 문서 코드로 규칙 판정(AI 미사용) — 사용자가 바꾼 값은 브라우저에 보관
-const GUIDE_SCOPES = [["ALL", "공통(전 단계)"], ["SYS1", "SYS.1 도출"], ["SYS2", "SYS.2 명세"]];
-const GUIDE_SCOPE_KEY = "spiderqa_guide_scope";
+// ── 작성 가이드의 적용 대상(scope) — 라이브러리는 전역 공용, 가이드마다 "어느 과제·어느 단계의 AI 작성에 쓰는지"를 서버(writing_guides.scope)에 저장 ──
+//   all            : 공통 — 모든 과제·모든 단계 (용어집, 문서 작성 표준 등)
+//   si | si:derive | si:spec     : 일반 SI 과제 (전체 / 요구사항 정의 RD1200 / 요구사항 명세 RD1300)
+//   aspice | aspice:<프로세스>   : 자동차(ASPICE) 과제 (전 프로세스 공통 / SYS.1 … HWE.4 한 프로세스)
+// scope가 비어 있으면(이전 등록분) 가이드 이름의 문서 코드로 규칙 판정한다 (AI 미사용)
+const ASPICE_PROC_IDS = ["SYS.1", "SYS.2", "SYS.3", "SYS.4", "SYS.5", "SWE.1", "SWE.2", "SWE.3", "SWE.4", "SWE.5", "SWE.6", "HWE.1", "HWE.2", "HWE.3", "HWE.4"];
+const ASPICE_PROC_SHORT = { "SYS.1": "이해관계자 요구", "SYS.2": "시스템 요구", "SYS.3": "시스템 아키텍처", "SYS.4": "시스템 통합 검증", "SYS.5": "시스템 검증", "SWE.1": "SW 요구", "SWE.2": "SW 아키텍처", "SWE.3": "SW 상세설계·코드", "SWE.4": "SW 유닛 검증", "SWE.5": "SW 통합 검증", "SWE.6": "SW 검증", "HWE.1": "HW 요구", "HWE.2": "HW 설계", "HWE.3": "HW 설계 검증", "HWE.4": "HW 요구 검증" };
+const GUIDE_SCOPES = [["all", "공통 — 모든 과제·단계"], ["si", "일반 SI — 전체"], ["si:derive", "일반 SI — 요구사항 정의(RD1200)"], ["si:spec", "일반 SI — 요구사항 명세(RD1300)"], ["aspice", "자동차 — 전 프로세스 공통"],
+  ...ASPICE_PROC_IDS.map(id => [`aspice:${id}`, `자동차 — ${id} ${ASPICE_PROC_SHORT[id]}`])];
+const GUIDE_SCOPE_LABEL = Object.fromEntries(GUIDE_SCOPES);
 function guideDefaultScope(g) {
   const s = `${g?.name || ""}`;
-  if (/RD\s*-?12\d\d|요구사항\s*정의서|이해관계자\s*요구/i.test(s)) return "SYS1";
-  if (/RD\s*-?13\d\d|요구사항\s*명세서|시스템\s*요구/i.test(s)) return "SYS2";
-  return "ALL";
+  // 1) OSSP 문서 코드가 이름에 있으면 그 코드의 프로세스 (자동차 OSSP V1.1 템플릿 코드 기준)
+  const CODE = { SY2101: "SYS.1", SY2102: "SYS.2", SY2103: "SYS.3", SY2107: "SYS.4", SY2106: "SYS.5", SW3101: "SWE.1", SW3102: "SWE.2", SW4101: "SWE.3", SW4103: "SWE.4", SW3103: "SWE.5", SW3104: "SWE.6", HW3101: "HWE.1", HW3102: "HWE.2", HW4101: "HWE.2", HW5101: "HWE.3", HW5102: "HWE.4" };
+  const code = Object.keys(CODE).find(c => new RegExp(c, "i").test(s));
+  if (code) return `aspice:${CODE[code]}`;
+  if (/RD\s*-?12\d\d|요구사항\s*정의서/i.test(s)) return "si:derive";
+  if (/RD\s*-?13\d\d/i.test(s) || (/요구사항\s*명세서/i.test(s) && !/시스템|SW|HW/i.test(s))) return "si:spec";
+  // 2) 이름의 산출물 명칭 — 구체적인 것(검증·설계)을 먼저 본다
+  if (/이해관계자\s*요구/i.test(s)) return "aspice:SYS.1";
+  if (/HW\s*설계\s*검증/i.test(s)) return "aspice:HWE.3";
+  if (/HW\s*요구\s*검증/i.test(s)) return "aspice:HWE.4";
+  if (/유닛\s*검증/i.test(s)) return "aspice:SWE.4";
+  if (/SW\s*통합\s*검증/i.test(s)) return "aspice:SWE.5";
+  if (/SW\s*검증/i.test(s)) return "aspice:SWE.6";
+  if (/시스템\s*통합\s*검증/i.test(s)) return "aspice:SYS.4";
+  if (/시스템\s*검증/i.test(s)) return "aspice:SYS.5";
+  if (/HW\s*(아키텍처|설계)/i.test(s)) return "aspice:HWE.2";
+  if (/HW\s*요구/i.test(s)) return "aspice:HWE.1";
+  if (/SW\s*아키텍처/i.test(s)) return "aspice:SWE.2";
+  if (/상세\s*설계|코딩/i.test(s)) return "aspice:SWE.3";
+  if (/SW\s*요구/i.test(s)) return "aspice:SWE.1";
+  if (/시스템\s*아키텍처/i.test(s)) return "aspice:SYS.3";
+  if (/시스템\s*요구/i.test(s)) return "aspice:SYS.2";
+  return "all";
 }
-function loadGuideScopes() {
-  try { const o = JSON.parse(localStorage.getItem(GUIDE_SCOPE_KEY) || "{}"); return o && typeof o === "object" ? o : {}; } catch (_) { return {}; }
+const guideScopeOf = g => (g?.scope && GUIDE_SCOPE_LABEL[g.scope]) ? g.scope : guideDefaultScope(g);
+// 이 가이드가 (과제 유형 track: "si"|"aspice", 단계 proc)의 AI 작성에 적용되는가. proc는 SI는 derive|spec|req(둘 다), ASPICE는 프로세스 ID
+function guideApplies(g, track, proc) {
+  const sc = guideScopeOf(g);
+  if (sc === "all") return true;
+  const [t, p] = sc.split(":");
+  if (t !== track) return false;
+  if (!p) return true;
+  if (track === "si") return proc === "req" || p === proc;
+  return p === proc;
 }
-function saveGuideScopes(o) { try { localStorage.setItem(GUIDE_SCOPE_KEY, JSON.stringify(o || {})); } catch (_) { /* 저장 실패 무시 — 기본값 사용 */ } }
-const guideScopeOf = (g, ov) => (ov && GUIDE_SCOPES.some(x => x[0] === ov[g?.id])) ? ov[g.id] : guideDefaultScope(g);
+// 가이드 scope 서버 저장 (PATCH) — 실패해도 화면 상태는 유지
+async function saveGuideScope(id, scope) {
+  const r = await fetch("/api/writing-guides", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, scope }) });
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || `적용 대상 저장 실패 (status ${r.status})`); }
+}
 
 async function fetchWritingGuides() {
   const r = await fetch("/api/writing-guides");
@@ -8510,7 +8544,14 @@ function mergeUploadFiles(prev, added) {
 }
 
 // ── 작성 가이드 패널 (AI 작성 모달 공용 UI): 전역 가이드 목록·적용 선택·등록·삭제 ──
-function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, aspice = false, scopes = {}, setScopes, hintClass = "" }) {
+function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "si", proc = "req", hintClass = "", compact = false }) {
+  // track: "si" | "aspice", proc: 이 패널이 놓인 단계 — 이 단계에 적용되는 가이드만 보여 주고, 여기서 등록하면 이 단계가 기본 적용 대상이 된다
+  const aspice = track === "aspice";
+  const defaultScope = aspice ? (ASPICE_PROC_IDS.includes(proc) ? `aspice:${proc}` : "aspice") : (proc === "derive" || proc === "spec" ? `si:${proc}` : "si");
+  const visible = guides.filter(g => guideApplies(g, track, proc));
+  const hiddenN = guides.length - visible.length;
+  const [showAll, setShowAll] = useState(false);
+  const shown = showAll ? guides : visible;
   const [openPanel, setOpenPanel] = useState(false);
   const [adding, setAdding] = useState(false);
   const [gName, setGName] = useState("");
@@ -8523,8 +8564,11 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, aspice = 
   const [gErr, setGErr] = useState(null);
   const [gRights, setGRights] = useState(false);   // 자료 이용 권한 확인 (등록 필수)
   const inp = { width:"100%", padding:"5px 7px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:11, fontFamily:"inherit", boxSizing:"border-box" };
-  const applied = guides.filter(g => sel[g.id]).length;
-  const appliedAt = sc => guides.filter(g => sel[g.id] && [sc, "ALL"].includes(guideScopeOf(g, scopes))).length;
+  const applied = visible.filter(g => sel[g.id]).length;
+  async function changeScope(g, scope) {
+    setGuides(gs => gs.map(x => x.id === g.id ? { ...x, scope } : x));
+    try { await saveGuideScope(g.id, scope); } catch (e) { setGErr(e.message); }
+  }
 
   async function addGuideFiles(fileArr) {
     if (gBusy) return;
@@ -8555,7 +8599,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, aspice = 
       const r = await fetch("/api/writing-guides", {
         method:"POST", headers:{ "Content-Type":"application/json" },
         // 저작권 보호: 가이드 원문은 서버에 보내지 않고, AI가 추출한 작성 규칙 요약만 저장한다
-        body: JSON.stringify({ name: gName.trim(), category: gCat, summary, rightsConfirmed: true }),
+        body: JSON.stringify({ name: gName.trim(), category: gCat, summary, rightsConfirmed: true, scope: defaultScope }),
       });
       const created = await r.json().catch(() => null);
       if (!r.ok || !created?.id) throw new Error(created?.error || `저장 실패 (status ${r.status})`);
@@ -8579,39 +8623,38 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, aspice = 
   return (
     <div style={{ border:`1px solid ${T.amber}44`, borderLeft:`3px solid ${T.amber}`, borderRadius:9, marginBottom:12, background:T.amber+"0A" }}>
       <div onClick={()=>setOpenPanel(o=>!o)} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 12px", cursor:"pointer" }}>
-        <span style={{ fontSize:11.5, fontWeight:600, color:T.amber }}>📐 작성 가이드</span>
+        <span style={{ fontSize:11.5, fontWeight:600, color:T.amber }}>📐 작성 가이드{aspice && ASPICE_PROC_IDS.includes(proc) ? ` — ${proc}` : ""}</span>
         <span style={{ fontSize:10.5, color: applied ? T.accent : T.muted }}>
-          {!guides.length ? "등록된 가이드 없음" : aspice ? `등록 ${guides.length}건 · 적용 SYS.1 ${appliedAt("SYS1")} · SYS.2 ${appliedAt("SYS2")}` : `등록 ${guides.length}건 · 적용 ${applied}건`}
+          {!guides.length ? "등록된 가이드 없음" : `이 단계 적용 ${applied}건${hiddenN ? ` · 다른 과제·단계용 ${hiddenN}건` : ""}`}
         </span>
         <span className={hintClass} style={{ fontSize:10, color:T.muted }}>{aspice
-          ? "— 방법론 작성가이드·ASPICE PAM·OEM 작성 규칙·법규를 등록하면 AI가 준수하여 작성합니다 (라이브러리는 전역 공용 · 적용 단계는 가이드별 지정)"
-          : "— 방법론 작성가이드·글로벌 표준(PMBOK®·CMMI)·규제를 등록하면 AI가 준수하여 작성합니다 (전역 공용)"}</span>
+          ? "— 이 단계의 AI 작성에 적용되는 작성 가이드입니다. 여기서 등록하면 이 단계가 적용 대상이 되고, 적용 대상은 가이드별로 바꿀 수 있습니다 (라이브러리는 전역 공용)"
+          : "— 방법론 작성가이드·글로벌 표준(PMBOK®·CMMI)·규제를 등록하면 AI가 준수하여 작성합니다 (전역 공용 · 적용 대상은 가이드별 지정)"}</span>
         <div style={{ flex:1 }} />
         <span style={{ fontSize:10, color:T.muted }}>{openPanel ? "▲" : "▼"}</span>
       </div>
       {openPanel && (
         <div style={{ padding:"0 12px 10px" }}>
-          {guides.length > 0 && (
+          {shown.length > 0 && (
             <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:8 }}>
-              {guides.map(g => (
-                <div key={g.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 8px", border:`1px solid ${T.border}`, borderRadius:7, background:T.surface }}>
-                  <input type="checkbox" checked={!!sel[g.id]} disabled={disabled}
+              {shown.map(g => { const here = guideApplies(g, track, proc); return (
+                <div key={g.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 8px", border:`1px solid ${T.border}`, borderRadius:7, background:T.surface, opacity: here ? 1 : .55 }}>
+                  <input type="checkbox" checked={here && !!sel[g.id]} disabled={disabled || !here} title={here ? "이번 AI 작성에 적용" : "이 단계에는 적용되지 않는 가이드"}
                     onChange={e=>setSel(s=>({ ...s, [g.id]: e.target.checked }))} style={{ cursor:"pointer" }} />
                   <span style={{ fontSize:11, fontWeight:600 }}>{g.name}</span>
                   <span style={{ fontSize:9.5, color:T.accent, border:`1px solid ${T.accentDim}`, borderRadius:5, padding:"1px 6px" }}>{g.category}</span>
-                  {aspice && setScopes && (
-                    <select value={guideScopeOf(g, scopes)} onChange={e=>setScopes(s=>({ ...s, [g.id]: e.target.value }))} disabled={disabled || !sel[g.id]}
-                      title={"이 가이드를 어느 단계 AI 작성에 적용할지 지정합니다.\nSYS.1 도출 = 원문에서 이해관계자 요구 발췌·시스템 요구 도출 (방법론 RD1200 요구사항 정의)\nSYS.2 명세 = 시스템 요구 상세 명세·검증 기준 (방법론 RD1300 요구사항 명세)\n공통 = 요구 단계 전체 + SYS.3 아키텍처 등 이후 단계\n기본값은 가이드 이름의 문서 코드(RD12xx·RD13xx)로 정해지며, 바꾼 값은 이 브라우저에 보관됩니다."}
-                      style={{ fontSize:9.5, padding:"1px 4px", background:T.bg, border:`1px solid ${T.amber}66`, borderRadius:5, color:T.amber, fontFamily:"inherit", cursor:"pointer" }}>
-                      {GUIDE_SCOPES.map(([v, l]) => <option key={v} value={v}>{l}{v === guideDefaultScope(g) ? " (기본)" : ""}</option>)}
-                    </select>
-                  )}
+                  <select value={guideScopeOf(g)} onChange={e=>changeScope(g, e.target.value)} disabled={disabled}
+                    title={"이 가이드를 어느 과제·단계의 AI 작성(및 QA 교차검토 3차 기준)에 적용할지 지정합니다. 서버에 저장되어 모든 사용자에게 같게 적용됩니다.\n공통 = 모든 과제·단계 / 일반 SI = 정보공학 요구정의·명세 / 자동차 = 해당 ASPICE 프로세스"}
+                    style={{ fontSize:9.5, padding:"1px 4px", background:T.bg, border:`1px solid ${T.amber}66`, borderRadius:5, color: here ? T.amber : T.muted, fontFamily:"inherit", cursor:"pointer", maxWidth:200 }}>
+                    {GUIDE_SCOPES.map(([v, l]) => <option key={v} value={v}>{l}{!g.scope && v === guideDefaultScope(g) ? " (자동)" : ""}</option>)}
+                  </select>
                   <span title={g.summary} style={{ fontSize:10, color:T.muted, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{String(g.summary||"").replace(/\n/g," ")}</span>
                   <button onClick={()=>remove(g)} disabled={disabled||gBusy} title="삭제" style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:11 }}>✕</button>
                 </div>
-              ))}
+              ); })}
             </div>
           )}
+          {hiddenN > 0 && <div style={{ marginBottom:8 }}><button onClick={()=>setShowAll(v=>!v)} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:10.5, padding:0, fontFamily:"inherit", textDecoration:"underline" }}>{showAll ? "이 단계 가이드만 보기" : `다른 과제·단계용 가이드 ${hiddenN}건 보기`}</button></div>}
           {!adding ? (
             <button onClick={()=>setAdding(true)} disabled={disabled} style={{ background:"none", border:`1px dashed ${T.border}`, borderRadius:7, color:T.accent, cursor:"pointer", fontSize:11, padding:"5px 12px", fontFamily:"inherit" }}>＋ 가이드 등록</button>
           ) : (
@@ -8619,7 +8662,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, aspice = 
               onDrop={e=>{ e.preventDefault(); setGDrag(false); addGuideFiles(Array.from(e.dataTransfer.files || [])); }}
               style={{ border:`1px dashed ${gDrag ? T.accent : T.border}`, borderRadius:8, padding:10, background: gDrag ? T.accent+"14" : "transparent" }}>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", gap:6, marginBottom:6 }}>
-                <input value={gName} onChange={e=>setGName(e.target.value)} placeholder={aspice ? "가이드 이름 (예: RD1202 - 요구사항정의서_작성가이드)" : "가이드 이름 (예: PMBOK 8판 품질관리 기준)"} disabled={gBusy} style={inp} />
+                <input value={gName} onChange={e=>setGName(e.target.value)} placeholder={aspice ? `가이드 이름 (예: ${proc} ${ASPICE_PROC_SHORT[proc] || ""} 작성가이드) — 등록 시 적용 대상: ${GUIDE_SCOPE_LABEL[defaultScope]}` : "가이드 이름 (예: RD1202 - 요구사항정의서_작성가이드)"} disabled={gBusy} style={inp} />
                 <select value={gCat} onChange={e=>setGCat(e.target.value)} disabled={gBusy} style={inp}>
                   {GUIDE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
                 </select>
@@ -8700,8 +8743,7 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, 
   const [open, setOpen] = useState({});   // 행별 상세(명세) 펼침
   const [guides, setGuides] = useState([]);          // 작성 가이드 (전역 라이브러리)
   const [guideSel, setGuideSel] = useState({});      // { 가이드id: 적용 여부 } — 활성 가이드는 기본 적용
-  const [guideScope, setGuideScopeRaw] = useState(loadGuideScopes);   // ASPICE: { 가이드id: SYS1|SYS2|ALL } (기본값은 규칙 판정)
-  const setGuideScope = f => setGuideScopeRaw(s => { const n = typeof f === "function" ? f(s) : f; saveGuideScopes(n); return n; });
+  const guideTrack = STK_ON ? "aspice" : "si";   // 과제 유형별 가이드 적용 대상
   useEffect(() => {
     fetchWritingGuides().then(gs => {
       setGuides(gs);
@@ -8729,10 +8771,10 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, 
     const srcAll = [srcText.trim(), ...srcFiles.map(f => `[파일: ${f.name}]\n${f.text}`)].filter(Boolean).join("\n\n");
     if (srcAll.length < 20) { setError("이해관계자 요구사항 원문을 20자 이상 입력하거나 파일을 업로드해 주세요."); return; }
     setBusy(true); setError(null);
-    // 적용 선택된 작성 가이드 → 프롬프트 주입. ASPICE는 단계별로 나눔: 1차(SYS.1 도출)=SYS1·공통 / 2차(SYS.2 명세)=SYS2·공통
+    // 적용 선택된 작성 가이드 → 프롬프트 주입. 1차(도출)와 2차(명세)에 각각 그 단계의 가이드만: ASPICE는 SYS.1 / SYS.2, SI는 RD1200 / RD1300 (+공통)
     const selG = guides.filter(g => guideSel[g.id]);
-    const guideBlock = buildGuideBlock(STK_ON ? selG.filter(g => guideScopeOf(g, guideScope) !== "SYS2") : selG);
-    const guideBlockSpec = STK_ON ? buildGuideBlock(selG.filter(g => guideScopeOf(g, guideScope) !== "SYS1")) : guideBlock;
+    const guideBlock = buildGuideBlock(selG.filter(g => guideApplies(g, guideTrack, STK_ON ? "SYS.1" : "derive")));
+    const guideBlockSpec = buildGuideBlock(selG.filter(g => guideApplies(g, guideTrack, STK_ON ? "SYS.2" : "spec")));
     try {
       // 1차(RD1200): 원문 → 기능·비기능·인터페이스 요구사항 도출 — 원문이 길면 분할 호출 (Vercel 타임아웃 대응)
       const chunks = [];
@@ -8904,7 +8946,9 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
 
   const bodyEl = (
         <div style={embedded ? {} : { padding:"14px 18px", overflowY:"auto" }}>
-          {part !== "SYS" && <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} aspice={STK_ON} scopes={guideScope} setScopes={setGuideScope} hintClass={embedded ? "ae-hint" : ""} />}
+          {part !== "SYS" && <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} track={guideTrack} proc={STK_ON ? "SYS.1" : "req"} hintClass={embedded ? "ae-hint" : ""} />}
+          {part === "SYS" && <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} track="aspice" proc="SYS.2" hintClass="ae-hint" />}
+          {part === "SYS" && STK_ON && <div className="ae-hint" style={{ fontSize:10.5, color:T.muted, margin:"-6px 0 10px" }}>SYS.2 가이드는 SYS.1 탭의 [원문에서 요구 도출] 2차 단계(시스템 요구 명세)에 적용됩니다. 이 탭에서는 결과를 검토·수정합니다.</div>}
           {part !== "SYS" && (<div onDragOver={e=>{ e.preventDefault(); if (!busy) setSrcDrag(true); }} onDragLeave={()=>setSrcDrag(false)}
             onDrop={e=>{ e.preventDefault(); setSrcDrag(false); addSrcFiles(Array.from(e.dataTransfer.files || [])); }}
             style={{ border:`1px solid ${srcDrag ? T.accent : T.accentDim}`, borderLeft:`3px solid ${T.accent}`, borderRadius:9, background: srcDrag ? T.accent+"22" : T.accent+"08", padding:"10px 12px", marginBottom:12 }}>
@@ -9260,8 +9304,11 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const applyFocus = (list) => (focusOn && list.some(x => focusOn.ids.has(x.id))) ? list.filter(x => focusOn.ids.has(x.id)) : list;
   const goMissing = (c) => { setFocus({ key: c.key, tab: c.tab, level: c.level || null, ids: new Set(c.missing), q: c.q, n: c.missing.length }); setTab(c.tab, c.level || null); if (c.level) setVFilter(c.level); };
   const [guides, setGuides] = useState([]);
-  useEffect(() => { fetchWritingGuides().then(gs => setGuides(gs.filter(g => g.is_active !== false))).catch(() => {}); }, []);
-  const guideBlock = buildGuideBlock(guides.filter(g => guideScopeOf(g, loadGuideScopes()) === "ALL"));
+  const [gSel, setGSel] = useState({});   // 가이드 적용 선택(세션) — 활성 가이드는 기본 적용
+  useEffect(() => { fetchWritingGuides().then(gs => { const act = gs.filter(g => g.is_active !== false); setGuides(act); setGSel(Object.fromEntries(act.map(g => [g.id, true]))); }).catch(() => {}); }, []);
+  // 프로세스별 작성 가이드 블록 — 그 프로세스에 적용되는(및 공통) 가이드만 AI 프롬프트와 QA 교차검토 3차 기준에 넣는다
+  const gbFor = proc => buildGuideBlock(guides.filter(g => gSel[g.id] !== false && guideApplies(g, "aspice", proc)));
+  const guideBlock = gbFor("SYS.3");
   const V = model.version;
   const findings = AE.checkConsistency(model);
   const metrics = AE.coverageMetrics(model);
@@ -9441,7 +9488,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
     // 묶음 1회 호출 — 시간 초과면 1건씩 나눠 다시 보낸다(추론형 모델은 건수에 비례해 느려짐)
     async function callBatch(batch) {
       try {
-        const r = await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "review", provider: rvSel.id, system: AE.reviewSystemPrompt(), prompt: AE.reviewPrompt(model, lv, batch, V) }) });
+        const r = await apiFetch("/api/review", { method: "POST", body: JSON.stringify({ action: "review", provider: rvSel.id, system: AE.reviewSystemPrompt(), prompt: AE.reviewPrompt(model, lv, batch, V, gbFor(AE.reviewScope(lv)?.proc || "")) }) });
         meta = { provider: r.provider, label: r.label, model: r.model, sameAsGenerator: r.sameAsGenerator };
         const v = AE.validateReviewScope(AE.parseReviewJson(r.text), batch, lv, V);
         kept.push(...v.kept); res.dropped += v.dropped.length; done.push(...batch.map(b => b.id));
@@ -9572,10 +9619,10 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         let dd = null;
         if (n.useAI) {
           try {
-            const a = await callClaudeJson(AE.promptDDStructure({ unit: u, model: n, version: V, settings }), 5000);
+            const a = await callClaudeJson(AE.promptDDStructure({ unit: u, model: n, version: V, settings, guideBlock: gbFor("SWE.3") }), 5000);
             const st = AE.normalizeDD(a, u, n, seed);
             let b = {};
-            try { b = await callClaudeJson(AE.promptDDBehavior({ unit: u, model: n, version: V, settings, structure: st }), 5000); } catch (_) { b = {}; }
+            try { b = await callClaudeJson(AE.promptDDBehavior({ unit: u, model: n, version: V, settings, structure: st, guideBlock: gbFor("SWE.3") }), 5000); } catch (_) { b = {}; }
             dd = AE.normalizeDD({ ...(a || {}), ...(b || {}) }, u, n, seed); aiOk++;
           } catch (_) { dd = null; }
         }
@@ -9607,7 +9654,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       const one = async (u) => {
         const idx = n.units.SW.findIndex(x => x.id === u.id); if (idx < 0) return;
         let ai = null;
-        if (n.useAI) { try { ai = await callClaudeJson(AE.promptCode({ unit: u, model: n, settings: S, meta: form }), 5000); if (ai && Array.isArray(ai.ops)) aiOk++; else ai = null; } catch (_) { ai = null; } }
+        if (n.useAI) { try { ai = await callClaudeJson(AE.promptCode({ unit: u, model: n, settings: S, meta: form, guideBlock: gbFor("SWE.3") }), 5000); if (ai && Array.isArray(ai.ops)) aiOk++; else ai = null; } catch (_) { ai = null; } }
         const code = AE.generateCode(u, n, form, S, ai);
         n.units.SW[idx] = { ...n.units.SW[idx], dd: { ...n.units.SW[idx].dd, code } };
         done++;
@@ -9633,7 +9680,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         const cur = n.units.SW[idx];
         let kept = [], dropped = [];
         if (n.useAI && (cur.reqs || []).length) {
-          try { const raw = await callClaudeJson(AE.promptUnitTests({ unit: cur, model: n }), 3000); const v = AE.validateUnitTests(raw, cur, n); kept = v.kept; dropped = v.dropped; } catch (_) { /* AI 실패 시 규칙 케이스만 */ }
+          try { const raw = await callClaudeJson(AE.promptUnitTests({ unit: cur, model: n, guideBlock: gbFor("SWE.4") }), 3000); const v = AE.validateUnitTests(raw, cur, n); kept = v.kept; dropped = v.dropped; } catch (_) { /* AI 실패 시 규칙 케이스만 */ }
         }
         const ut = AE.buildUnitTestSet(cur, kept, dropped, { aiModel: n.useAI ? "생성 AI(Claude)" : "" });
         aiN += kept.length; dropN += dropped.length; ruleN += ut.cases.length - kept.length;
@@ -9783,14 +9830,14 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         let hd = null;
         if (n.useAI) {
           try {
-            const a = await callClaudeJson(AE.promptHDCircuit({ comp: c, model: n }), 5000);
+            const a = await callClaudeJson(AE.promptHDCircuit({ comp: c, model: n, guideBlock: gbFor("HWE.2") }), 5000);
             let circuit = AE.normalizeHD(a, c, n, seed);
             // 넷(연결)은 따로 받는다 — 부품이 많은 블록에서 한 번에 받으면 응답이 잘려 연결이 통째로 사라졌음
             if (!AE.hdPinStats(circuit).con || AE.hdPinStats(circuit).con < AE.hdPinStats(circuit).total * 0.6) {
-              try { const nr = await callClaudeJson(AE.promptHDNets({ comp: c, model: n, circuit }), 6000); const w = AE.applyHDNets(circuit, nr); if (AE.hdPinStats(w).con) circuit = w; } catch (_) { /* 아래 규칙 보강 */ }
+              try { const nr = await callClaudeJson(AE.promptHDNets({ comp: c, model: n, circuit, guideBlock: gbFor("HWE.2") }), 6000); const w = AE.applyHDNets(circuit, nr); if (AE.hdPinStats(w).con) circuit = w; } catch (_) { /* 아래 규칙 보강 */ }
             }
             if (!AE.hdPinStats(circuit).con) circuit = AE.rulePowerNets(circuit);
-            let b = {}; try { b = await callClaudeJson(AE.promptHDAnalysis({ comp: c, model: n, circuit }), 5000); } catch (_) { b = {}; }
+            let b = {}; try { b = await callClaudeJson(AE.promptHDAnalysis({ comp: c, model: n, circuit, guideBlock: gbFor("HWE.2") }), 5000); } catch (_) { b = {}; }
             hd = AE.normalizeHD({ ...(a || {}), ...(b || {}) }, c, n, seed);
             hd = { ...hd, nets: circuit.nets, conns: circuit.conns }; aiOk++;
           } catch (_) { hd = null; }
@@ -9818,7 +9865,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         const idx = n.comps.HW.findIndex(x => x.id === c.id); if (idx < 0) return;
         const hd0 = n.comps.HW[idx].hd;
         let hd = null;
-        if (n.useAI) { try { const nr = await callClaudeJson(AE.promptHDNets({ comp: c, model: n, circuit: hd0 }), 6000); const w = AE.applyHDNets(hd0, nr); if (AE.hdPinStats(w).con) { hd = w; aiOk++; } } catch (_) { hd = null; } }
+        if (n.useAI) { try { const nr = await callClaudeJson(AE.promptHDNets({ comp: c, model: n, circuit: hd0, guideBlock: gbFor("HWE.2") }), 6000); const w = AE.applyHDNets(hd0, nr); if (AE.hdPinStats(w).con) { hd = w; aiOk++; } } catch (_) { hd = null; } }
         if (!hd) { hd = AE.rulePowerNets({ ...hd0, nets: [], conns: [] }); ruleN++; }
         const stt = AE.hdPinStats(hd);
         n.comps.HW[idx] = { ...n.comps.HW[idx], hd: { ...hd, summary: hd0.summary } };
@@ -9844,7 +9891,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           const grp = todo0.slice(i, i + 5);
           setProg({ percent: 5 + (i / todo0.length) * 90, label: `${n.useAI ? "AI: " : ""}${level} 요구 파생 중… (${Math.min(i + 5, todo0.length)}/${todo0.length})` });
           let got = [];
-          if (n.useAI) { try { const r = await callClaudeJson(AE.promptDerive({ level, parents: grp, sysCompName: names0, version: V }), 5000); got = Array.isArray(r?.items) ? r.items : []; } catch (_) {} }
+          if (n.useAI) { try { const r = await callClaudeJson(AE.promptDerive({ level, parents: grp, sysCompName: names0, version: V, guideBlock: gbFor(level === "HW" ? "HWE.1" : "SWE.1") }), 5000); got = Array.isArray(r?.items) ? r.items : []; } catch (_) {} }
           grp.forEach(p => {
             const mine = got.filter(x => x?.parent === p.id && String(x.text || x.title || "").trim());
             if (!mine.length) {   // AI 미사용·누락분은 상위 요구를 상속한 초안으로
@@ -9875,7 +9922,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         const grp = todo.slice(i, i + 5);
         setProg({ percent: 5 + (i / todo.length) * 90, label: `AI: ${level} 요구 파생 중… (${Math.min(i + 5, todo.length)}/${todo.length})` });
         let got = [];
-        try { const r = await callClaudeJson(AE.promptDerive({ level, parents: grp, sysCompName: names, version: V }), 5000); got = Array.isArray(r?.items) ? r.items : []; } catch (_) {}
+        try { const r = await callClaudeJson(AE.promptDerive({ level, parents: grp, sysCompName: names, version: V, guideBlock: gbFor(level === "HW" ? "HWE.1" : "SWE.1") }), 5000); got = Array.isArray(r?.items) ? r.items : []; } catch (_) {}
         grp.forEach(p => {
           const mine = got.filter(x => x?.parent === p.id && String(x.text || x.title || "").trim());
           if (!mine.length) {   // AI 누락분은 상속 초안으로 채워 추적 단절을 막는다
@@ -9907,7 +9954,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
       const want = level === "SW" ? AE.elemHasSW : AE.elemHasHW;
       const sysElems = n.comps.SYS.filter(want);
       setProg({ percent: 10, label: `AI: ${AE.LEVELS[level].compLabel} 구조 설계 중…` });
-      const res = await callClaudeJson(AE.promptComponents({ level, reqs: n.reqs[level], sysElems, version: V }), 3500);
+      const res = await callClaudeJson(AE.promptComponents({ level, reqs: n.reqs[level], sysElems, version: V, guideBlock: gbFor(level === "HW" ? "HWE.2" : "SWE.2") }), 3500);
       const a = AE.applyArchResult(level, res, n.comps[level]);
       const sysIds = new Set(sysElems.map(e => e.id));
       a.comps.forEach(c => { if (!sysIds.has(c.sysElem)) c.sysElem = ""; });
@@ -9947,7 +9994,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           const { L, grp } = jobs[j];
           setProg({ percent: 5 + (j / Math.max(1, jobs.length)) * 85, label: `AI: ${AE.TEST_LEVELS[L].label} 정상 시나리오 서술 중… (${j + 1}/${jobs.length})` });
           try {
-            const r = await callClaudeJson(AE.promptTests({ testLevel: L, reqs: grp, version: V }), 5000);
+            const r = await callClaudeJson(AE.promptTests({ testLevel: L, reqs: grp, version: V, guideBlock: gbFor(AE.TEST_LEVELS[L]?.proc || "") }), 5000);
             (r?.items || []).forEach(x => {
               const tgt = grp.find(g => g.id === x?.target); if (!tgt) return;
               fresh.push({ level: L, targets: [tgt.id], origin: "ai", regression: tgt.priority === "상" || !!tgt.safety, title: String(x.title || `${tgt.title} — 정상 동작`).slice(0, 80),
@@ -10394,6 +10441,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                 {docs.length > 0 && <> · 산출물: {docs.map(d => `${d.title} (${vs.map(v => `${v === "3.1" ? "3.1 WP" : "4.0 정보항목"} ${d.wp[v]}`).join(" / ")})`).join(" · ")}</>}
                 {pair && <> · 검증 대상: <button onClick={() => goProc(pair.id)} style={{ ...small, padding: "0 6px", fontSize: 10 }}>{pair.id} {pair.short}</button></>}
               </div>); })()}
+          {activeProc && ASPICE_PROC_IDS.includes(activeProc.id) && activeProc.id !== "SYS.1" && activeProc.id !== "SYS.2" && (
+            <WritingGuidePanel guides={guides} setGuides={setGuides} sel={gSel} setSel={setGSel} disabled={busy} track="aspice" proc={activeProc.id} hintClass="ae-hint" />)}
           {(busy || prog) && !runHere && <GenProgressBar progress={prog || { percent: 3, label: "준비 중…" }} subText="요구 건수에 따라 수십 초가 걸릴 수 있습니다. 멈추려면 ■ 중지(이번 실행 취소)." onStop={busy ? stopRun : null} stopping={stopping} />}
           {runErr && !runHere && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{runErr}</div>}
           {err && <div style={{ color: T.red, fontSize: 11.5, padding: 9, background: T.red + "11", borderRadius: 8, marginBottom: 10 }}>{err}</div>}
@@ -11138,6 +11187,8 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>{RC.vda.map(c => <div key={c.code} style={{ fontSize: 10.5 }}><code style={{ color: T.accent }}>{c.code}</code> <b>{c.label}</b> — <span style={{ color: T.muted }}>{c.desc}</span></div>)}</div></div>
                     <div style={{ marginBottom: 6 }}><b>② 2차 — {K.ver}</b>는 {AE.REVIEW_KIND_ABOUT[S.kind].what}입니다. 검토 AI는 이 기준에 해당하는 문제만 지적하고, 기준 코드가 맞지 않는 의견은 규칙으로 걸러집니다. 판 번호(1.0)를 고정해 두어 언제 어떤 기준으로 검토했는지가 기록에 남습니다.</div>
                     <div style={{ color: T.muted, marginBottom: 8 }}>근거: {AE.REVIEW_KIND_ABOUT[S.kind].std}</div>
+                    {(() => { const gb = gbFor(S.proc); const n = guides.filter(g => gSel[g.id] !== false && guideApplies(g, "aspice", S.proc)).length;
+                      return <div style={{ marginBottom: 8, padding: "6px 8px", background: T.amber + "10", border: `1px solid ${T.amber}44`, borderRadius: 7 }}><b>③ 3차 — 조직 작성 가이드</b> (코드 <code>{AE.ORG_GUIDE_CRITERION.code}</code>): {S.proc}에 적용되는 작성 가이드 {n}건{gb ? "의 규칙에 어긋난 항목을 마지막으로 지적합니다. 가이드는 해당 프로세스 탭의 📐 작성 가이드에서 관리합니다." : "이 없어 이번 검토에는 적용되지 않습니다. 해당 프로세스 탭의 📐 작성 가이드에서 등록하면 적용됩니다."}</div>; })()}
                     <div style={{ overflowX: "auto" }}>
                       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                         <thead><tr style={{ color: T.muted, textAlign: "left" }}><th style={{ padding: "4px 6px", width: 96 }}>기준</th><th style={{ padding: "4px 6px", width: "30%" }}>무엇을 보나요</th><th style={{ padding: "4px 6px" }}>이렇게 쓰면 지적됩니다</th><th style={{ padding: "4px 6px" }}>이렇게 고치면 됩니다</th></tr></thead>
