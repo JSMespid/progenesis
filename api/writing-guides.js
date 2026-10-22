@@ -58,14 +58,17 @@ export default async function handler(req, res) {
 
     // ── 등록: { name, category, summary, content } ──
     if (req.method === 'POST') {
-      const { name, category, summary, content } = req.body || {};
+      const { name, category, summary, rightsConfirmed } = req.body || {};
       if (!name || !String(name).trim()) return res.status(400).json({ error: '가이드 이름이 필요합니다.' });
+      // 저작권 보호: 등록자가 자료 이용 권한을 확인해야 하며, 가이드 원문(content)은 저장하지 않는다(규칙 요약만 저장)
+      if (rightsConfirmed !== true) return res.status(400).json({ error: '자료 이용 권한 확인이 필요합니다.' });
       const row = {
         name: String(name).trim().slice(0, 120),
         category: String(category || '기타').slice(0, 40),
         summary: String(summary || '').slice(0, 4000),
-        content: String(content || '').slice(0, 50000),
+        content: '',
       };
+      audit(sess.login_id, 'writing-guides.rights-confirmed', row.name);
       const created = await db('/writing_guides', 'POST', row);
       return res.status(200).json(Array.isArray(created) ? created[0] : created);
     }

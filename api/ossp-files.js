@@ -138,6 +138,8 @@ export default async function handler(req, res) {
         if (!ossp_id || !category || !file_name) {
           return res.status(400).json({ error: 'ossp_id, category, file_name이 필요합니다.' });
         }
+        // 저작권 보호: 업로더가 저장·공유 권한을 확인한 경우에만 업로드 URL 발급 (확인 사실은 감사 로그에 남음)
+        if (body.rights_confirmed !== true) return res.status(400).json({ error: '파일 이용 권한 확인이 필요합니다.' });
         if (!CATEGORIES.includes(category)) {
           return res.status(400).json({ error: `category는 다음 중 하나여야 합니다: ${CATEGORIES.join(', ')}` });
         }
