@@ -10010,6 +10010,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   // ── 변경 영향 검토: 유효/무효 판정 · 고아 연결 제거 ──
   const [reviewNote, setReviewNote] = useState({});   // { 상위ID: 판정 의견 }
   const [showLog, setShowLog] = useState(false);
+  const [logFilter, setLogFilter] = useState("all");
   const lstat = AE.linkStatus(model);
   function judge(up, keys, state) {
     const note = String(reviewNote[up] || "").trim();
@@ -10261,7 +10262,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                     <div style={{ color: T.green, fontSize: 11 }}>✓ 끝났다고 보는 기준: {AE_GUIDE[tab].done}</div>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
-                    <button onClick={() => setHints(false)} title="모든 안내 문구를 숨깁니다(위쪽 💡 안내 보기로 다시 볼 수 있음)" style={{ ...small, padding: "2px 8px", color: T.muted }}>안내 숨기기</button>
+                    
                     {(() => { const i = activeProc ? procVisible.findIndex(p => p.id === activeProc.id) : -1; const nx = i >= 0 ? procVisible[i + 1] : tab === "setup" ? procVisible[0] : null; return nx ? <button onClick={() => goProc(nx.id)} title={`${nx.id === "TRACE" ? "" : nx.id + " "}${nx.short}`} style={{ ...small, padding: "2px 8px" }}>다음: {nx.id === "TRACE" || nx.id === "ARTIFACTS" ? nx.short : nx.id} →</button> : null; })()}
                   </div>
                 </div>
@@ -11364,7 +11365,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
               const fieldOf = { "제목": "title", "내용": "text", "검증 기준": "verifCriteria", "유형": "type" };
               return (
               <AeSec title={lstat.open.length ? `변경 영향 검토 — 검토 필요 ${lstat.open.length}건 (상위 요구 ${Object.keys(groups).length}건)` : "변경 영향 검토 — 미해결 연결 없음"}
-                right={model.reviewLog.length ? <button onClick={() => setShowLog(v => !v)} style={small}>{showLog ? "판정 이력 닫기" : `판정 이력 ${model.reviewLog.length}건`}</button> : null}>
+                right={model.reviewLog.length ? <button onClick={() => setShowLog(v => !v)} style={small}>{showLog ? "판정 이력 닫기" : `판정 이력 보기 (${model.reviewLog.length}건)`}</button> : null}>
                 {lstat.open.length > 0 && <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>상위 요구의 제목·내용·검증 기준·유형이 바뀌면, 그 요구에서 내려간 하위 항목(요소 할당·하위 요구·시험)마다 <b>"상위가 바뀌었는데 이 하위는 그대로 둬도 되는가?"</b>를 묻는 목록입니다. 하위는 자동으로 고치지 않습니다.
                   <div style={{ marginTop: 4, display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px" }}>
                     <b style={{ color: T.green }}>영향 없음</b><span>하위를 고칠 필요가 없음 → 연결을 그대로 인정합니다. (예: 검증 기준만 추가됐고 하위 요구 내용과 어긋나지 않음)</span>
@@ -11416,15 +11417,37 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
                       </div>
                     </div>);
                 })}
-                {showLog && (
-                  <div style={{ marginTop: 6, maxHeight: 220, overflowY: "auto", borderTop: `1px solid ${T.border}`, paddingTop: 6 }}>
-                    {[...model.reviewLog].reverse().slice(0, 100).map((g, i) => (
-                      <div key={i} style={{ display: "grid", gridTemplateColumns: "118px 1fr 90px", gap: 8, fontSize: 10.5, padding: "2px 0" }}>
-                        <span style={{ color: T.muted }}>{String(g.at || "").slice(0, 16).replace("T", " ")}</span>
-                        <span>{g.up} → {g.down} <span style={{ color: T.muted }}>({AE.LINK_KINDS[g.kind] || g.kind}{g.fields?.length ? ` · 변경: ${g.fields.join("·")}` : ""})</span>{g.note ? ` — ${g.note}` : ""}</span>
-                        <span style={{ color: g.state === "valid" ? T.green : T.red }}>{AE.LINK_STATES[g.state] || g.state}</span>
-                      </div>))}
-                  </div>)}
+                {showLog && (() => {
+                  // 같은 시각·같은 상위 요구의 판정을 한 묶음으로 — 237줄을 '상위 요구 변경 1건 → 하위 n건 판정'으로 압축
+                  const groups = []; const idx = {};
+                  [...model.reviewLog].reverse().forEach(g => { const k = `${String(g.at || "").slice(0, 16)}|${g.up}`; if (!(k in idx)) { idx[k] = groups.length; groups.push({ at: String(g.at || "").slice(0, 16).replace("T", " "), up: g.up, fields: new Set(), items: [] }); } const G = groups[idx[k]]; (g.fields || []).forEach(f => G.fields.add(f)); G.items.push(g); });
+                  const shown = logFilter === "fix" ? groups.filter(G => G.items.some(g => g.state !== "valid")) : groups;
+                  return (
+                    <div style={{ marginTop: 6, borderTop: `1px solid ${T.border}`, paddingTop: 6 }}>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 10.5, marginBottom: 5, flexWrap: "wrap" }}>
+                        <span style={{ color: T.muted }}>상위 요구 변경 {groups.length}건 · 하위 판정 {model.reviewLog.length}건 (영향 없음 {model.reviewLog.filter(g => g.state === "valid").length} · 하위 수정 {model.reviewLog.filter(g => g.state !== "valid").length})</span>
+                        <span style={{ flex: 1 }} />
+                        {[["all", "전체"], ["fix", "하위 수정이 있었던 것만"]].map(([k, l]) => <button key={k} onClick={() => setLogFilter(k)} style={{ ...small, padding: "1px 8px", ...(logFilter === k ? { background: T.accent, color: "#fff", borderColor: T.accent } : {}) }}>{l}</button>)}
+                      </div>
+                      <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                        {shown.map((G, i) => { const nOk = G.items.filter(g => g.state === "valid").length, nFix = G.items.length - nOk; return (
+                          <details key={i} style={{ fontSize: 10.5, padding: "3px 0", borderBottom: `1px solid ${T.border}55` }}>
+                            <summary style={{ cursor: "pointer", display: "grid", gridTemplateColumns: "112px 1fr auto", gap: 8, alignItems: "center" }}>
+                              <span style={{ color: T.muted }}>{G.at}</span>
+                              <span><b>{G.up}</b> <span style={{ color: T.muted }}>{G.fields.size ? `변경: ${[...G.fields].join("·")}` : ""} → 하위 {G.items.length}건</span></span>
+                              <span style={{ whiteSpace: "nowrap" }}>{nOk > 0 && <span style={{ color: T.green }}>영향 없음 {nOk}</span>}{nOk > 0 && nFix > 0 && " · "}{nFix > 0 && <span style={{ color: T.red }}>하위 수정 {nFix}</span>}</span>
+                            </summary>
+                            <div style={{ padding: "3px 0 3px 120px", display: "flex", flexDirection: "column", gap: 1 }}>
+                              {G.items.map((g, j) => <div key={j} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
+                                <span>{g.down} <span style={{ color: T.muted }}>({AE.LINK_KINDS[g.kind] || g.kind})</span>{g.note ? ` — ${g.note}` : ""}</span>
+                                <span style={{ whiteSpace: "nowrap", color: g.state === "valid" ? T.green : T.red }}>{AE.LINK_STATES[g.state] || g.state}</span>
+                              </div>)}
+                            </div>
+                          </details>); })}
+                        {!shown.length && <div style={{ fontSize: 10.5, color: T.muted, padding: 4 }}>해당하는 판정이 없습니다.</div>}
+                      </div>
+                      <div className="ae-hint" style={{ fontSize: 10, color: T.muted, marginTop: 4 }}>판정 이력은 추적 매트릭스(RTM)의 '변경 영향·판정 이력' 시트에 모두 남습니다.</div>
+                    </div>); })()}
               </AeSec>); })()}
             <AeSec title="추적·검증 커버리지">
               {(() => {
