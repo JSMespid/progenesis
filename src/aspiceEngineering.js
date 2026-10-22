@@ -91,7 +91,7 @@ export const ASPICE_DOCS = {
   R_SYS4: { title: "시스템 통합 검증 결과서", proc: "SYS.4", test: "SYS4", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SY6101" },
   R_SWE6: { title: "SW 검증 결과서", proc: "SWE.6", test: "SWE6", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SW5102" },
   R_SWE5: { title: "SW 통합 검증 결과서", proc: "SWE.5", test: "SWE5", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SW5101" },
-  STK_LIST: { title: "이해관계자 요구사항 목록", proc: "SYS.1", wp: { "3.1": "17-03", "4.0": "17-00, 17-54" }, code: "SY2101" },
+  STK_LIST: { title: "이해관계자 요구사항 목록", proc: "SYS.1", wp: { "3.1": "17-03, 17-54", "4.0": "17-00, 17-54" }, code: "SY2101" },
   SW_DD:  { title: "SW 상세설계서", proc: "SWE.3", wp: { "3.1": "04-05, 11-05", "4.0": "04-05, 15-51" }, code: "SW4101" },
   V_SWE4: { title: "SW 유닛 검증 명세서", proc: "SWE.4", test: "SWE4", wp: { "3.1": "08-50, 08-52", "4.0": "08-60, 08-58" }, code: "SW4103" },
   R_SWE4: { title: "SW 유닛 검증 결과서", proc: "SWE.4", test: "SWE4", result: true, wp: { "3.1": "13-50", "4.0": "15-52, 03-50" }, code: "SW4106" },

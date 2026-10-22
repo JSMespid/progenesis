@@ -7689,7 +7689,7 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
   ], std.opts);
 }
 
-// 이해관계자 요구사항 목록 (SYS.1 · 3.1 17-03 / 4.0 17-00·17-54) — 원문 발췌 + 합의 상태 + 시스템 요구 추적
+// 이해관계자 요구사항 목록 (SYS.1 · 3.1 17-03·17-54 / 4.0 17-00·17-54) — 원문 발췌 + 합의 상태 + 시스템 요구 추적
 function makeAspiceStkXlsx(meta, ctx, doc) {
   const model = AE.normalizeModel(ctx?.requirements?.aspice);
   const D = AE.ASPICE_DOCS.STK_LIST;
@@ -8362,6 +8362,25 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
 // AI가 산출물을 작성할 때 프롬프트에 주입되어 준수 기준으로 사용됨 — 모든 AI 작성 기능 공용 헬퍼
 const GUIDE_CATEGORIES = ["방법론 작성가이드", "글로벌 표준", "글로벌 규제", "기타"];
 
+// ── ASPICE: 작성 가이드별 적용 단계 (라이브러리는 전역 공용, 적용 단계만 가이드별 지정) ──
+//   SYS1 = SYS.1 이해관계자 요구 도출(1차 AI 호출, 방법론 RD1200 요구사항 정의에 대응)
+//   SYS2 = SYS.2 시스템 요구 명세(2차 AI 호출, 방법론 RD1300 요구사항 명세에 대응)
+//   ALL  = 요구 단계 공통 + V-모델 이후 단계(SYS.3 아키텍처 등)에도 적용
+// 기본값은 가이드 이름의 문서 코드로 규칙 판정(AI 미사용) — 사용자가 바꾼 값은 브라우저에 보관
+const GUIDE_SCOPES = [["ALL", "공통(전 단계)"], ["SYS1", "SYS.1 도출"], ["SYS2", "SYS.2 명세"]];
+const GUIDE_SCOPE_KEY = "spiderqa_guide_scope";
+function guideDefaultScope(g) {
+  const s = `${g?.name || ""}`;
+  if (/RD\s*-?12\d\d|요구사항\s*정의서|이해관계자\s*요구/i.test(s)) return "SYS1";
+  if (/RD\s*-?13\d\d|요구사항\s*명세서|시스템\s*요구/i.test(s)) return "SYS2";
+  return "ALL";
+}
+function loadGuideScopes() {
+  try { const o = JSON.parse(localStorage.getItem(GUIDE_SCOPE_KEY) || "{}"); return o && typeof o === "object" ? o : {}; } catch (_) { return {}; }
+}
+function saveGuideScopes(o) { try { localStorage.setItem(GUIDE_SCOPE_KEY, JSON.stringify(o || {})); } catch (_) { /* 저장 실패 무시 — 기본값 사용 */ } }
+const guideScopeOf = (g, ov) => (ov && GUIDE_SCOPES.some(x => x[0] === ov[g?.id])) ? ov[g.id] : guideDefaultScope(g);
+
 async function fetchWritingGuides() {
   const r = await fetch("/api/writing-guides");
   const d = await r.json().catch(() => []);
@@ -8428,7 +8447,7 @@ function mergeUploadFiles(prev, added) {
 }
 
 // ── 작성 가이드 패널 (AI 작성 모달 공용 UI): 전역 가이드 목록·적용 선택·등록·삭제 ──
-function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
+function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, aspice = false, scopes = {}, setScopes, hintClass = "" }) {
   const [openPanel, setOpenPanel] = useState(false);
   const [adding, setAdding] = useState(false);
   const [gName, setGName] = useState("");
@@ -8441,6 +8460,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
   const [gErr, setGErr] = useState(null);
   const inp = { width:"100%", padding:"5px 7px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:11, fontFamily:"inherit", boxSizing:"border-box" };
   const applied = guides.filter(g => sel[g.id]).length;
+  const appliedAt = sc => guides.filter(g => sel[g.id] && [sc, "ALL"].includes(guideScopeOf(g, scopes))).length;
 
   async function addGuideFiles(fileArr) {
     if (gBusy) return;
@@ -8495,9 +8515,11 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
       <div onClick={()=>setOpenPanel(o=>!o)} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 12px", cursor:"pointer" }}>
         <span style={{ fontSize:11.5, fontWeight:600, color:T.amber }}>📐 작성 가이드</span>
         <span style={{ fontSize:10.5, color: applied ? T.accent : T.muted }}>
-          {guides.length ? `등록 ${guides.length}건 · 적용 ${applied}건` : "등록된 가이드 없음"}
+          {!guides.length ? "등록된 가이드 없음" : aspice ? `등록 ${guides.length}건 · 적용 SYS.1 ${appliedAt("SYS1")} · SYS.2 ${appliedAt("SYS2")}` : `등록 ${guides.length}건 · 적용 ${applied}건`}
         </span>
-        <span style={{ fontSize:10, color:T.muted }}>— 방법론 작성가이드·글로벌 표준(PMBOK®·CMMI)·규제를 등록하면 AI가 준수하여 작성합니다 (전역 공용)</span>
+        <span className={hintClass} style={{ fontSize:10, color:T.muted }}>{aspice
+          ? "— 방법론 작성가이드·ASPICE PAM·OEM 작성 규칙·법규를 등록하면 AI가 준수하여 작성합니다 (라이브러리는 전역 공용 · 적용 단계는 가이드별 지정)"
+          : "— 방법론 작성가이드·글로벌 표준(PMBOK®·CMMI)·규제를 등록하면 AI가 준수하여 작성합니다 (전역 공용)"}</span>
         <div style={{ flex:1 }} />
         <span style={{ fontSize:10, color:T.muted }}>{openPanel ? "▲" : "▼"}</span>
       </div>
@@ -8511,6 +8533,13 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
                     onChange={e=>setSel(s=>({ ...s, [g.id]: e.target.checked }))} style={{ cursor:"pointer" }} />
                   <span style={{ fontSize:11, fontWeight:600 }}>{g.name}</span>
                   <span style={{ fontSize:9.5, color:T.accent, border:`1px solid ${T.accentDim}`, borderRadius:5, padding:"1px 6px" }}>{g.category}</span>
+                  {aspice && setScopes && (
+                    <select value={guideScopeOf(g, scopes)} onChange={e=>setScopes(s=>({ ...s, [g.id]: e.target.value }))} disabled={disabled || !sel[g.id]}
+                      title={"이 가이드를 어느 단계 AI 작성에 적용할지 지정합니다.\nSYS.1 도출 = 원문에서 이해관계자 요구 발췌·시스템 요구 도출 (방법론 RD1200 요구사항 정의)\nSYS.2 명세 = 시스템 요구 상세 명세·검증 기준 (방법론 RD1300 요구사항 명세)\n공통 = 요구 단계 전체 + SYS.3 아키텍처 등 이후 단계\n기본값은 가이드 이름의 문서 코드(RD12xx·RD13xx)로 정해지며, 바꾼 값은 이 브라우저에 보관됩니다."}
+                      style={{ fontSize:9.5, padding:"1px 4px", background:T.bg, border:`1px solid ${T.amber}66`, borderRadius:5, color:T.amber, fontFamily:"inherit", cursor:"pointer" }}>
+                      {GUIDE_SCOPES.map(([v, l]) => <option key={v} value={v}>{l}{v === guideDefaultScope(g) ? " (기본)" : ""}</option>)}
+                    </select>
+                  )}
                   <span title={g.summary} style={{ fontSize:10, color:T.muted, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{String(g.summary||"").replace(/\n/g," ")}</span>
                   <button onClick={()=>remove(g)} disabled={disabled||gBusy} title="삭제" style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:11 }}>✕</button>
                 </div>
@@ -8524,7 +8553,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled }) {
               onDrop={e=>{ e.preventDefault(); setGDrag(false); addGuideFiles(Array.from(e.dataTransfer.files || [])); }}
               style={{ border:`1px dashed ${gDrag ? T.accent : T.border}`, borderRadius:8, padding:10, background: gDrag ? T.accent+"14" : "transparent" }}>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", gap:6, marginBottom:6 }}>
-                <input value={gName} onChange={e=>setGName(e.target.value)} placeholder="가이드 이름 (예: PMBOK 8판 품질관리 기준)" disabled={gBusy} style={inp} />
+                <input value={gName} onChange={e=>setGName(e.target.value)} placeholder={aspice ? "가이드 이름 (예: RD1202 - 요구사항정의서_작성가이드)" : "가이드 이름 (예: PMBOK 8판 품질관리 기준)"} disabled={gBusy} style={inp} />
                 <select value={gCat} onChange={e=>setGCat(e.target.value)} disabled={gBusy} style={inp}>
                   {GUIDE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
                 </select>
@@ -8601,6 +8630,8 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, 
   const [open, setOpen] = useState({});   // 행별 상세(명세) 펼침
   const [guides, setGuides] = useState([]);          // 작성 가이드 (전역 라이브러리)
   const [guideSel, setGuideSel] = useState({});      // { 가이드id: 적용 여부 } — 활성 가이드는 기본 적용
+  const [guideScope, setGuideScopeRaw] = useState(loadGuideScopes);   // ASPICE: { 가이드id: SYS1|SYS2|ALL } (기본값은 규칙 판정)
+  const setGuideScope = f => setGuideScopeRaw(s => { const n = typeof f === "function" ? f(s) : f; saveGuideScopes(n); return n; });
   useEffect(() => {
     fetchWritingGuides().then(gs => {
       setGuides(gs);
@@ -8628,7 +8659,10 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, 
     const srcAll = [srcText.trim(), ...srcFiles.map(f => `[파일: ${f.name}]\n${f.text}`)].filter(Boolean).join("\n\n");
     if (srcAll.length < 20) { setError("이해관계자 요구사항 원문을 20자 이상 입력하거나 파일을 업로드해 주세요."); return; }
     setBusy(true); setError(null);
-    const guideBlock = buildGuideBlock(guides.filter(g => guideSel[g.id]));   // 적용 선택된 작성 가이드 → 프롬프트 주입
+    // 적용 선택된 작성 가이드 → 프롬프트 주입. ASPICE는 단계별로 나눔: 1차(SYS.1 도출)=SYS1·공통 / 2차(SYS.2 명세)=SYS2·공통
+    const selG = guides.filter(g => guideSel[g.id]);
+    const guideBlock = buildGuideBlock(STK_ON ? selG.filter(g => guideScopeOf(g, guideScope) !== "SYS2") : selG);
+    const guideBlockSpec = STK_ON ? buildGuideBlock(selG.filter(g => guideScopeOf(g, guideScope) !== "SYS1")) : guideBlock;
     try {
       // 1차(RD1200): 원문 → 기능·비기능·인터페이스 요구사항 도출 — 원문이 길면 분할 호출 (Vercel 타임아웃 대응)
       const chunks = [];
@@ -8667,11 +8701,19 @@ ${chunks[i]}`, 6000);
       const idMatch = matchPrevReqIds(freshRaw, items);
       let list = assignReqIds(idMatch.list, reqIdFloor(requirements, items.map(x => x.id)));
       // 이해관계자 요구(STK): 기존 STK와 문장 매칭 → 기존 ID 유지, 신규만 새 번호. 시스템 요구의 stkIds를 전역 키 → STK ID로 변환
+      let stkNote = "";
       if (STK_ON) {
         const stkMatch = matchPrevReqIds(stkRaw.map(k => ({ ...k, name: k.text })), stk.map(k => ({ ...k, name: k.text })));
         const stkList = assignStkIds(stkMatch.list.map(k => { const { name, ...rest } = k; return rest; }), reqIdFloor(requirements, [...stk.map(x => x.id), ...(requirements?.stk?.items || []).map(x => x.id)]));
         const keyToId = Object.fromEntries(stkList.map(k => [k._k, k.id]));
-        setStk(stkList.map(k => { const { _k, ...rest } = k; return rest; }));
+        // 기존 STK와 원문 문장이 같으면 합의 상태·해당 없음 사유 등 사람이 판정한 값을 유지 (문장이 바뀌면 '검토 중'으로 다시 합의)
+        const prevStk = Object.fromEntries(stk.filter(k => k.id).map(k => [k.id, k]));
+        const nrmS = s => String(s || "").replace(/\s+/g, "");
+        let keptAgree = 0;
+        setStk(stkList.map(k => { const { _k, ...rest } = k; const p = prevStk[rest.id];
+          if (p && nrmS(p.text) === nrmS(rest.text)) { if (p.status && p.status !== "검토 중") keptAgree += 1; return { ...p, ...rest, status: p.status || "검토 중", ...(p.naReason ? { naReason: p.naReason } : {}) }; }
+          return rest; }));
+        if (stk.length) stkNote = ` · 이해관계자 요구 판정 상태 유지 ${keptAgree}건(원문 동일)`;
         list = list.map(it => { const { _stk, ...rest } = it; return { ...rest, stkIds: [...new Set((_stk || []).map(k => keyToId[k]).filter(Boolean))] }; });
       } else list = list.map(it => { const { _stk, ...rest } = it; return rest; });
       const idNote = items.some(x => x.id) ? ` · 기존 ID 유지 ${idMatch.kept}건 · 신규 ${list.length - idMatch.kept}건${idMatch.missing.length ? ` · 이번 결과에 없는 기존 요구 ${idMatch.missing.length}건(${idMatch.missing.slice(0, 8).join(", ")}${idMatch.missing.length > 8 ? " …" : ""}) — 확정 시 폐기` : ""}` : "";
@@ -8685,7 +8727,7 @@ ${chunks[i]}`, 6000);
 규칙: id는 입력에 주어진 값을 그대로 반환(새 ID 부여·형식 변경 금지). 각 문자열 값은 줄바꿈 없이 한 문단으로 작성.
 ${FIDELITY}
 JSON만 출력: {"items":[{"id":"...","detail":"상세 설명 2~3문장","acceptance":"측정 가능한 인수 기준 1~2문장","quality":"비기능이면 ${QSTD.name} 품질특성명, 아니면 빈 문자열","assumptions":"가정·제약(없으면 빈 문자열)","actors":"...","basicFlow":"...","subFlow":"...","exceptionFlow":"...","precondition":"...","postcondition":"..."}]}
-${guideBlock}--- 요구사항 ---
+${guideBlockSpec}--- 요구사항 ---
 ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: g.summary })))}`, 6000);
         const map = {};
         (Array.isArray(r?.items) ? r.items : []).forEach(d => { if (d?.id) map[d.id] = d; });
@@ -8731,7 +8773,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
         }
       }
       setItems(list);
-      setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세${leaves.length ? `·모듈 배정(규칙 ${ruleCnt}건${aiCnt ? ` · AI ${aiCnt}건` : ""})` : ""} 완료${idNote} — 아래에서 검토·수정 후 확정하세요.` });
+      setProg({ percent: 100, label: `요구사항 ${list.length}건 도출·명세${leaves.length ? `·모듈 배정(규칙 ${ruleCnt}건${aiCnt ? ` · AI ${aiCnt}건` : ""})` : ""} 완료${idNote}${stkNote} — 아래에서 검토·수정 후 확정하세요.` });
     } catch (e) { setError("AI 생성 실패: " + e.message); setProg(null); }
     setBusy(false);
   }
@@ -8762,6 +8804,10 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
   function confirmSave() {
     const valid = items.filter(it => String(it.name || "").trim());
     if (!valid.length) { setError("확정할 요구사항이 없습니다. 요구사항명을 입력해 주세요."); return; }
+    // ASPICE SYS.1: 이해관계자와 요구 합의(Agree) — 미합의 요구가 있으면 확인 후 확정하고, 확정본에 미합의 건수를 기록
+    const stkLive = STK_ON ? stk.filter(k => String(k.text || "").trim()) : [];
+    const stkOpenN = stkLive.filter(k => !["합의", "보류", "해당 없음"].includes(k.status)).length;
+    if (STK_ON && stkOpenN && !window.confirm(`이해관계자 요구 ${stkLive.length}건 중 ${stkOpenN}건이 아직 '검토 중'(고객 미합의)입니다.\n\nASPICE SYS.1은 이해관계자 요구를 고객과 합의하도록 요구합니다. 이대로 확정하면 V-모델에는 반영되지만, 확정본에 '미합의 ${stkOpenN}건'으로 기록됩니다.\n고객 합의 회의록 등 증적이 있다면 해당 요구의 상태를 '합의'로 바꾼 뒤 확정하는 것을 권장합니다.\n\n그래도 확정할까요?`)) return;
     const normed = assignReqIds(valid, reqIdFloor(requirements)).map(it => ({ ...it, wbsNo: it.wbsNo && (it.wbsNo === "공통" || leafName[it.wbsNo] !== undefined) ? it.wbsNo : "공통" }));
     // ASPICE V-모델 추적 모델 보존 — 기존 연결의 기준선을 '변경 전' 내용으로 먼저 등록한 뒤 새 내용으로 동기화한다.
     // 이렇게 해야 내용이 바뀐 요구의 하위 연결(할당·파생·검증)이 '변경 검토 필요'로 표시된다 (자동 수정은 하지 않음).
@@ -8771,7 +8817,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
     const meta = { items: normed2, sourceName: srcFiles.length ? srcFiles.map(f => f.name).join(", ") : (requirements?.sourceName || "직접 입력"), specLeaves: leaves, qualityStd: QSTD.name, updatedAt: new Date().toISOString(),
       idRegistry: nextIdRegistry({ ...(requirements || {}), items: [...((requirements || {}).items || []), ...((requirements?.stk?.items) || [])] }, [...normed2, ...stkValid]),
       source: srcPack(),
-      ...(STK_ON ? { stk: { items: stkValid, updatedAt: new Date().toISOString() } } : {}) };
+      ...(STK_ON ? { stk: { items: stkValid, updatedAt: new Date().toISOString(), openAtConfirm: stkValid.filter(k => !["합의", "보류", "해당 없음"].includes(k.status)).length } } : {}) };
     if (embedded) {
       // V-모델 안: 기준선 등록·동기화·저장은 V-모델이 처리 (편집 중인 추적 모델 기준)
       setItems(normed2.map(x => ({ ...x })));
@@ -8788,7 +8834,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
 
   const bodyEl = (
         <div style={embedded ? {} : { padding:"14px 18px", overflowY:"auto" }}>
-          {part !== "SYS" && <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} />}
+          {part !== "SYS" && <WritingGuidePanel guides={guides} setGuides={setGuides} sel={guideSel} setSel={setGuideSel} disabled={busy} aspice={STK_ON} scopes={guideScope} setScopes={setGuideScope} hintClass={embedded ? "ae-hint" : ""} />}
           {part !== "SYS" && (<div onDragOver={e=>{ e.preventDefault(); if (!busy) setSrcDrag(true); }} onDragLeave={()=>setSrcDrag(false)}
             onDrop={e=>{ e.preventDefault(); setSrcDrag(false); addSrcFiles(Array.from(e.dataTransfer.files || [])); }}
             style={{ border:`1px solid ${srcDrag ? T.accent : T.accentDim}`, borderLeft:`3px solid ${T.accent}`, borderRadius:9, background: srcDrag ? T.accent+"22" : T.accent+"08", padding:"10px 12px", marginBottom:12 }}>
@@ -8811,7 +8857,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                 <span style={{ fontSize:10, color:T.green }}>✓ 첨부됨 · AI 생성 시 함께 분석되며, {embedded ? "V-모델 저장" : "확정 저장"} 시 원문과 함께 프로젝트에 보관됩니다</span>
               )}
               <div style={{ flex:1 }} />
-              <Btn onClick={() => { if (items.length && !window.confirm(`원문에서 요구를 다시 도출하면 지금 목록(${STK_ON && stk.length ? `이해관계자 ${stk.length}건 · ` : ""}시스템 ${items.length}건)이 AI 결과로 바뀝니다.\n직접 고친 내용도 바뀝니다. 확정하기 전까지 V-모델에는 반영되지 않습니다.\n\n계속할까요?`)) return; generate(); }} disabled={busy} title="첨부 원문(사양서·회의록 등)에서 이해관계자 요구를 발췌하고 시스템 요구를 도출합니다" style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ 원문에서 다시 도출" : "⚡ 원문에서 요구 도출"}</Btn>
+              <Btn onClick={() => { if (items.length && !window.confirm(`원문에서 요구를 다시 도출하면 지금 목록(${STK_ON && stk.length ? `이해관계자 ${stk.length}건 · ` : ""}시스템 ${items.length}건)이 AI 결과로 바뀝니다.\n직접 고친 내용도 바뀝니다. 확정하기 전까지 V-모델에는 반영되지 않습니다.${STK_ON && stk.length ? "\n이해관계자 요구의 합의·보류·해당 없음 판정은 원문 문장이 그대로인 요구에만 유지됩니다." : ""}\n\n계속할까요?`)) return; generate(); }} disabled={busy} title="첨부 원문(사양서·회의록 등)에서 이해관계자 요구를 발췌하고 시스템 요구를 도출합니다" style={{ fontSize:12, padding:"7px 14px" }}>{busy ? "⏳ 생성 중…" : items.length ? "⚡ 원문에서 다시 도출" : "⚡ 원문에서 요구 도출"}</Btn>
             </div>
           </div>)}
           {(busy || prog) && <GenProgressBar progress={prog || { percent:3, label:"요구사항 분석 준비 중…" }} subText="원문 분량·요구사항 건수에 따라 수십 초가 걸릴 수 있습니다. 화면을 유지해 주세요." />}
@@ -8828,7 +8874,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                 그래서 SPIDer는 원문 발췌(STK)를 따로 두고, 각 시스템 요구에 <b>근거 STK</b>를 연결합니다. STK 문장이 바뀌면 연결된 시스템 요구가 "변경 검토 필요"로 표시되고, 추적 매트릭스에 STK → SYS가 함께 출력됩니다. 합의 상태(검토 중·합의·보류)는 고객과의 합의 증적입니다.
               </WhyBox></div>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
-                <div style={{ fontSize:12, fontWeight:600 }}>이해관계자 요구 (SYS.1) <span style={{ color:T.accent }}>{stk.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 원문 그대로. 합의 {stk.filter(k => k.status === "합의").length} · 검토 중 {stk.filter(k => !["합의", "보류", "해당 없음"].includes(k.status)).length} · 보류 {stk.filter(k => k.status === "보류").length}{stk.some(k => k.status === "해당 없음") ? ` · 해당 없음 ${stk.filter(k => k.status === "해당 없음").length}` : ""} · 시스템 요구 미도출 {stk.filter(k => !sysCount[k.id] && !AE.stkClosed(k)).length}</span></div>
+                <div style={{ fontSize:12, fontWeight:600 }}>이해관계자 요구 (SYS.1) <span style={{ color:T.accent }}>{stk.length}건</span> <span style={{ fontSize:10.5, color:T.muted, fontWeight:400 }}>— 원문 발췌(재작성 없음) · 합의 {stk.filter(k => k.status === "합의").length} · 검토 중 {stk.filter(k => !["합의", "보류", "해당 없음"].includes(k.status)).length} · 보류 {stk.filter(k => k.status === "보류").length}{stk.some(k => k.status === "해당 없음") ? ` · 해당 없음 ${stk.filter(k => k.status === "해당 없음").length}` : ""} · 시스템 요구 미도출 {stk.filter(k => !sysCount[k.id] && !AE.stkClosed(k)).length}</span></div>
                 <button onClick={addS} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.accent, cursor:"pointer", fontSize:11, padding:"3px 10px", fontFamily:"inherit" }}>＋ 이해관계자 요구 추가</button>
               </div>
               <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:14 }}>
@@ -8938,11 +8984,13 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
   const footerEl = (
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, padding: embedded ? "10px 0" : "12px 18px", borderTop:`1px solid ${T.border}`, flexShrink:0, ...(embedded ? { position:"sticky", bottom:-16, background:T.surface, zIndex:3 } : {}) }}>
           {(() => { const imp = aeForPreview ? AE.previewImpact(aeForPreview, assignReqIds(items.filter(it => String(it.name || "").trim()), reqIdFloor(requirements)), STK_ON ? stk.filter(k => k.id && String(k.text || "").trim()) : undefined) : null; return (
-          <span style={{ fontSize:10.5, color:T.muted }}>{requirements?.items?.length ? `현재 확정본: ${requirements?.stk?.items?.length ? `이해관계자 ${requirements.stk.items.length} · ` : ""}시스템 요구 ${requirements.items.length}건 (${(requirements.updatedAt||"").slice(0,10)})` : "확정된 요구사항 없음"}
+          <span style={{ fontSize:10.5, color:T.muted }}>{requirements?.items?.length ? `현재 확정본: ${requirements?.stk?.items?.length ? `이해관계자 ${requirements.stk.items.length}(합의 ${requirements.stk.items.filter(k => k.status === "합의").length}) · ` : ""}시스템 요구 ${requirements.items.length}건 (${(requirements.updatedAt||"").slice(0,10)})` : "확정된 요구사항 없음"}
             {imp && (imp.suspect || imp.orphan) ? <span style={{ color:T.amber, marginLeft:8 }}>⚠ 확정하면 V-모델 추적 연결 {imp.suspect ? `${imp.suspect}건이 '변경 검토 필요'(변경 요구 ${imp.changedReqs}건)` : ""}{imp.suspect && imp.orphan ? ", " : ""}{imp.orphan ? `${imp.orphan}건이 고아 연결(삭제 요구 ${imp.removedReqs}건)` : ""}로 표시됩니다</span> : null}
           </span>); })()}
           <div style={{ display:"flex", gap:8, flexShrink:0 }}>
             {!embedded && <Btn variant="outline" onClick={onClose} style={{ fontSize:12, padding:"7px 14px" }}>취소</Btn>}
+            {STK_ON && (() => { const n = stk.filter(k => String(k.text || "").trim() && !["합의", "보류", "해당 없음"].includes(k.status)).length;
+              return n ? <span title="ASPICE SYS.1: 이해관계자 요구는 고객과 합의해야 합니다. 합의 증적이 있으면 각 요구의 상태를 '합의'로 바꾸세요" style={{ alignSelf:"center", fontSize:10.5, color:T.amber, whiteSpace:"nowrap" }}>⚠ 미합의 {n}건</span> : null; })()}
             <Btn onClick={confirmSave} disabled={busy || !items.length} title="이해관계자 요구(SYS.1)와 시스템 요구(SYS.2)를 확정해 V-모델 추적 모델에 반영합니다(내용이 바뀐 요구의 하위 연결은 '변경 검토 필요'로 표시). 반영 후 하단 [✓ 저장]으로 프로젝트에 저장합니다" style={{ fontSize:12, padding:"7px 14px" }}>{embedded ? `✓ 확정·V-모델 반영 (${STK_ON && stk.length ? `이해관계자 ${stk.length} · ` : ""}시스템 ${items.length}건)` : `✓ 확정 저장 (${items.length}건)`}</Btn>
           </div>
         </div>
@@ -9143,7 +9191,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
   const goMissing = (c) => { setFocus({ key: c.key, tab: c.tab, level: c.level || null, ids: new Set(c.missing), q: c.q, n: c.missing.length }); setTab(c.tab, c.level || null); if (c.level) setVFilter(c.level); };
   const [guides, setGuides] = useState([]);
   useEffect(() => { fetchWritingGuides().then(gs => setGuides(gs.filter(g => g.is_active !== false))).catch(() => {}); }, []);
-  const guideBlock = buildGuideBlock(guides);
+  const guideBlock = buildGuideBlock(guides.filter(g => guideScopeOf(g, loadGuideScopes()) === "ALL"));
   const V = model.version;
   const findings = AE.checkConsistency(model);
   const metrics = AE.coverageMetrics(model);
@@ -10243,7 +10291,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
         {/* 진행 현황 · 다음 할 일 */}
         <div style={{ margin: "8px 18px 0", padding: "6px 12px", border: `1px solid ${T.border}`, borderRadius: 9, background: T.bg, flexShrink: 0, fontSize: 11 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <b>진행 {aeProg.pct}%</b>
+            <b title="V-모델 단계(요구·아키텍처·설계·검증·추적) 작성 진행률입니다. QA 교차검토 진척은 오른쪽 '다음 할 일'과 점검·QA 탭에 따로 표시됩니다">작성 진행 {aeProg.pct}%</b>
             <span style={{ flex: 1, minWidth: 120, height: 6, background: T.border, borderRadius: 3, overflow: "hidden" }}><span style={{ display: "block", width: `${aeProg.pct}%`, height: "100%", background: aeProg.pct === 100 ? T.green : T.accent }} /></span>
             {aeProg.next ? (() => { const nx = aeProg.next; const lab = AE_TABS.find(t => t[0] === nx.id)?.[1] || nx.id; const c = nx.next?.cov;
               return <>
@@ -11597,7 +11645,7 @@ function AspiceEngModal({ onClose, form, wbs, requirements, setRequirements, oss
           </div>)}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px", borderTop: `1px solid ${T.border}`, flexShrink: 0, gap: 8 }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 10.5, color: T.muted }}>SYS {model.reqs.SYS.length} · 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW ${model.reqs.SW.length}/${model.comps.SW.length}${model.units.SW.length ? `/유닛 ${model.units.SW.length}` : ""}` : ""}{model.scope.HW ? ` · HW ${model.reqs.HW.length}/${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}{requirements?.aspice?.updatedAt ? ` · 저장본 ${(d => isNaN(d) ? String(requirements.aspice.updatedAt).slice(0, 10) : `${d.toLocaleDateString("sv-SE")} ${d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false })}`)(new Date(requirements.aspice.updatedAt))}` : ""}</div>
+            <div style={{ fontSize: 10.5, color: T.muted }}>{model.reqs.STK?.length ? `이해관계자 요구 ${model.reqs.STK.length} · ` : ""}시스템 요구 {model.reqs.SYS.length} · 시스템 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW 요구 ${model.reqs.SW.length} · SW 구성요소 ${model.comps.SW.length}${model.units.SW.length ? ` · SW 유닛 ${model.units.SW.length}` : ""}` : ""}{model.scope.HW ? ` · HW 요구 ${model.reqs.HW.length} · HW 구성요소 ${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}{requirements?.aspice?.updatedAt ? ` · 저장본 ${(d => isNaN(d) ? String(requirements.aspice.updatedAt).slice(0, 10) : `${d.toLocaleDateString("sv-SE")} ${d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false })}`)(new Date(requirements.aspice.updatedAt))}` : ""}</div>
             <div className="ae-hint" style={{ fontSize: 9.5, color: T.muted, opacity: 0.8, marginTop: 2 }}>SYS = 시스템 요구 수 · 요소 = 시스템 구성요소 수 · SW/HW = 하위 요구 수 / 컴포넌트 수 (/ SW 유닛 수) · 검증 수단 = 시험 항목(TC) 수</div>
             {(() => {
               // 규칙 기반 상속 초안(시스템 요구를 그대로 복사한 하위 요구)이 남아 있으면 한 줄로 안내
