@@ -83,7 +83,8 @@ export default async function handler(req, res) {
       if (body.action !== 'sign-upload') return res.status(400).json({ error: "action은 'sign-upload'여야 합니다." });
       const path = makePath();
       let s = await signUpload(path);
-      if (!s.ok && /bucket not found|not found/i.test(String(s.data.message || s.data.error || s.raw))) {
+      // 버킷이 없을 때 Supabase 응답 문구는 버전마다 다르다: 'Bucket not found' / 'The related resource does not exist' (statusCode 404)
+      if (!s.ok && (/bucket not found|not found|does not exist/i.test(String(s.data.message || s.data.error || s.raw)) || String(s.data.statusCode) === '404' || s.status === 404)) {
         await ensureBucket();          // 첫 사용: 비공개 버킷 자동 생성 후 재시도
         s = await signUpload(path);
       }
