@@ -50,12 +50,35 @@ const ASPICE_SCOPE_GROUPS = [
 // 개발 범위(form.aspiceDev): "SW" = SYS+SW / "HWSW" = SYS+SW+HW — SWE·HWE 범위의 단일 기준. 시스템(SYS.1~5)은 항상 포함.
 // "HW"(HW만)는 ASPICE 심사에서 사실상 없는 형태라 선택지에서 뺐다. 구버전 저장 과제 호환용으로만 남기며(legacy), 그 과제를 열었을 때만 보인다.
 // (내부 id "SW"·"HWSW"는 저장 데이터·적용 범위 역산과의 호환을 위해 그대로 둔다)
+// 2026-10-23: SYS는 항상 포함하고 SWE·HWE를 각각 선택 — SYS만 · SYS+SW · SYS+HW · SYS+SW+HW 네 조합 (내부 id는 저장 호환을 위해 유지, "SYS" 신설)
+//   SYS를 빼는 조합(SW만·HW만 — 협력사 과제)은 엔진 전제가 달라 별도 과제 유형으로 추후 구현
 const ASPICE_DEVS = [
+  { id: "SYS",  label: "SYS",           desc: "시스템(SYS.1~5)만 — SW·HW는 협력사 개발 (협력사 관리는 ACQ.4 공급자 모니터링 적용 검토)" },
   { id: "SW",   label: "SYS + SW",      desc: "시스템(SYS.1~5)·SW(SWE.1~6) 개발 — HW는 별도 조직·협력사" },
+  { id: "HW",   label: "SYS + HW",      desc: "시스템(SYS.1~5)·HW(HWE.1~4) 개발 — SW는 별도 조직·협력사" },
   { id: "HWSW", label: "SYS + SW + HW", desc: "시스템(SYS.1~5)·SW(SWE.1~6)·HW(HWE.1~4) 일체 개발 (전장부품·제어기)" },
-  { id: "HW",   label: "HW (구버전)",   desc: "HW만 개발 — 구버전 과제 호환용. SYS + SW + HW로 바꾸는 것을 권장합니다", legacy: true },
 ];
-const aspiceDevChoices = cur => ASPICE_DEVS.filter(d => !d.legacy || d.id === cur);
+const devHasSW = dev => dev === "SW" || dev === "HWSW";
+const devHasHW = dev => dev === "HW" || dev === "HWSW";
+const devOfFlags = (sw, hw) => sw && hw ? "HWSW" : sw ? "SW" : hw ? "HW" : "SYS";
+// 개발 범위 고르기 — SYS 고정 + SWE·HWE 각각 켜고 끄기 (새 프로젝트·기본정보 공용)
+function AspiceDevPicker({ dev, onChange, ver }) {
+  const sw = devHasSW(dev), hw = devHasHW(dev);
+  const chipSt = (on, fixed) => ({ fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: fixed ? "default" : "pointer", fontFamily: "inherit",
+    border: `1px solid ${on ? T.accent : T.border}`, background: on ? T.accent : "transparent", color: on ? "#fff" : T.muted, opacity: fixed ? 0.85 : 1 });
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+        <span title="시스템 요구·구조·통합·검증(SYS.1~5)은 항상 포함됩니다" style={chipSt(true, true)}>✓ SYS.1~5 시스템</span>
+        <button onClick={() => onChange(devOfFlags(!sw, hw))} title="SW 요구·구조·상세설계·유닛/통합/SW 검증" style={chipSt(sw)}>{sw ? "✓" : "＋"} SWE.1~6 SW</button>
+        <button onClick={() => onChange(devOfFlags(sw, !hw))} title="HW 요구·설계·설계 검증·요구 검증" style={chipSt(hw)}>{hw ? "✓" : "＋"} HWE.1~4 HW</button>
+      </div>
+      <div style={{ fontSize: 10.5, color: T.muted, marginTop: 5 }}>{(ASPICE_DEVS.find(d => d.id === dev) || {}).label} — {(ASPICE_DEVS.find(d => d.id === dev) || {}).desc}{hw && ver === "3.1" ? " · 3.1 심사에서는 HWE를 PAM 확장으로 표기" : ""}</div>
+    </div>
+  );
+}
+// 적용 기준 선택지 — '3.1 + 4.0 겸용'은 신규 선택에서 뺐다 (4.0이 기본). 이미 겸용으로 만든 과제는 그 과제에서만 '이전 설정'으로 보인다
+const aspiceVersionChoices = cur => AE.ASPICE_VERSIONS.filter(v => v.id !== "both" || cur === "both").map(v => v.id === "both" ? { ...v, label: "3.1 + 4.0 겸용 (이전 설정)" } : v);
 // 프로젝트 유형 — 과제 유형(track)에 종속. 일반 SI는 사업 분류, ASPICE 자동차는 제품 개발 분류.
 // 값(value)은 저장·AI 프롬프트·PDP 문구에 그대로 쓰이며, "신규개발"은 두 과제 유형 공통 기본값.
 const PROJECT_TYPES = {
@@ -77,10 +100,10 @@ const ASPICE_PER_COMPONENT_CODES = ["SW3101", "SW4101", "SW4106"];
 const projectTypesFor = track => PROJECT_TYPES[track === "aspice" ? "aspice" : "si"];
 const fitProjectType = (track, type) => projectTypesFor(track).some(t => t.value === type) ? type : "신규개발";
 const aspiceDevOf = form => ASPICE_DEVS.some(d => d.id === form?.aspiceDev) ? form.aspiceDev : "SW";
-const devFromScope = sc => (sc && sc.HWE) ? (sc.SWE === false ? "HW" : "HWSW") : "SW";
+const devFromScope = sc => devOfFlags(!!sc && sc.SWE !== false, !!(sc && sc.HWE));
 const aspiceScopeDefault = (dev) => {
   const sc = Object.fromEntries(ASPICE_SCOPE_GROUPS.map(g => [g.id, g.on]));
-  if (dev) { sc.SWE = dev !== "HW"; sc.HWE = dev !== "SW"; }
+  if (dev) { sc.SWE = devHasSW(dev); sc.HWE = devHasHW(dev); }
   return sc;
 };
 // 범위 판정 — 저장된 범위에 키가 없으면(구버전 저장본) 그 그룹의 기본값(on)을 따른다. HWE·ACQ 등 기본 꺼짐 그룹이 의도치 않게 켜지지 않도록.
@@ -662,11 +685,11 @@ const TEAM_ROLE_OPTIONS = ["PM", "PL", "품질보증담당자(QA)", "형상관�
 // ASPICE 자동차 과제 — 역할 ↔ 주로 맡는 프로세스. when: 개발 범위·적용 범위에 따라 표시 여부 결정
 const ASPICE_TEAM_ROLES = [
   { value: "PM",                  note: "MAN.3 프로젝트 관리" },
-  { value: "SW PL",               note: "SW 개발 리드" },
+  { value: "SW PL",               note: "SW 개발 리드", when: "SW" },
   { value: "시스템 엔지니어",      note: "SYS.2·SYS.3 시스템 요구·아키텍처" },
-  { value: "SW 아키텍트",          note: "SWE.2 SW 아키텍처" },
-  { value: "SW 개발자",            note: "SWE.3·SWE.4 상세설계·구현·단위검증" },
-  { value: "SW 통합·검증 담당",     note: "SWE.5·SWE.6 SW 통합·검증" },
+  { value: "SW 아키텍트",          note: "SWE.2 SW 아키텍처", when: "SW" },
+  { value: "SW 개발자",            note: "SWE.3·SWE.4 상세설계·구현·단위검증", when: "SW" },
+  { value: "SW 통합·검증 담당",     note: "SWE.5·SWE.6 SW 통합·검증", when: "SW" },
   { value: "시스템 통합·검증 담당", note: "SYS.4·SYS.5 시스템 통합·검증" },
   { value: "HW 엔지니어",          note: "HWE.1~4 HW 엔지니어링", when: "HW" },
   { value: "품질보증담당자(QA)",   note: "SUP.1 품질보증" },
@@ -682,7 +705,7 @@ function teamRolesFor(form, tailoring) {
   if (form?.track !== "aspice") return TEAM_ROLE_OPTIONS.map(v => ({ value: v, note: "" }));
   const dev = aspiceDevOf(form);
   const scope = tailoring?.aspiceScope || aspiceScopeDefault(dev);
-  return ASPICE_TEAM_ROLES.filter(r => r.when === "HW" ? dev !== "SW" : r.when === "ACQ" ? aspiceGroupOn(scope, "ACQ") : true);
+  return ASPICE_TEAM_ROLES.filter(r => r.when === "HW" ? devHasHW(dev) : r.when === "SW" ? devHasSW(dev) : r.when === "ACQ" ? aspiceGroupOn(scope, "ACQ") : true);
 }
 // 입력된 역할이 현재 과제 유형·범위와 어긋나면 사유를 돌려준다 (직접 입력한 고유 역할은 문제 삼지 않음)
 function teamRoleMismatch(role, form, tailoring) {
@@ -1374,7 +1397,8 @@ export default function SpiderQaAgent() {
         const dev = aspiceDevOf(projectForm);
         const sys = (projectForm.systemName || projectForm.name || "대상 시스템").trim();
         const scopeRule = dev === "SW" ? "개발 범위는 SW만이다. L2는 'SW'만 사용한다 (HW는 고객·협력사 개발이므로 포함하지 않는다)."
-          : dev === "HW" ? "개발 범위는 HW만이다. L2는 'HW'만 사용한다."
+          : dev === "HW" ? "개발 범위는 SYS+HW다(SW는 협력사). L2는 'HW'만 사용한다."
+          : dev === "SYS" ? "개발 범위는 시스템 통합이다(SW·HW는 협력사 개발). L2에 'HW'와 'SW'를 모두 포함해 협력사가 개발할 시스템 요소를 나타낸다. HW는 회로 블록 단위, SW는 소프트웨어 컴포넌트 단위로 분해한다."
           : "개발 범위는 HW+SW다. L2에 'HW'와 'SW'를 모두 반드시 포함한다. HW는 회로 블록(예: MCU, 전원, 센싱·측정, 통신 트랜시버, 구동·출력, 보호·커넥터) 단위로, SW는 소프트웨어 컴포넌트(예: 애플리케이션 기능, 통신 스택, 진단, BSW·드라이버, 부트로더) 단위로 분해한다.";
         const result = await callClaude(`당신은 Automotive SPICE 4.0 SYS.3(시스템 아키텍처 설계)에 정통한 차량 전장 시스템 엔지니어입니다. 아래 과제의 PBS(제품 분해 구조)를 시스템 요소 단위로 작성하세요.
 과제명: ${projectForm.name}, 시스템명: ${sys}, 고객사: ${projectForm.client}
@@ -2216,7 +2240,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
     if ((selectedOSSP.guideId || null) !== gid) setSelectedOSSP({ ...selectedOSSP, guideId: gid || undefined });
   }, [form.track, selectedOSSP]);
   function chooseTrack(track, aspiceVersion, aspiceCL, aspiceDev) {
-    setForm(p => ({ ...p, track, aspiceVersion: track === "aspice" ? (aspiceVersion || p.aspiceVersion || "both") : "",
+    setForm(p => ({ ...p, track, aspiceVersion: track === "aspice" ? (aspiceVersion || p.aspiceVersion || "4.0") : "",
       aspiceCL: track === "aspice" ? (aspiceCL || p.aspiceCL || "CL2") : "",
       aspiceDev: track === "aspice" ? (aspiceDev || p.aspiceDev || "SW") : "",
       type: fitProjectType(track, p.type) }));   // 과제 유형이 바뀌면 그 유형에 없는 프로젝트 유형은 '신규개발'로 정리
@@ -2249,7 +2273,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
       if (tailoring?.aspiceScope) setForm(p => p.aspiceDev ? p : { ...p, aspiceDev: devFromScope(tailoring.aspiceScope) });
       return;
     }
-    const want = { SWE: form.aspiceDev !== "HW", HWE: form.aspiceDev !== "SW" };
+    const want = { SWE: devHasSW(form.aspiceDev), HWE: devHasHW(form.aspiceDev) };
     setTailoring(t => {
       const sc = t.aspiceScope || aspiceScopeDefault(form.aspiceDev);
       if (t.aspiceScope && (sc.SWE !== false) === want.SWE && !!sc.HWE === want.HWE) return t;
@@ -2337,7 +2361,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
 
 // ── 새 프로젝트 시작 화면: 과제 유형 선택 (기본정보 이전) ──
 function TrackPicker({ onChoose }) {
-  const [ver, setVer] = useState("both");
+  const [ver, setVer] = useState("4.0");
   const [cl, setCl] = useState("CL2");
   const [dev, setDev] = useState("SW");
   return (
@@ -2355,7 +2379,7 @@ function TrackPicker({ onChoose }) {
               <div style={{ marginTop:4 }}>
                 <div style={{ fontSize:10.5, color:T.muted, marginBottom:5 }}>적용 기준 (고객사 심사 버전) — 나중에 V-모델에서 변경 가능</div>
                 <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-                  {AE.ASPICE_VERSIONS.map(v => (
+                  {aspiceVersionChoices(ver).map(v => (
                     <button key={v.id} onClick={() => setVer(v.id)} title={v.desc}
                       style={{ fontSize:11, padding:"4px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${ver === v.id ? T.accent : T.border}`, background: ver === v.id ? T.accent : "transparent", color: ver === v.id ? "#fff" : T.muted }}>{v.label}</button>
                   ))}
@@ -2368,14 +2392,8 @@ function TrackPicker({ onChoose }) {
                   ))}
                 </div>
                 <div style={{ fontSize:10.5, color:T.muted, marginTop:5 }}>{ASPICE_CLS.find(c => c.id === cl)?.desc}</div>
-                <div style={{ fontSize:10.5, color:T.muted, margin:"10px 0 5px" }}>개발 범위 — 시스템(SYS.1~5)은 항상 포함됩니다. HW를 포함하면 HWE.1~4 산출물이 WBS·산출물 목록과 V-모델에 함께 들어갑니다</div>
-                <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-                  {aspiceDevChoices(dev).map(d => (
-                    <button key={d.id} onClick={() => setDev(d.id)} title={d.desc}
-                      style={{ fontSize:11, padding:"4px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${dev === d.id ? T.accent : T.border}`, background: dev === d.id ? T.accent : "transparent", color: dev === d.id ? "#fff" : T.muted }}>{d.label}</button>
-                  ))}
-                </div>
-                <div style={{ fontSize:10.5, color:T.muted, marginTop:5 }}>{ASPICE_DEVS.find(d => d.id === dev)?.desc}{dev !== "SW" && ver !== "4.0" ? " · 3.1 심사에서는 HWE를 PAM 확장으로 표기" : ""}</div>
+                <div style={{ fontSize:10.5, color:T.muted, margin:"10px 0 5px" }}>개발 범위 — 시스템(SYS.1~5)은 항상 포함, SW·HW는 각각 선택. 포함한 영역의 산출물이 WBS·산출물 목록과 V-모델에 들어갑니다</div>
+                <AspiceDevPicker dev={dev} onChange={setDev} ver={ver} />
               </div>
             )}
             <div style={{ flex:1 }} />
@@ -2399,11 +2417,8 @@ function AspiceProcessPanel({ form, onDevChange, tailoring, setTailoring, ossp, 
     if ((gid === "SWE" || gid === "HWE") && onDevChange) {
       const cur = { SWE: aspiceGroupOn(scope, "SWE"), HWE: aspiceGroupOn(scope, "HWE") };
       const next = { ...cur, [gid]: !cur[gid] };
-      if (!next.SWE && !next.HWE) { setDevMsg("SW와 HW를 모두 뺄 수는 없습니다. 개발 범위는 SYS + SW 또는 SYS + SW + HW 중 하나입니다."); return; }
-      // SW 엔지니어링은 해제 불가 — HW만 개발하는 범위는 더 이상 선택지로 두지 않는다 (구버전 HW 과제는 SWE를 켜는 방향만 허용)
-      if (gid === "SWE" && cur.SWE) { setDevMsg("SW 엔지니어링(SWE.1~6)은 뺄 수 없습니다. 개발 범위는 SYS + SW 또는 SYS + SW + HW 중 하나입니다."); return; }
       setDevMsg("");
-      onDevChange(next.SWE && next.HWE ? "HWSW" : next.HWE ? "HW" : "SW");
+      onDevChange(devOfFlags(next.SWE, next.HWE));   // SYS만 · SYS+SW · SYS+HW · SYS+SW+HW 모두 허용
       return;
     }
     setTailoring(t => ({ ...t, ...(gid === "REU" ? { reuAuto: false } : {}), aspiceScope: { ...(t.aspiceScope || aspiceScopeDefault(form?.aspiceDev)), [gid]: !(t.aspiceScope || aspiceScopeDefault(form?.aspiceDev))[gid] } }));
@@ -2521,13 +2536,11 @@ function TrackField({ form, onChooseTrack, osspChosen }) {
         ))}
         {form.track === "aspice" && (
           <select value={form.aspiceVersion || "both"} onChange={e => onChooseTrack("aspice", e.target.value)} style={{ fontSize:11.5, padding:"5px 8px", background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, fontFamily:"inherit" }}>
-            {AE.ASPICE_VERSIONS.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+            {aspiceVersionChoices(form.aspiceVersion || "both").map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
           </select>
         )}
         {form.track === "aspice" && (
-          <select value={aspiceDevOf(form)} onChange={e => { onChooseTrack("aspice", form.aspiceVersion, aspiceClOf(form), e.target.value); setWarn(true); }} title="개발 범위 — SWE·HWE 적용 범위" style={{ fontSize:11.5, padding:"5px 8px", background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, fontFamily:"inherit" }}>
-            {aspiceDevChoices(aspiceDevOf(form)).map(d => <option key={d.id} value={d.id}>개발 범위: {d.label} — {d.desc}</option>)}
-          </select>
+          <div style={{ padding:"4px 0" }}><AspiceDevPicker dev={aspiceDevOf(form)} ver={form.aspiceVersion} onChange={d => { onChooseTrack("aspice", form.aspiceVersion, aspiceClOf(form), d); setWarn(true); }} /></div>
         )}
         {form.track === "aspice" && (
           <select value={aspiceClOf(form)} onChange={e => { onChooseTrack("aspice", form.aspiceVersion, e.target.value); setWarn(true); }} title="목표 능력수준" style={{ fontSize:11.5, padding:"5px 8px", background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, fontFamily:"inherit" }}>
@@ -11277,7 +11290,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
             <div style={{ flex: 1 }} />
             <button onClick={() => setTab("setup")} title="준비 — ASPICE 버전·개발 범위·입력자료(DBC 등). 눌러서 확인·변경"
               style={{ ...small, padding: "5px 10px", color: tab === "setup" ? "#fff" : T.text, background: tab === "setup" ? T.accent : "transparent", borderColor: tab === "setup" ? T.accent : T.border }}>
-              ⚙ 적용 기준: {AE.ASPICE_VERSIONS.find(v => v.id === V)?.label || V} · SYS + SW{model.scope.HW ? " + HW" : ""} ✎</button>
+              ⚙ 적용 기준: {AE.ASPICE_VERSIONS.find(v => v.id === V)?.label || V} · {["SYS", model.scope.SW && "SW", model.scope.HW && "HW"].filter(Boolean).join(" + ")} ✎</button>
           </div>
           {activeGrp && (
             <div style={{ display: "flex", gap: 3, marginTop: 6, flexWrap: "wrap" }}>
@@ -11364,11 +11377,15 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
           {tab === "setup" && (<>
             <AeSec title="적용 기준·범위">
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-                {AE.ASPICE_VERSIONS.map(v => (
+                {aspiceVersionChoices(V).map(v => (
                   <button key={v.id} onClick={() => set(n => { n.version = v.id; })} title={v.desc}
                     style={{ ...small, padding: "6px 12px", fontSize: 11.5, color: V === v.id ? "#fff" : T.muted, background: V === v.id ? T.accent : "transparent", borderColor: V === v.id ? T.accent : T.border }}>{v.label}</button>))}
               </div>
               <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>{AE.ASPICE_VERSIONS.find(v => v.id === V)?.desc}</div>
+              {V === "both" && <div style={{ fontSize: 11, color: T.amber, marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                ⚠ 이 과제는 이전 설정인 '3.1 + 4.0 겸용'입니다. 신규 과제는 ASPICE 4.0이 기본이며, 4.0으로 바꾸면 산출물의 3.1 WP 번호 병기와 1차 검토 기준의 3.1 BP 병기가 빠집니다.
+                <button onClick={() => { if (window.confirm("적용 기준을 ASPICE 4.0으로 바꿀까요?\n산출물·검토 기준에서 3.1 병기가 빠집니다. (작성한 요구·설계·시험 내용은 그대로입니다)")) set(n => { n.version = "4.0"; }); }} style={{ ...small, padding: "3px 10px", fontSize: 11, color: T.accent, borderColor: T.accent }}>4.0으로 바꾸기</button>
+              </div>}
               <div style={{ display: "flex", gap: 16, fontSize: 11.5, flexWrap: "wrap" }}>
                 <label title="시스템 범위는 항상 포함 — SYS.1 이해관계자 요구(STK) 층부터 SYS.2~5까지"><input type="checkbox" checked disabled /> 시스템 (SYS.1~SYS.5)</label>
                 <label title={scopeLocked ? "SW·HW 범위는 새 프로젝트의 개발 범위·적용 범위에서 바꿉니다 (WBS·산출물 목록과 일치 유지)" : ""}><input type="checkbox" checked={model.scope.SW} disabled={scopeLocked || model.scope.SW} onChange={e => set(n => { n.scope.SW = e.target.checked; })} /> SW (SWE.1~6)</label>
