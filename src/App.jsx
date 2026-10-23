@@ -8865,12 +8865,15 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
   setTimeout(() => URL.revokeObjectURL(url), 3000);
 }
 
-// ── 작성 가이드(전역 라이브러리): 방법론 작성가이드·글로벌 표준(PMBOK·CMMI 등)·글로벌 규제 ──
+// ── 작성 가이드(전역 라이브러리): 작성가이드·글로벌 표준(PMBOK·CMMI 등)·글로벌 규제 ──
 // AI가 산출물을 작성할 때 프롬프트에 주입되어 준수 기준으로 사용됨 — 모든 AI 작성 기능 공용 헬퍼
-const GUIDE_CATEGORIES = ["방법론 작성가이드", "글로벌 표준", "글로벌 규제", "기존 산출물", "기타"];
+const GUIDE_CATEGORIES = ["작성가이드", "글로벌 표준", "글로벌 규제", "기존 산출물", "기타"];
+// 분류명 변경 이력 — 이전에 등록된 가이드(DB 원본 값)도 화면·프롬프트에서 새 분류명으로 보이게 정규화 (DB 변경 없음)
+const GUIDE_CAT_RENAMED = { "방법론 작성가이드": "작성가이드" };
+const normGuideCat = c => GUIDE_CAT_RENAMED[c] || c;
 // 분류별 등록 안내 — 프롬프트 입력란의 예시와 '할 수 있는 일'
 const GUIDE_CAT_HELP = {
-  "방법론 작성가이드": "예) 4장 '요구사항 작성 규칙'만 적용 / 요구 ID 체계와 필수 항목을 지켜서 작성",
+  "작성가이드": "예) 4장 '요구사항 작성 규칙'만 적용 / 요구 ID 체계와 필수 항목을 지켜서 작성",
   "글로벌 표준": "예) ISO/IEC/IEEE 29148의 요구 품질 특성만 적용 / 용어 정의는 3장을 따름",
   "글로벌 규제": "예) UN R155 7.2절 사이버보안 요구 표현을 따름 / 법규 조항 번호를 출처에 기재",
   "기존 산출물": "예) 이 SyRS의 문장 형식·항목 구성·ID 표기를 따라 작성 / 시험 절차는 이 명세서처럼 단계별로",
@@ -8933,7 +8936,7 @@ async function saveGuideScope(id, scope) {
 async function fetchWritingGuides() {
   const r = await fetch("/api/writing-guides");
   const d = await r.json().catch(() => []);
-  return Array.isArray(d) ? d : [];
+  return Array.isArray(d) ? d.map(g => (g && g.category ? { ...g, category: normGuideCat(g.category) } : g)) : [];
 }
 
 // 선택된 가이드들의 요약을 프롬프트 주입용 블록으로 결합 — 토큰·타임아웃 보호를 위해 총량 제한
