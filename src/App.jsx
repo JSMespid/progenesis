@@ -11048,7 +11048,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   }
   // 바깥(어두운 배경) 클릭으로 닫기: 누른 곳과 뗀 곳이 모두 배경일 때만 — 입력란에서 드래그하다 바깥에서 놓아 닫히는 것 방지
   const downOnBackdrop = useRef(false);
-  const [bdHint, setBdHint] = useState(false); const bdTimer = useRef(null);   // 바깥을 눌렀을 때 잠깐 띄우는 안내
+  
   // ── ① 요구 도출·명세 탭에서 확정: 변경 전 기준선 등록 → 새 요구로 동기화 → 즉시 저장 ──
   function confirmReqs(meta) {
     const base = AE.baselineLinks(model);
@@ -11261,9 +11261,8 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   return (
     <AeRunCtx.Provider value={runCtx}>
     <div onMouseDown={e => { downOnBackdrop.current = e.target === e.currentTarget; }}
-      onClick={e => { if (e.target === e.currentTarget && downOnBackdrop.current) { setBdHint(true); clearTimeout(bdTimer.current); bdTimer.current = setTimeout(() => setBdHint(false), 3500); } downOnBackdrop.current = false; }}
+      onClick={() => { downOnBackdrop.current = false; }}   // 바깥을 눌러도 닫히지 않음 (안내 메시지 없음)
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      {bdHint && <div style={{ position: "fixed", top: 18, left: "50%", transform: "translateX(-50%)", zIndex: 260, background: "#1F2937", color: "#fff", border: `1px solid ${T.accent}`, borderRadius: 10, padding: "9px 16px", fontSize: 12.5, boxShadow: "0 6px 24px rgba(0,0,0,0.4)", pointerEvents: "none" }}>창 바깥을 눌러도 닫히지 않습니다 — 닫으려면 오른쪽 위 <b>✕</b> 또는 아래 <b>[닫기]</b>를 누르세요.{dirty ? " 저장하지 않은 변경이 있습니다 — 먼저 [✓ 저장]을 누르세요." : ""}</div>}
       <style>{`.ae-hints-off .ae-hint{display:none !important}`}</style>
       <div className={hints ? "" : "ae-hints-off"} onClick={e => e.stopPropagation()} onClickCapture={e => { clickSec.current = e.target?.closest ? e.target.closest("[data-aesec]") : null; }} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, width: "100%", maxWidth: 1080, maxHeight: "92vh", display: "flex", flexDirection: "column", position: "relative" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
