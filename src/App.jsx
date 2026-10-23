@@ -477,6 +477,18 @@ function deleteDraftRec(id) {
   return initDrafts().then(() => idbTx("readwrite", st => { st.delete(id); })).then(() => true).catch(e => { console.error(e); return false; });
 }
 
+// ── 팀 공유 저장(서버) 상태 — V-모델 하단·위저드 표시용 ──
+// state: none(서버에 아직 없음·프로젝트명 미입력) | pending | ok | conflict(다른 팀원이 먼저 저장) | locked(다른 팀원 편집 중) | error
+const serverStatus = { state: "none", at: null, err: "", by: "" };
+const _serverSubs = new Set();
+function setServerStatus(p) { Object.assign(serverStatus, p); _serverSubs.forEach(f => { try { f({ ...serverStatus }); } catch (_) {} }); }
+function useServerStatus() {
+  const [st, setSt] = useState(() => ({ ...serverStatus }));
+  useEffect(() => { _serverSubs.add(setSt); return () => { _serverSubs.delete(setSt); }; }, []);
+  return st;
+}
+const hhmm = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }); };
+
 // ── 큰 요구사항·V-모델 데이터의 서버 저장: gzip 압축 → Supabase Storage(project-data 버킷) ──
 // Vercel 함수 요청 본문 한도(4.5MB, 모든 플랜 공통)를 넘는 프로젝트는 /api/projects POST가 413으로 실패한다.
 // 요구사항(requirements) JSON이 일정 크기를 넘으면 압축해 Storage에 직접 올리고(서명 URL PUT — Vercel 우회),
@@ -1269,7 +1281,7 @@ export default function SpiderQaAgent() {
         setProjects(data.map(p => ({
           id:p.id, name:p.name, client:p.client, type:p.type,
           startDate:p.start_date, endDate:p.end_date, pm:p.pm, status:p.status,
-          ossp:p.ossp, tailoring:p.tailoring, pdp:p.pdp, wbs:p.wbs, deliverables:p.deliverables,
+          ossp:p.ossp, tailoring:p.tailoring, pdp:p.pdp, wbs:p.wbs, deliverables:p.deliverables, _lock:p._lock||null,
           createdAt:new Date(p.created_at).toLocaleDateString("ko-KR"),
         })));
       }
@@ -1514,7 +1526,8 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     try {
       if (!draftIdRef.current) draftIdRef.current = newDraftId();
       const draft = {
-        draftId: draftIdRef.current, editingId: editingId || null,   // 수정 중 저장본이면 원본 프로젝트 id를 함께 보관
+        draftId: draftIdRef.current, editingId: editingIdRef.current || editingId || null,   // 서버에 있는 프로젝트면 그 id를 함께 보관
+        serverRev: projectRevRef.current ?? null,   // 이 변경이 기준으로 삼은 서버 버전 (이어서 저장할 때 충돌 확인용)
         wizardStep, projectForm, selectedOSSP,
         sdlcFactors, selectedSDLC, sdlcRecommendation,
         tailoring: stripReqFromTailoring(tailoring), pdpData, wbsData, wbsSetup, deliverablesData, requirements,
@@ -1525,7 +1538,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         if (!ok && !draftWarned.current) {
           draftWarned.current = true;
           alert("브라우저 임시저장에 실패했습니다: " + (draftStatus.err || "알 수 없는 오류") +
-            "\n작업을 잃지 않으려면 V-모델 창의 [💾 백업]으로 파일을 내려받거나, 위저드 마지막 단계에서 '완료'로 서버에 저장하세요.");
+            "\n작업을 잃지 않으려면 V-모델 창의 [⋯ 더보기 → 작업 데이터 백업 파일 받기]로 파일을 내려받으세요. (서버 저장은 계속 시도됩니다)");
         }
         if (ok) draftWarned.current = false;   // 회복되면 다음 실패 때 다시 알린다
       });
@@ -1533,9 +1546,154 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     } catch (e) { console.error(e); setDraftStatus({ state: "error", err: e?.message || String(e) }); return false; }
   }
 
-  // V-모델(요구사항·검토 결과·판정)이 바뀌면 임시저장본에 자동 저장 — 새로고침·탭 닫힘으로 AI 검토 결과를 잃지 않도록.
-  // (서버 DB 저장은 기존대로 위저드 마지막 단계의 '완료'에서 한다)
+  // ═══ 팀 공유 저장 (2026-10-23) ═══════════════════════════════════════
+  // 저장하면 서버에 바로 반영되어 같은 프로젝트의 팀원이 각자 PC에서 현재 상태를 본다.
+  //  · 프로젝트 id 고정: 서버에 처음 저장할 때 행을 만들고(상태 '작성중'), 이후로는 제자리 갱신(PATCH)
+  //  · 편집 잠금: 한 번에 한 사람만 편집 (60초마다 연장, 3분 지나면 자동 해제)
+  //  · 버전 확인: 내가 받은 뒤 다른 팀원이 저장했으면 덮어쓰지 않고 '충돌'로 알림 (내 변경은 이 PC에 보관)
+  //  · 브라우저(IndexedDB) 임시저장은 그대로 유지 — 네트워크가 끊겨도 작업을 잃지 않는 1차 보관소
+  const editingIdRef = useRef(null);
+  const projectRevRef = useRef(null);         // 서버에서 받은 마지막 버전 (PATCH의 기준)
+  const projectStatusRef = useRef("작성중");   // 서버 행의 진행 상태 ('작성중' | '진행중')
+  const loadedReqRef = useRef(null);           // 불러온 그대로의 요구사항 — 바뀐 게 없으면 자동 저장하지 않는다
+  const lastUploadRef = useRef({ req: null, blob: null });   // 같은 요구사항은 다시 올리지 않는다
+  const srvBusyRef = useRef(false), srvAgainRef = useRef(false), srvWarnRef = useRef("");
+  const setEditing = id => { editingIdRef.current = id || null; setEditingId(id || null); };
+  useEffect(() => { editingIdRef.current = editingId || null; }, [editingId]);
+
+  // 저장할 프로젝트 레코드 (큰 요구사항은 압축해 Storage로 분리)
+  async function buildProjectRecord(status) {
+    let reqInRow = requirements || null, reqBlob = null;
+    if (reqInRow) {
+      let chars = 0; try { chars = JSON.stringify(reqInRow).length; } catch (_) {}
+      if (chars > REQ_BLOB_MIN_CHARS) {
+        if (lastUploadRef.current.req === reqInRow && lastUploadRef.current.blob) reqBlob = lastUploadRef.current.blob;
+        else {
+          reqBlob = await uploadRequirementsBlob(reqInRow);
+          lastUploadRef.current = { req: reqInRow, blob: reqBlob };
+          _reqBlobCache.set(reqBlob.path, reqInRow);   // 방금 올린 데이터는 다시 내려받지 않는다
+        }
+        reqInRow = null;
+      }
+    }
+    return {
+      name:projectForm.name, client:projectForm.client, type:projectForm.type,
+      start_date:projectForm.startDate, end_date:projectForm.endDate, pm:projectForm.pm,
+      status, ossp:selectedOSSP,
+      // sdlc 전용 컬럼 없이 tailoring(JSON)에 함께 보존 → DB 스키마 변경 불필요
+      tailoring:{ ...stripReqFromTailoring(tailoring), sdlc:selectedSDLC, sdlc_factors:sdlcFactors, requirements: reqInRow, requirementsBlob: reqBlob,
+        // 과제 유형(일반 SI / ASPICE)과 ASPICE 적용 기준 — tailoring(JSON)에 보존 (DB 스키마 변경 없음)
+        track: projectForm.track || "", aspiceVersion: projectForm.aspiceVersion || "", aspiceCL: projectForm.track === "aspice" ? aspiceClOf(projectForm) : "",
+        // 시스템명 — 전용 컬럼 없이 tailoring(JSON)에 보존 (DB 스키마 변경 불필요)
+        systemName: String(projectForm.systemName || "").trim(),
+        // 수행 팀원 명단 — 전용 컬럼 없이 tailoring(JSON)에 보존
+        members: normalizeMembers(projectForm.members),
+        logos:{ client:projectForm.clientLogo||null, company:projectForm.companyLogo||null },
+        // 위저드 진행 단계 — 팀원이 이어서 열 때 같은 단계에서 시작
+        wizardStep,
+        // 프로젝트별 문서 메타 오버라이드 — 저장 후 재다운로드 시에도 동일하게 적용된다
+        docMeta:DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=projectForm[k]||""; return o; }, {}) },
+      pdp:pdpData, wbs:wbsData, deliverables:deliverablesData,
+    };
+  }
+
+  // 편집 잠금 — { ok, holder }
+  async function lockProject(id, force = false) {
+    try {
+      const r = await fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "lock", id, force }) });
+      const j = await r.json().catch(() => ({}));
+      return r.ok ? { ok: true } : { ok: false, holder: j.holder || null, error: j.error };
+    } catch (e) { return { ok: true, offline: true }; }   // 네트워크 문제로 확인 못 하면 막지 않는다 (저장 시 버전 확인이 최종 보호)
+  }
+  function unlockProject(id) {
+    if (!id) return;
+    try { fetch("/api/projects", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "unlock", id }) }).catch(() => {}); } catch (_) {}
+  }
+  // 편집 시작 시 잠금 확인 — 다른 팀원이 편집 중이면 물어본다. false면 열지 않는다
+  async function confirmLock(id) {
+    if (role === "viewer") return true;
+    const r = await lockProject(id, false);
+    if (r.ok) return true;
+    const h = r.holder || {};
+    const ok = confirm(`「${h.name || h.by || "다른 팀원"}」님이 ${h.at ? hhmm(h.at) + "부터 " : ""}이 프로젝트를 편집 중입니다.\n\n[확인] 편집 권한을 가져와 수정합니다.\n   상대방이 아직 저장하지 않은 변경은 상대방이 저장할 때 '충돌'로 알려지고, 서로 덮어쓰지 않습니다.\n[취소] 열지 않습니다. 프로젝트 화면에서 내용을 볼 수 있습니다.`);
+    if (!ok) return false;
+    await lockProject(id, true);
+    return true;
+  }
+
+  // 서버(팀 공유) 저장 — explicit=true면 실패를 알림창으로 알린다. 반환: 성공 여부
+  async function serverSave({ status, explicit = false } = {}) {
+    if (role === "viewer") return false;
+    if (!String(projectForm.name || "").trim()) {
+      setServerStatus({ state: "none", err: "프로젝트명을 입력하면 서버에 저장되어 팀원과 공유됩니다" });
+      if (explicit) alert("프로젝트명을 먼저 입력해 주세요. 지금 내용은 이 PC(브라우저)에만 저장되었습니다.");
+      return false;
+    }
+    if (srvBusyRef.current) { srvAgainRef.current = true; return false; }   // 진행 중이면 끝난 뒤 한 번 더
+    srvBusyRef.current = true;
+    setServerStatus({ state: "pending", err: "" });
+    const fail = (state, msg, by = "") => {
+      setServerStatus({ state, err: msg, by });
+      if (explicit || srvWarnRef.current !== state + msg) {
+        srvWarnRef.current = state + msg;
+        alert((state === "conflict" ? "⚠ 저장하지 않았습니다 — " : state === "locked" ? "🔒 저장하지 않았습니다 — " : "서버 저장 실패: ") + msg +
+          "\n\n지금 작업 내용은 이 PC(브라우저)에 그대로 보관되어 있습니다." +
+          (state === "conflict" ? "\nV-모델 [⋯ 더보기 → 작업 데이터 백업 파일 받기]로 내 변경을 파일로 받아 둔 뒤, 대시보드에서 프로젝트를 다시 열어 최신 내용을 확인하세요." : ""));
+      }
+      return false;
+    };
+    try {
+      const st = status || projectStatusRef.current || "작성중";
+      const record = await buildProjectRecord(st);
+      const bodyText = JSON.stringify(editingIdRef.current ? { id: editingIdRef.current, expectRev: projectRevRef.current, record } : record);
+      const bodyBytes = new Blob([bodyText]).size;
+      if (bodyBytes > 4.3 * 1024 * 1024) return fail("error", `프로젝트 데이터가 ${(bodyBytes / 1048576).toFixed(1)}MB로 서버 요청 한도(4.5MB)를 넘습니다. 로고 이미지·산출물 데이터 크기를 확인해 주세요.`);
+      const res = await fetch("/api/projects", { method: editingIdRef.current ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: bodyText });
+      const j = await res.json().catch(() => ({}));
+      if (res.status === 409) return fail("conflict", `${j.savedBy?.name || "다른 팀원"}님이 ${j.savedBy?.at ? hhmm(j.savedBy.at) + "에 " : ""}먼저 저장했습니다. 덮어쓰지 않았습니다.`, j.savedBy?.name || "");
+      if (res.status === 423) return fail("locked", `${j.holder?.name || "다른 팀원"}님이 편집 권한을 가지고 있습니다.`, j.holder?.name || "");
+      if (!res.ok) return fail("error", j.error || `HTTP ${res.status}`);
+      const row = Array.isArray(j) ? j[0] : j;
+      if (!row || !row.id) return fail("error", "서버 응답이 올바르지 않습니다");
+      const isNew = !editingIdRef.current;
+      projectRevRef.current = row.tailoring?.rev ?? projectRevRef.current;
+      projectStatusRef.current = row.status || st;
+      if (isNew) {
+        setEditing(row.id);
+        lockProject(row.id, false);
+        // 이 작성 건의 임시저장본에도 서버 id를 기록 (대시보드 중복 표시 방지)
+        if (draftIdRef.current) { const d = readDrafts().find(x => x.draftId === draftIdRef.current); if (d) putDraft({ ...d, editingId: row.id, serverRev: projectRevRef.current }); }
+      }
+      srvWarnRef.current = "";
+      setServerStatus({ state: "ok", at: row.tailoring?.savedBy?.at || new Date().toISOString(), err: "", by: row.tailoring?.savedBy?.name || "" });
+      return true;
+    } catch (e) {
+      return fail("error", e?.message || String(e));
+    } finally {
+      srvBusyRef.current = false;
+      if (srvAgainRef.current) { srvAgainRef.current = false; setTimeout(() => serverSaveRef.current && serverSaveRef.current(), 300); }
+    }
+  }
+  const serverSaveRef = useRef(null);
+  serverSaveRef.current = serverSave;   // 타이머에서 항상 최신 상태로 저장
+  // 편집 잠금 연장 — 위저드를 열어 둔 동안 60초마다. 다른 팀원이 가져갔으면 표시
+  useEffect(() => {
+    if (!editingId || page !== "new_project" || role === "viewer") return;
+    const t = setInterval(() => {
+      lockProject(editingId, false).then(r => { if (!r.ok) setServerStatus({ state: "locked", err: `${r.holder?.name || "다른 팀원"}님이 편집 권한을 가져갔습니다`, by: r.holder?.name || "" }); });
+    }, 60000);
+    return () => clearInterval(t);
+  }, [editingId, page]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // 창을 닫으면 잠금 해제
+  useEffect(() => {
+    const h = () => unlockProject(editingIdRef.current);
+    window.addEventListener("pagehide", h);
+    return () => window.removeEventListener("pagehide", h);
+  }, []);
+
+  // V-모델(요구사항·검토 결과·판정)이 바뀌면 자동 저장 — ① 브라우저(IndexedDB) ② 서버(팀 공유)
   const draftTimer = useRef(null);
+  const srvTimer = useRef(null);
   const draftWarned = useRef(false);
   const prevReqRef = useRef(null);
   useEffect(() => {
@@ -1545,7 +1703,13 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     clearTimeout(draftTimer.current);
     setDraftStatus({ state: "pending", err: "" });   // 기록 대기 — 하단 표시가 '저장 중'으로 바뀐다
     draftTimer.current = setTimeout(() => { saveDraft(); }, 500);
-    return () => clearTimeout(draftTimer.current);
+    // 서버(팀 공유) 저장 — 불러온 그대로면 생략
+    clearTimeout(srvTimer.current);
+    if (requirements !== loadedReqRef.current && String(projectForm.name || "").trim() && role !== "viewer") {
+      setServerStatus({ state: "pending", err: "" });
+      srvTimer.current = setTimeout(() => { serverSaveRef.current && serverSaveRef.current(); }, 1200);
+    }
+    return () => { clearTimeout(draftTimer.current); clearTimeout(srvTimer.current); };
   }, [requirements]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   function loadDrafts() { return readDrafts().filter(draftHasContent); }
@@ -1557,13 +1721,19 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     deleteDraftRec(id);
   }
 
-  function restoreDraft(id) {
+  async function restoreDraft(id) {
     const d = loadDraft(id);
-    if (!d) return;
-    clearTimeout(draftTimer.current);
+    if (!d) return false;
+    if (d.editingId && !(await confirmLock(d.editingId))) return false;
+    if (editingIdRef.current && editingIdRef.current !== d.editingId) unlockProject(editingIdRef.current);
+    clearTimeout(draftTimer.current); clearTimeout(srvTimer.current);
     draftIdRef.current = d.draftId;
-    // 저장본에 기록된 수정 대상만 복원 — 직전에 열어둔 다른 수정 모드가 남아 '완료' 시 엉뚱한 프로젝트를 지우지 않도록
-    setEditingId(d.editingId || null);
+    // 저장본에 기록된 서버 프로젝트만 복원 — 버전은 이 변경이 기준으로 삼은 서버 버전
+    setEditing(d.editingId || null);
+    projectRevRef.current = d.serverRev ?? null;
+    projectStatusRef.current = "작성중";
+    loadedReqRef.current = d.requirements || null;
+    setServerStatus({ state: d.editingId ? "none" : "none", err: d.editingId ? "이 PC에만 있던 변경입니다 — 저장하면 서버에 반영됩니다" : "" });
     setGenError(null);
     setWizardStep(d.wizardStep || 0);
     if (d.projectForm) setProjectForm(d.projectForm);
@@ -1577,6 +1747,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     setWbsSetup(d.wbsSetup || { pbsText: "", selected: {} });
     setDeliverablesData(d.deliverablesData || null);
     setRequirements(d.requirements || null);
+    return true;
   }
 
   // 완료(저장)된 프로젝트를 위저드로 다시 열어 수정 — 저장된 데이터를 위저드 상태로 복원
@@ -1591,10 +1762,27 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         return;
       }
     }
-    clearTimeout(draftTimer.current);
+    // 이 PC에 서버보다 최신인 변경(서버 저장 실패분)이 있으면 그쪽으로 이어서 할지 묻는다
+    const local = readDrafts().find(d => d.editingId === p.id);
+    const srvAt = p.tailoring?.savedBy?.at || "";
+    if (local && String(local.savedAt || "") > srvAt && (local.serverRev ?? null) === (p.tailoring?.rev ?? null)) {
+      if (confirm(`이 PC에 서버보다 최신인 변경이 있습니다 (${new Date(local.savedAt).toLocaleString("ko-KR")}).\n\n[확인] 이 PC의 변경으로 이어서 작업합니다 (저장하면 서버에 반영)\n[취소] 서버의 최신 내용으로 엽니다`)) {
+        if (await restoreDraft(local.draftId)) { setWizardKey(k => k + 1); nav("new_project"); }
+        return;
+      }
+    }
+    if (!(await confirmLock(p.id))) return;
+    if (editingIdRef.current && editingIdRef.current !== p.id) unlockProject(editingIdRef.current);
+    clearTimeout(draftTimer.current); clearTimeout(srvTimer.current);
     // 같은 프로젝트를 수정하다 임시저장한 건이 있으면 그 슬롯을 이어서 쓴다 (작성 중 항목이 중복으로 쌓이지 않도록)
-    draftIdRef.current = (readDrafts().find(d => d.editingId === p.id) || {}).draftId || null;
-    setEditingId(p.id);
+    draftIdRef.current = (local || {}).draftId || null;
+    setEditing(p.id);
+    projectRevRef.current = p.tailoring?.rev ?? null;
+    projectStatusRef.current = p.status || "진행중";
+    loadedReqRef.current = p.tailoring?.requirements || null;
+    // 서버에 있는 V-모델 파일과 같은 내용이면 저장 때 다시 올리지 않는다
+    lastUploadRef.current = p.tailoring?.requirementsBlob?.path ? { req: p.tailoring.requirements || null, blob: p.tailoring.requirementsBlob } : { req: null, blob: null };
+    setServerStatus({ state: "ok", at: srvAt || null, err: "", by: p.tailoring?.savedBy?.name || "" });
     const dm = p.tailoring?.docMeta || {};
     setProjectForm({ name:p.name||"", client:p.client||"", type:p.type||"신규개발", systemName:p.tailoring?.systemName||"",
       startDate:p.startDate||"", endDate:p.endDate||"", pm:p.pm||"",
@@ -1615,79 +1803,25 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     setDeliverablesData(p.deliverables||null);
     setRequirements(p.tailoring?.requirements || null);
     setGenError(null);
-    setWizardStep(7);   // 완료(최종 확인) 단계에서 시작 — 상단 스텝을 눌러 어느 단계로든 이동 가능
+    // 작성 중(공유) 프로젝트는 저장된 단계에서, 착수 완료 프로젝트는 완료(최종 확인) 단계에서 시작
+    setWizardStep(p.status === "작성중" && typeof t.wizardStep === "number" ? t.wizardStep : 7);
+    setWizardKey(k => k + 1);
     nav("new_project");
   }
 
   async function finishProject() {
-    // 중복 저장 방지: 응답을 기다리는 동안 "완료" 버튼을 다시 눌러도 POST가 재발행되지 않도록
-    // ref로 즉시 잠근다. (state는 다음 렌더까지 반영이 지연되어 연타를 막지 못한다)
+    // 중복 저장 방지: 응답을 기다리는 동안 "완료" 버튼을 다시 눌러도 저장이 재발행되지 않도록 ref로 즉시 잠근다.
     if (savingRef.current) return;
     savingRef.current = true;
     setSavingProject(true);
-    // 큰 요구사항·V-모델은 압축해 Storage로 분리 (Vercel 요청 본문 4.5MB 한도 회피) — 실패하면 저장하지 않고 위저드 상태 유지
-    let reqInRow = requirements || null, reqBlob = null;
-    if (reqInRow) {
-      let chars = 0; try { chars = JSON.stringify(reqInRow).length; } catch (_) {}
-      if (chars > REQ_BLOB_MIN_CHARS) {
-        try { reqBlob = await uploadRequirementsBlob(reqInRow); reqInRow = null; }
-        catch (e) {
-          alert("V-모델 데이터를 서버 저장소에 올리지 못해 저장을 중단했습니다: " + e.message + "\n작성 내용은 그대로 유지됩니다. V-모델 창의 [💾 백업]으로 파일을 먼저 받아 두세요.");
-          savingRef.current = false; setSavingProject(false);
-          return;
-        }
-      }
-    }
-    const newProject = {
-      name:projectForm.name, client:projectForm.client, type:projectForm.type,
-      start_date:projectForm.startDate, end_date:projectForm.endDate, pm:projectForm.pm,
-      status:"진행중", ossp:selectedOSSP,
-      // sdlc 전용 컬럼 없이 tailoring(JSON)에 함께 보존 → DB 스키마 변경 불필요
-      tailoring:{ ...stripReqFromTailoring(tailoring), sdlc:selectedSDLC, sdlc_factors:sdlcFactors, requirements: reqInRow, requirementsBlob: reqBlob,
-        // 과제 유형(일반 SI / ASPICE)과 ASPICE 적용 기준 — tailoring(JSON)에 보존 (DB 스키마 변경 없음)
-        track: projectForm.track || "", aspiceVersion: projectForm.aspiceVersion || "", aspiceCL: projectForm.track === "aspice" ? aspiceClOf(projectForm) : "",
-        // 시스템명 — 전용 컬럼 없이 tailoring(JSON)에 보존 (DB 스키마 변경 불필요)
-        systemName: String(projectForm.systemName || "").trim(),
-        // 수행 팀원 명단 — 전용 컬럼 없이 tailoring(JSON)에 보존
-        members: normalizeMembers(projectForm.members),
-        logos:{ client:projectForm.clientLogo||null, company:projectForm.companyLogo||null },
-        // 프로젝트별 문서 메타 오버라이드 — 저장 후 재다운로드 시에도 동일하게 적용된다
-        docMeta:DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=projectForm[k]||""; return o; }, {}) },
-      pdp:pdpData, wbs:wbsData, deliverables:deliverablesData,
-    };
-    try {
-      const bodyText = JSON.stringify(newProject);
-      const bodyBytes = new Blob([bodyText]).size;
-      if (bodyBytes > 4.3 * 1024 * 1024) {
-        alert(`저장할 프로젝트 데이터가 ${(bodyBytes / 1048576).toFixed(1)}MB로 서버 요청 한도(4.5MB)를 넘습니다.\n로고 이미지·산출물 데이터 크기를 확인해 주세요. 작성 내용은 그대로 유지됩니다.`);
-        savingRef.current = false; setSavingProject(false);
-        return;
-      }
-      if (reqBlob) _reqBlobCache.set(reqBlob.path, requirements);   // 방금 올린 데이터는 다시 내려받지 않는다
-      const res = await fetch('/api/projects', { method:'POST', headers:{'Content-Type':'application/json'}, body:bodyText });
-      if (!res.ok) {
-        const err = await res.json().catch(()=>({}));
-        alert("프로젝트 저장에 실패했습니다: " + (err.error || `HTTP ${res.status}`) + "\n작성 내용은 그대로 유지됩니다.");
-        savingRef.current = false; setSavingProject(false);
-        return;   // 위저드 상태를 비우지 않고 그대로 두어 재시도할 수 있게 한다
-      }
-      // 수정 모드: 새 버전 저장이 성공한 경우에만 기존 프로젝트 제거 (실패 시 데이터 유실 방지)
-      // 삭제가 실패하면 구버전이 남아 목록에 중복으로 보이므로 조용히 넘기지 않고 알린다.
-      if (editingId) {
-        const del = await fetch(`/api/projects?id=${editingId}`, { method:'DELETE' });
-        if (!del.ok) {
-          const derr = await del.json().catch(()=>({}));
-          alert("새 버전은 저장되었으나 이전 버전 삭제에 실패했습니다: " + (derr.error || `HTTP ${del.status}`) +
-            "\n목록에 같은 이름이 두 건 보일 수 있습니다. 이전 버전을 직접 삭제해 주세요.");
-        }
-      }
-      await fetchProjects();
-    } catch(e) {
-      console.error(e);
-      alert("저장 중 오류가 발생했습니다: " + e.message + "\n작성 내용은 그대로 유지됩니다.");
-      savingRef.current = false; setSavingProject(false);
-      return;
-    }
+    // 서버에 있는 프로젝트는 제자리 갱신(PATCH, id 고정), 없으면 새로 만든다 — 상태를 '진행중'(착수 완료)으로
+    // (이전 방식: 새 행 생성 후 옛 행 삭제 → 저장할 때마다 id가 바뀌어 팀 공유·충돌 확인이 불가능했다)
+    clearTimeout(srvTimer.current);
+    while (srvBusyRef.current) await new Promise(r => setTimeout(r, 200));   // 진행 중인 자동 저장이 끝나기를 기다린다
+    const ok = await serverSave({ status: "진행중", explicit: true });
+    if (!ok) { savingRef.current = false; setSavingProject(false); return; }   // 위저드 상태 유지 — 재시도 가능
+    unlockProject(editingIdRef.current);
+    try { await fetchProjects(); } catch (_) {}
     const doneDraftId = draftIdRef.current;
     resetWizardState();
     clearDraft(doneDraftId);   // 완료된 작성 건의 임시저장본만 제거 (다른 작성 중 항목은 보존)
@@ -1697,9 +1831,13 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
 
   // 위저드 메모리 상태 초기화 — 완료 저장 후, 작성 중 항목 삭제 시 공통 사용
   function resetWizardState() {
-    clearTimeout(draftTimer.current);
+    clearTimeout(draftTimer.current); clearTimeout(srvTimer.current);
     draftIdRef.current = null;   // 다음 임시저장은 새 작성 건으로
-    setEditingId(null);
+    if (editingIdRef.current) unlockProject(editingIdRef.current);
+    setEditing(null);
+    projectRevRef.current = null; projectStatusRef.current = "작성중"; loadedReqRef.current = null;
+    lastUploadRef.current = { req: null, blob: null };
+    setServerStatus({ state: "none", at: null, err: "", by: "" });
     setWizardStep(0); setProjectForm({ name:"",client:"",type:"신규개발",systemName:"",startDate:"",endDate:"",pm:"",
       ...DOC_OVERRIDE_FIELDS.reduce((o,k)=>{ o[k]=""; return o; }, {}) });
     setTimeout(()=>{ if (appSettings) applySettingsDefaults(appSettings); }, 0);   // 설정의 QA 기본정책·기본 로고 재적용
@@ -1778,7 +1916,14 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
 
   const pages = {
     dashboard: <Dashboard projects={projects} loading={loadingProjects} nav={navFromMenu} setCurrentProject={setCurrentProject} canCreate={role !== "viewer"} onDelete={deleteProject}
-      drafts={loadDrafts()} onContinueDraft={(id)=>{ restoreDraft(id); setWizardKey(k => k + 1); nav("new_project"); }} onDiscardDraft={discardDraft} />,
+      onEditProject={editProject}
+      drafts={loadDrafts().filter(d => {
+        // 서버에 반영된 작성 건은 서버 카드로만 보인다 — 서버보다 최신인 '이 PC에만 있는 변경'만 따로 표시
+        if (!d.editingId) return true;
+        const sp = projects.find(p => p.id === d.editingId);
+        return !sp || String(d.savedAt || "") > String(sp.tailoring?.savedBy?.at || "");
+      })}
+      onContinueDraft={async (id)=>{ if (await restoreDraft(id)) { setWizardKey(k => k + 1); nav("new_project"); } }} onDiscardDraft={discardDraft} />,
     new_project: <NewProjectWizard key={wizardKey} step={wizardStep} setStep={setWizardStep} form={projectForm} setForm={setProjectForm}
       selectedOSSP={selectedOSSP} setSelectedOSSP={setSelectedOSSP} tailoring={tailoring} setTailoring={setTailoring}
       pdpData={pdpData} wbsData={wbsData} deliverablesData={deliverablesData} generating={generating} genError={genError} genProgress={genProgress}
@@ -1791,7 +1936,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       selectedSDLC={selectedSDLC} setSelectedSDLC={setSelectedSDLC}
       sdlcRecommendation={sdlcRecommendation} recommending={recommending} onRecommendSDLC={recommendSDLC}
       editing={!!editingId} saving={savingProject}
-      onSaveDraft={saveDraft} loadDrafts={loadDrafts} onRestoreDraft={(id)=>{ restoreDraft(id); setWizardKey(k => k + 1); }} />,
+      onSaveDraft={saveDraft} onServerSave={() => serverSave({ explicit: true })} loadDrafts={loadDrafts} onRestoreDraft={async (id)=>{ if (await restoreDraft(id)) setWizardKey(k => k + 1); }} />,
     project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} onEdit={editProject} reqLoad={reqLoad} />,
     ossp: <OSSPPage nav={navFromMenu} customOSSP={customOSSP} builtinOSSP={builtinOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
     regulation: <LibraryPage nav={nav} kind="regulation"
@@ -1920,7 +2065,7 @@ function projectStage(p) {
   return { label: "기본정보 단계", color: T.muted };
 }
 
-function Dashboard({ projects, loading, nav, setCurrentProject, drafts = [], onContinueDraft, onDiscardDraft, canCreate = true, onDelete }) {
+function Dashboard({ projects, loading, nav, setCurrentProject, drafts = [], onContinueDraft, onDiscardDraft, canCreate = true, onDelete, onEditProject }) {
   const hasDraft = drafts.length > 0;
   const stats = [
     { label:"전체 프로젝트", value:projects.length, color:T.accent },
@@ -1959,7 +2104,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, drafts = [], onC
                 style={{ padding:"12px 14px", background:T.bg, borderRadius:10, border:`1px dashed ${T.amber}88`, cursor:"pointer" }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
                   <div style={{ fontWeight:600, fontSize:14 }}>{draft.projectForm?.name || "(제목 미입력)"}</div>
-                  <span style={{ display:"flex", gap:4 }}>{draft.editingId && <Badge color={T.accent}>수정 중</Badge>}<Badge color={T.amber}>작성 중</Badge></span>
+                  <span style={{ display:"flex", gap:4 }}>{draft.editingId ? <Badge color={T.red}>이 PC에만 있는 변경</Badge> : <Badge color={T.muted}>이 PC에만 저장</Badge>}<Badge color={T.amber}>작성 중</Badge></span>
                 </div>
                 <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>
                   {draft.projectForm?.client || "고객사 미입력"}
@@ -1987,7 +2132,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, drafts = [], onC
               ) : null;
             })()}
             {projects.map(p=>{
-              const stage = projectStage(p);
+              const stage = p.status === "작성중" ? { label: "작성 중 · 팀 공유", color: T.amber } : projectStage(p);
               return (
               <div key={p.id} onClick={()=>{ setCurrentProject(p); nav("project_detail"); }}
                 style={{ padding:"12px 14px", background:T.bg, borderRadius:10, border:`1px solid ${T.border}`, cursor:"pointer" }}>
@@ -2005,7 +2150,9 @@ function Dashboard({ projects, loading, nav, setCurrentProject, drafts = [], onC
                     )}
                   </div>
                 </div>
-                <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>{p.client} · {p.ossp?.label} · {p.createdAt}</div>
+                <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>{p.client} · {p.ossp?.label} · {p.createdAt}{p.tailoring?.savedBy?.at ? ` · 마지막 저장 ${new Date(p.tailoring.savedBy.at).toLocaleString("ko-KR")}${p.tailoring.savedBy.name ? ` (${p.tailoring.savedBy.name})` : ""}` : ""}</div>
+                {p._lock && <div style={{ fontSize:11, color:T.amber, marginBottom:8 }}>🔒 {p._lock.name || p._lock.by}님이 {hhmm(p._lock.at)}부터 편집 중</div>}
+                {p.status === "작성중" && canCreate && onEditProject && <div style={{ marginBottom:8 }}><Btn variant="primary" onClick={e=>{ e.stopPropagation(); onEditProject(p); }} style={{ fontSize:11, padding:"4px 10px" }}>이어서 작성</Btn></div>}
                 <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
                   {p.pdp && <Badge color={T.green}>PDP</Badge>}
                   {p.wbs && <Badge color={T.amber}>WBS</Badge>}
@@ -2042,7 +2189,7 @@ function Dashboard({ projects, loading, nav, setCurrentProject, drafts = [], onC
   );
 }
 
-function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, pbsNoAi, onTogglePbsNoAi, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, requirements, setRequirements, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, saving, onSaveDraft, loadDrafts, onRestoreDraft }) {
+function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelectedOSSP, tailoring, setTailoring, pdpData, wbsData, deliverablesData, generating, genError, genProgress, onGeneratePDP, onRecommendPBS, pbsNoAi, onTogglePbsNoAi, setWbsData, wbsSetup, setWbsSetup, onGenerateDeliverables, requirements, setRequirements, onFinish, nav, customOSSP, sdlcFactors, setSdlcFactors, selectedSDLC, setSelectedSDLC, sdlcRecommendation, recommending, onRecommendSDLC, editing, saving, onSaveDraft, onServerSave, loadDrafts, onRestoreDraft }) {
   const STEP_NAMES = ["기본정보","SDLC","OSSP","테일러링","PDP","WBS","산출물","완료"];
   // 과제 유형·목표 능력수준에 따라 보이는 단계(내부 단계 번호 0~7 중 일부)
   const isAspiceTrack = form.track === "aspice";
@@ -2126,11 +2273,13 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
   }, [isAspiceTrack, form.type]);   // eslint-disable-line react-hooks/exhaustive-deps
   // 작성 중 항목(임시저장본)은 대시보드의 '작성 중' 목록에서만 이어서 작성·삭제한다 — 새 프로젝트 화면에는 안내 패널을 두지 않는다 (2026-10-22)
 
-  function handleSave() {
-    if (onSaveDraft && onSaveDraft()) {
-      setSaveMsg("임시저장됨");
-      setTimeout(()=>setSaveMsg(""), 2000);
-    }
+  async function handleSave() {
+    // ① 이 PC(브라우저)에 보관 ② 서버에 저장해 팀원과 공유 — 프로젝트명이 있어야 ②가 된다
+    if (!(onSaveDraft && onSaveDraft())) return;
+    setSaveMsg("저장 중…");
+    const ok = onServerSave ? await onServerSave() : false;
+    setSaveMsg(ok ? "저장됨 · 팀 공유" : "이 PC에만 저장됨");
+    setTimeout(()=>setSaveMsg(""), 2500);
   }
   return (
     <div style={{ padding:"16px", maxWidth:960, margin:"0 auto" }}>
@@ -2140,7 +2289,7 @@ function NewProjectWizard({ step, setStep, form, setForm, selectedOSSP, setSelec
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           {editing && <Badge color={T.amber}>수정 모드</Badge>}
           {saveMsg && <span style={{ fontSize:11, color:T.green, fontWeight:600 }}>✓ {saveMsg}</span>}
-          <Btn variant="outline" onClick={handleSave} style={{ fontSize:12, padding:"6px 12px" }}>임시저장</Btn>
+          <Btn variant="outline" onClick={handleSave} title="이 PC에 보관하고 서버에 저장해 같은 프로젝트의 팀원과 공유합니다 (프로젝트명 필요). '완료'는 착수를 마칠 때 누릅니다." style={{ fontSize:12, padding:"6px 12px" }}>저장</Btn>
         </div>
       </div>
 
@@ -8438,7 +8587,7 @@ async function downloadAspicePackage(meta, ctx) {
   try { swe3ModelFiles(meta, ctx, `${String(order.length + 1).padStart(2, "0")}_SW4101_상세설계_모델`).forEach(f => files.push(f)); } catch (_) {}
   try { hw2ModelFiles(meta, ctx, `${String(order.length + 2).padStart(2, "0")}_HW4101_HW설계_모델`).forEach(f => files.push(f)); } catch (_) {}
   try { swe4HostFiles(meta, ctx, `${String(order.length + 3).padStart(2, "0")}_SW4106_유닛시험_호스트실행`).forEach(f => files.push(f)); } catch (_) {}
-  // SPIDer 복원용 백업 — V-모델 창의 [📂 백업 가져오기]로 이 ZIP을 받은 시점의 상태를 그대로 되살린다
+  // SPIDer 복원용 백업 — V-모델 창의 [⋯ 더보기 → 백업 파일에서 되돌리기]로 이 ZIP을 받은 시점의 상태를 그대로 되살린다
   try { if (ctx?.requirements?.aspice) files.push({ path: "99_SPIDer_V모델_백업.json", content: new TextEncoder().encode(JSON.stringify(makeVmodelBackup(meta, ctx.requirements))) }); } catch (e) { console.warn("백업 JSON 포함 실패:", e?.message); }
   if (!files.length) throw new Error("생성할 수 있는 ASPICE 산출물이 없습니다. 시스템 요소·하위 요구·검증 수단을 먼저 작성하세요.");
   const blob = new Blob([zipBytes(files)], { type: "application/zip" });
@@ -9671,6 +9820,8 @@ function AeFlags({ r }) {
 
 function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequirements, ossp, initTab, tailoring }) {
   const draftSt = useDraftStatus();   // 브라우저 임시저장(IndexedDB) 실제 기록 결과
+  const srvSt = useServerStatus();    // 서버(팀 공유) 저장 결과
+  const [moreOpen, setMoreOpen] = useState(false);   // 하단 '⋯ 더보기' 메뉴 (백업·되돌리기)
   const [items, setItems] = useState(() => (requirements?.items || []).map(x => ({ ...x })));
   const [model, setModel] = useState(() => {
     // 기존 연결의 기준선을 현재 저장본 내용으로 먼저 등록한 뒤 확정 요구로 동기화 (변경 감지)
@@ -10615,8 +10766,8 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
     const hm = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
     // 브라우저 임시저장(IndexedDB) 기록은 곧바로 비동기로 진행된다 — 성공·실패는 하단 표시가 실제 결과로 알려 준다
     setNote(quiet === "review"
-      ? `검토 AI 결과를 프로젝트에 반영했습니다 (${hm}) — 브라우저 임시저장 결과는 하단에 표시됩니다. 서버 저장은 위저드 마지막 단계의 '완료'에서 합니다.`
-      : `프로젝트에 반영했습니다 (${hm}) — 브라우저 임시저장 결과는 하단에 표시됩니다. 서버(DB) 저장은 위저드 마지막 단계의 '완료'에서 합니다.`);
+      ? `검토 AI 결과를 자동 저장합니다 (${hm}) — 이 PC와 서버에 저장되어 팀원과 공유됩니다. 결과는 하단에 표시됩니다.`
+      : `저장합니다 (${hm}) — 이 PC와 서버에 저장되어 팀원과 공유됩니다. 결과는 하단에 표시됩니다.`);
   }
   // ── V-모델 백업: 지금 편집 내용을 저장한 뒤 JSON 파일로 내려받기 / 백업 파일에서 복원 ──
   function exportBackup() {
@@ -10630,7 +10781,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
       const url = URL.createObjectURL(new Blob([JSON.stringify(bak)], { type: "application/json" }));
       const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-      setNote(`백업 파일을 내려받았습니다 — ${name}. 이 파일은 [📂 백업 가져오기]로 언제든 그대로 복원할 수 있습니다.`);
+      setNote(`백업 파일을 내려받았습니다 — ${name}. 이 파일은 [⋯ 더보기 → 백업 파일에서 되돌리기]로 언제든 그대로 복원할 수 있습니다.`);
     } catch (x) { setErr("백업 내보내기 실패: " + x.message); }
   }
   const bakInputRef = useRef(null);
@@ -12306,7 +12457,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                 </div>
               </div>
               <div style={{ marginTop: 12, padding: "8px 10px", background: T.bg, borderRadius: 8, fontSize: 11, color: T.muted }}>
-                💡 안내 문구('이 단계에서 할 일' 카드와 화면 설명)는 기본으로 숨겨져 있습니다. 필요할 때 오른쪽 위 <b>💡 안내 보기</b>를 누르면 모든 탭에 함께 나타나고, 다시 누르면 숨겨집니다. 이 사용법은 <b>❓ 사용법</b>으로 언제든 볼 수 있습니다. 저장은 하단 <b>저장</b>(창은 닫히지 않음), 서버 저장은 위저드 마지막 '완료'입니다.
+                💡 안내 문구('이 단계에서 할 일' 카드와 화면 설명)는 기본으로 숨겨져 있습니다. 필요할 때 오른쪽 위 <b>💡 안내 보기</b>를 누르면 모든 탭에 함께 나타나고, 다시 누르면 숨겨집니다. 이 사용법은 <b>❓ 사용법</b>으로 언제든 볼 수 있습니다. <b>✓ 저장</b>을 누르면(창은 닫히지 않음) 이 PC와 서버에 저장되어 같은 프로젝트의 팀원이 각자 PC에서 현재 상태를 봅니다. 편집은 한 번에 한 사람만 할 수 있습니다.
               </div>
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
                 <Btn onClick={closeIntro} style={{ fontSize: 12, padding: "7px 16px" }}>시작하기 →</Btn>
@@ -12315,7 +12466,8 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
           </div>)}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px", borderTop: `1px solid ${T.border}`, flexShrink: 0, gap: 8 }}>
           <div style={{ minWidth: 0 }}>
-            {draftSt.state === "error" && <div style={{ fontSize: 10.5, color: T.red, marginBottom: 2 }}>⚠ 브라우저 임시저장 실패: {draftSt.err} — 창을 닫기 전에 💾 백업으로 파일을 받아 두세요.</div>}
+            {draftSt.state === "error" && <div style={{ fontSize: 10.5, color: T.red, marginBottom: 2 }}>⚠ 이 PC(브라우저) 저장 실패: {draftSt.err} — 창을 닫기 전에 ⋯ 더보기 → 작업 데이터 백업 파일을 받아 두세요.</div>}
+            {["conflict", "locked", "error"].includes(srvSt.state) && <div style={{ fontSize: 10.5, color: T.red, marginBottom: 2 }}>⚠ 서버에 저장되지 않았습니다: {srvSt.err} — 지금 내용은 이 PC에 보관 중입니다.</div>}
             <div className="ae-hint" title="이 프로젝트 V-모델에 지금까지 만들어진 항목 수입니다" style={{ fontSize: 10.5, color: T.muted }}>모델 현황 — {model.reqs.STK?.length ? `이해관계자 요구 ${model.reqs.STK.length} · ` : ""}시스템 요구 {model.reqs.SYS.length} · 시스템 요소 {model.comps.SYS.length}{model.scope.SW ? ` · SW 요구 ${model.reqs.SW.length} · SW 구성요소 ${model.comps.SW.length}${model.units.SW.length ? ` · SW 유닛 ${model.units.SW.length}` : ""}` : ""}{model.scope.HW ? ` · HW 요구 ${model.reqs.HW.length} · HW 구성요소 ${model.comps.HW.length}` : ""} · 검증 수단 {model.tests.length}</div>
             {(() => {
               // 규칙 기반 상속 초안(시스템 요구를 그대로 복사한 하위 요구)이 남아 있으면 한 줄로 안내
@@ -12324,22 +12476,42 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
             })()}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="이해관계자 요구 목록·시스템 요구사항 명세서·아키텍처·하위 요구·상세설계·검증 명세·추적 매트릭스를 한 번에 내려받습니다 (저장 전 편집 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 V-모델 산출물 ZIP</Btn>
+            <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="고객·심사 제출용 문서(명세서·설계서·검증 명세·결과서·추적 매트릭스·설계 모델·소스)를 OSSP 양식으로 만들어 ZIP 하나로 내려받습니다 (지금 화면 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 산출물 내려받기 (ZIP)</Btn>
             {reqDirty && <button onClick={() => setTab("req", "STK")} title="SYS.1·SYS.2에서 고친 요구를 아직 확정하지 않았습니다 — [확정·V-모델 반영]을 눌러야 V-모델과 저장에 포함됩니다" style={{ alignSelf: "center", fontSize: 10.5, color: T.amber, background: "none", border: `1px solid ${T.amber}88`, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>● 요구 확정 안 됨 →</button>}
             {(() => {
-              // 표시 기준: 편집 미반영(dirty) → 기록 중 → 기록 실패 → 실제 기록 성공(시각). '저장됨'은 IndexedDB 기록이 성공했을 때만.
-              const hm = iso => (d => isNaN(d) ? "" : d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }))(new Date(iso));
-              if (dirty) return <span style={{ alignSelf: "center", fontSize: 10.5, color: T.amber, whiteSpace: "nowrap" }}>● 저장 안 된 변경 있음</span>;
-              if (draftSt.state === "pending") return <span style={{ alignSelf: "center", fontSize: 10.5, color: T.muted, whiteSpace: "nowrap" }}>⏳ 브라우저에 저장 중…</span>;
-              if (draftSt.state === "error") return <span title={draftSt.err} style={{ alignSelf: "center", fontSize: 10.5, color: T.red, whiteSpace: "nowrap", fontWeight: 700 }}>⚠ 임시저장 실패 — 💾 백업을 받으세요</span>;
-              if (draftSt.state === "ok" && draftSt.at) return <span title="브라우저(IndexedDB)에 실제로 기록된 시각입니다. 서버(DB) 저장은 위저드 마지막 단계의 '완료'에서 합니다." style={{ alignSelf: "center", fontSize: 10.5, color: T.green, whiteSpace: "nowrap" }}>✓ 브라우저 저장됨 {hm(draftSt.at)}</span>;
-              return <span title="이 창을 연 뒤 아직 저장하지 않았습니다" style={{ alignSelf: "center", fontSize: 10.5, color: T.muted, whiteSpace: "nowrap" }}>변경 없음</span>;
+              // 저장 상태 — 서버(팀 공유)를 우선 표시하고, 서버에 아직 없을 때는 이 PC(브라우저) 기록 결과를 표시
+              const S = (color, text, title, bold) => <span title={title} style={{ alignSelf: "center", fontSize: 10.5, color, whiteSpace: "nowrap", fontWeight: bold ? 700 : 400 }}>{text}</span>;
+              if (dirty) return S(T.amber, "● 저장 안 된 변경 있음", "✓ 저장을 누르면 이 PC와 서버에 저장됩니다");
+              if (draftSt.state === "error") return S(T.red, "⚠ 이 PC 저장 실패", draftSt.err, true);
+              if (srvSt.state === "pending" || draftSt.state === "pending") return S(T.muted, "⏳ 저장 중…", "이 PC와 서버에 저장하고 있습니다");
+              if (srvSt.state === "conflict") return S(T.red, "⚠ 다른 팀원이 먼저 저장 — 서버 저장 안 됨", srvSt.err, true);
+              if (srvSt.state === "locked") return S(T.red, `🔒 ${srvSt.by || "다른 팀원"} 편집 중 — 서버 저장 안 됨`, srvSt.err, true);
+              if (srvSt.state === "error") return S(T.red, "⚠ 서버 저장 실패 — 이 PC에만 보관", srvSt.err, true);
+              if (srvSt.state === "ok" && srvSt.at) return S(T.green, `✓ 저장됨 ${hhmm(srvSt.at)} · 팀 공유${srvSt.by ? ` (${srvSt.by})` : ""}`, "서버에 저장되어 같은 프로젝트의 팀원이 각자 PC에서 볼 수 있습니다");
+              if (draftSt.state === "ok" && draftSt.at) return S(T.amber, `✓ 이 PC에만 저장됨 ${hhmm(draftSt.at)}`, srvSt.err || "서버에 아직 없는 프로젝트입니다 — 위저드에서 프로젝트명을 입력하고 저장하면 팀원과 공유됩니다");
+              return S(T.muted, "변경 없음", "이 창을 연 뒤 바뀐 내용이 없습니다");
             })()}
-            <Btn variant="outline" onClick={exportBackup} disabled={busy || !model.reqs.SYS.length} title="지금 편집 내용을 저장하고, V-모델 전체(요구·설계·코드·회로·시험·검토 결과)를 JSON 백업 파일로 내려받습니다. 브라우저 저장이 실패해도 이 파일로 복원할 수 있습니다." style={{ fontSize: 12, padding: "7px 12px" }}>💾 백업</Btn>
-            <Btn variant="outline" onClick={() => bakInputRef.current && bakInputRef.current.click()} disabled={busy} title="💾 백업 파일(.json) 또는 V-모델 ZIP 안의 99_SPIDer_V모델_백업.json으로 V-모델을 복원합니다" style={{ fontSize: 12, padding: "7px 12px" }}>📂 백업 가져오기</Btn>
+            <div style={{ position: "relative", alignSelf: "center" }}>
+              <Btn variant="ghost" onClick={() => setMoreOpen(v => !v)} title="작업 데이터 백업·되돌리기" style={{ fontSize: 12, padding: "7px 10px" }}>⋯ 더보기</Btn>
+              {moreOpen && <>
+                <div onClick={() => setMoreOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 20 }} />
+                <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 6px)", zIndex: 21, width: 330, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, padding: 6, boxShadow: "0 8px 24px rgba(0,0,0,0.45)" }}>
+                  <div style={{ fontSize: 10, color: T.muted, padding: "4px 8px 6px" }}>작업 데이터 (SPIDer 복원용 — 고객 제출용 아님)</div>
+                  {[
+                    ["💾 작업 데이터 백업 파일 받기 (.json)", "지금 V-모델 전체(요구·설계·코드·회로·시험·검토 판정)를 파일로 받아 둡니다. 서버 저장이 안 될 때의 비상용입니다.", () => { setMoreOpen(false); exportBackup(); }, busy || !model.reqs.SYS.length],
+                    ["📂 백업 파일에서 되돌리기", "백업 파일(또는 산출물 ZIP 안의 99_SPIDer_V모델_백업.json)의 시점으로 V-모델을 바꿉니다. 확인 후 진행합니다.", () => { setMoreOpen(false); bakInputRef.current && bakInputRef.current.click(); }, busy],
+                  ].map(([label, desc, fn, dis]) => (
+                    <button key={label} onClick={fn} disabled={dis} style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", borderRadius: 7, padding: "7px 8px", cursor: dis ? "not-allowed" : "pointer", opacity: dis ? 0.5 : 1, fontFamily: "inherit", color: T.text }}
+                      onMouseEnter={e => { e.currentTarget.style.background = T.bg; }} onMouseLeave={e => { e.currentTarget.style.background = "none"; }}>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>{label}</div>
+                      <div style={{ fontSize: 10.5, color: T.muted, marginTop: 2, lineHeight: 1.5 }}>{desc}</div>
+                    </button>))}
+                </div>
+              </>}
+            </div>
             <input ref={bakInputRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; importBackup(f); }} />
             <Btn variant="outline" onClick={requestClose} style={{ fontSize: 12, padding: "7px 14px" }}>닫기</Btn>
-            <Btn onClick={() => save()} disabled={busy} title="작업 내용을 프로젝트에 반영하고 브라우저 임시저장본에도 보관합니다. 창은 닫히지 않습니다." style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
+            <Btn onClick={() => save()} disabled={busy} title="이 PC와 서버에 저장해 같은 프로젝트의 팀원과 공유합니다. 창은 닫히지 않습니다." style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
           </div>
         </div>
       </div>
