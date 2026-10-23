@@ -1685,7 +1685,8 @@ export function reviewView(model) {
   });
   const count = (lv) => {
     const xs = list.filter(f => !lv || f.level === lv);
-    return { total: xs.length, open: xs.filter(f => !f.judge && !f.removed).length,   // 대상이 삭제된 의견은 판정 대기로 세지 않음 valid: xs.filter(f => f.judge?.state === "valid").length,
+    return { total: xs.length, open: xs.filter(f => !f.judge && !f.removed).length,   // 대상이 삭제된 의견은 판정 대기로 세지 않음
+      valid: xs.filter(f => f.judge?.state === "valid").length,
       invalid: xs.filter(f => f.judge?.state === "invalid").length, opinion: xs.filter(f => f.judge?.state === "opinion").length,
       stale: xs.filter(f => f.stale).length, edited: xs.filter(f => f.edits.length).length };
   };
@@ -2148,8 +2149,9 @@ export function fixQueueTargets(model, key) {
   const m = normalizeModel(model);
   const v = reviewView(m);
   const by = {};
-  v.list.filter(f => f.level === key && !f.removed && (!f.judge || (f.judge.state === "valid" && !f.edits.length))).forEach(f => { (by[f.reqId] = by[f.reqId] || []).push(f); });
-  return Object.entries(by).map(([id, fs]) => ({ id, findings: fs, allFindings: v.list.filter(f => f.level === key && f.reqId === id && !f.removed && f.judge?.state !== "invalid") }))
+  // 수정 대상 = QA가 '맞음'으로 판정했고 아직 고치지 않은 의견만 (판정 → 수정 순서, SUP.1 BP6). 미판정·보류·틀림은 제외
+  v.list.filter(f => f.level === key && !f.removed && f.judge?.state === "valid" && !f.edits.length).forEach(f => { (by[f.reqId] = by[f.reqId] || []).push(f); });
+  return Object.entries(by).map(([id, fs]) => ({ id, findings: fs, allFindings: fs }))
     .filter(t => reviewEditSpec(m, key, t.id));
 }
 // 규칙 수정안 — 지금은 '검증 기준 비어 있음 + 상위 요구에 검증 기준 있음'일 때 상속 제안. 의견이 모두 VERIF 계열이면 규칙만으로 처리
