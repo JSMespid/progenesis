@@ -9027,6 +9027,9 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
 
   // 가이드 이름 = 첫 파일명(확장자 제외) — 문서 코드(SY2101 등)가 있으면 적용 단계 자동 판정에도 쓰인다. 등록 후 ✎로 바꿀 수 있음
   const autoName = gFiles.length ? gFiles[0].name.replace(/\.(txt|docx|xlsx)$/i, "") + (gFiles.length > 1 ? ` 외 ${gFiles.length - 1}건` : "") : "";
+  // 적용 대상: 파일명의 OSSP 문서 코드(SY2101·HW5102 등)가 가리키는 단계를 우선 — 다른 단계 탭에서 등록해도 맞는 단계로 간다. 코드가 없으면 이 화면의 단계
+  const codeScope = autoName ? guideDefaultScope({ name: autoName }) : "all";
+  const regScope = codeScope !== "all" && codeScope.startsWith(aspice ? "aspice" : "si") ? codeScope : defaultScope;
   async function register() {
     if (!gFiles.length) { setGErr("가이드 파일을 업로드해 주세요 (txt·docx·xlsx — 웹·메일 내용은 .txt로 저장해 올리면 됩니다)."); return; }
     const combined = gFiles.map(f => `[파일: ${f.name}]\n${f.text}`).join("\n\n");
@@ -9040,7 +9043,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
       const r = await fetch("/api/writing-guides", {
         method:"POST", headers:{ "Content-Type":"application/json" },
         // 저작권 보호: 가이드 원문은 서버에 보내지 않고, AI가 추출한 작성 규칙 요약만 저장한다
-        body: JSON.stringify({ name: autoName.slice(0, 120), category: gCat, summary, rightsConfirmed: true, scope: defaultScope }),
+        body: JSON.stringify({ name: autoName.slice(0, 120), category: gCat, summary, rightsConfirmed: true, scope: regScope }),
       });
       const created = await r.json().catch(() => null);
       if (!r.ok || !created?.id) throw new Error(created?.error || `저장 실패 (status ${r.status})`);
@@ -9076,6 +9079,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
                       onChange={e=>setSel(s=>({ ...s, [g.id]: e.target.checked }))} style={{ cursor:"pointer" }} />
                     <span style={{ fontSize:11, fontWeight:600 }}>{g.name}</span>
                     <span style={{ fontSize:9.5, color:T.accent, border:`1px solid ${T.accentDim}`, borderRadius:5, padding:"1px 6px" }}>{g.category}</span>
+                    {!/:/.test(guideScopeOf(g)) && <span title="이 가이드는 특정 단계가 아니라 여러 단계에 공통으로 적용되도록 지정되어 있어 모든 단계에 보입니다. 한 단계에만 쓰려면 OSSP 라이브러리 → 작성 가이드에서 적용 대상을 바꾸세요." style={{ fontSize:9.5, color:T.amber, border:`1px solid ${T.amber}66`, borderRadius:5, padding:"1px 6px" }}>{GUIDE_SCOPE_LABEL[guideScopeOf(g)]}</span>}
                     <div style={{ flex:1 }} />
                     <button onClick={()=>setOpenRule(o=>({ ...o, [g.id]: !op }))} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:10.5, fontFamily:"inherit" }}>{op ? "▾ 규칙 접기" : `▸ 규칙 보기 (${lines.length})`}</button>
                   </div>
@@ -9096,7 +9100,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
               <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", gap:6, marginBottom:6, alignItems:"center" }}>
                 <div style={{ fontSize:10.5, color:T.muted }}>
                   ① 파일을 올리고(아래 📎 또는 이 영역에 끌어다 놓기) ② 분류를 고른 뒤 ③ 파일을 어떻게 쓸지 적어 주세요.
-                  {" "}가이드 이름: <b style={{ color: autoName ? T.text : T.muted }}>{autoName || "첫 파일명으로 자동"}</b>{aspice ? ` · 적용 대상: ${GUIDE_SCOPE_LABEL[defaultScope]}` : ""}
+                  {" "}가이드 이름: <b style={{ color: autoName ? T.text : T.muted }}>{autoName || "첫 파일명으로 자동"}</b> · 적용 대상: <b style={{ color: regScope !== defaultScope ? T.amber : T.text }}>{GUIDE_SCOPE_LABEL[regScope]}</b>{regScope !== defaultScope ? " (파일명의 문서 코드 기준 — 이 화면이 아니라 그 단계에 나타납니다)" : ""}
                 </div>
                 <select value={gCat} onChange={e=>setGCat(e.target.value)} disabled={gBusy} style={inp}>
                   {GUIDE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
@@ -11412,7 +11416,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
           </>)}
 
           {tab === "SYS" && (<>
-            <AeSec title={`시스템 요소 ${model.comps.SYS.length}개 (${AE.procLabel("SYS.3", V)} · 정적 측면)`} right={<Btn variant={model.comps.SYS.some(c => c.origin !== "manual" && c.origin !== "dbc") ? "outline" : undefined} onClick={() => { if (model.comps.SYS.some(c => c.origin !== "manual" && c.origin !== "dbc") && !window.confirm(`시스템 구조를 ${model.useAI ? "AI로 " : ""}다시 만듭니다.\n· AI·규칙이 만든 요소 ${model.comps.SYS.filter(c => c.origin !== "manual" && c.origin !== "dbc").length}개·인터페이스·운영 모드가 새 결과로 바뀌고, 요구 할당 ${Object.keys(model.alloc.SYS || {}).length}건이 다시 계산됩니다(직접 추가·DBC 요소는 보존).\n· SW·HW 요구와 컴포넌트는 지금 요소 ID에 연결돼 있어 연결이 어긋날 수 있습니다 — '빠진 곳 점검'에서 확인하세요.\n\n계속할까요?`)) return; sysArch(); }} disabled={busy || !model.reqs.SYS.length} title="시스템 요구에서 시스템 요소·인터페이스·운영 모드를 설계하고 요구를 요소에 할당합니다" style={{ fontSize: 11, padding: "4px 12px" }}>{model.comps.SYS.some(c => c.origin !== "manual" && c.origin !== "dbc") ? `↻ 시스템 구조 다시 만들기${model.useAI ? " (AI)" : ""}` : `${aiLabel} 시스템 구조·요구 할당 만들기`}</Btn>}>
+            <AeSec title={`시스템 요소 ${model.comps.SYS.length}개 (${AE.procLabel("SYS.3", V)} · 정적 측면 + 요소별 거동)`} right={<Btn variant={model.comps.SYS.some(c => c.origin !== "manual" && c.origin !== "dbc") ? "outline" : undefined} onClick={() => { if (model.comps.SYS.some(c => c.origin !== "manual" && c.origin !== "dbc") && !window.confirm(`시스템 구조를 ${model.useAI ? "AI로 " : ""}다시 만듭니다.\n· AI·규칙이 만든 요소 ${model.comps.SYS.filter(c => c.origin !== "manual" && c.origin !== "dbc").length}개·인터페이스·운영 모드가 새 결과로 바뀌고, 요구 할당 ${Object.keys(model.alloc.SYS || {}).length}건이 다시 계산됩니다(직접 추가·DBC 요소는 보존).\n· SW·HW 요구와 컴포넌트는 지금 요소 ID에 연결돼 있어 연결이 어긋날 수 있습니다 — '빠진 곳 점검'에서 확인하세요.\n\n계속할까요?`)) return; sysArch(); }} disabled={busy || !model.reqs.SYS.length} title="시스템 요구에서 시스템 요소·인터페이스·운영 모드를 설계하고 요구를 요소에 할당합니다" style={{ fontSize: 11, padding: "4px 12px" }}>{model.comps.SYS.some(c => c.origin !== "manual" && c.origin !== "dbc") ? `↻ 시스템 구조 다시 만들기${model.useAI ? " (AI)" : ""}` : `${aiLabel} 시스템 구조·요구 할당 만들기`}</Btn>}>
               <div className="ae-hint" style={{ fontSize: 10, color: T.muted, marginBottom: 6 }}>구분: HW·SW·HW+SW·ME(기구)·외부(시스템 경계 밖). SW/HW 하위 요구는 'SW'·'HW'가 포함된 요소에 할당된 시스템 요구에서 파생됩니다. DBC로 추가된 요소·인터페이스는 재생성 시 보존됩니다.</div>
               {CompList({ lv: "SYS" })}
             </AeSec>
