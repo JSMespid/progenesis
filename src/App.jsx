@@ -8854,7 +8854,15 @@ async function downloadDeliverablesZip(deliverables, meta, wbs, ctx, onProgress)
 
 // ── 작성 가이드(전역 라이브러리): 방법론 작성가이드·글로벌 표준(PMBOK·CMMI 등)·글로벌 규제 ──
 // AI가 산출물을 작성할 때 프롬프트에 주입되어 준수 기준으로 사용됨 — 모든 AI 작성 기능 공용 헬퍼
-const GUIDE_CATEGORIES = ["방법론 작성가이드", "글로벌 표준", "글로벌 규제", "기타"];
+const GUIDE_CATEGORIES = ["방법론 작성가이드", "글로벌 표준", "글로벌 규제", "기존 산출물", "기타"];
+// 분류별 등록 안내 — 프롬프트 입력란의 예시와 '할 수 있는 일'
+const GUIDE_CAT_HELP = {
+  "방법론 작성가이드": "예) 4장 '요구사항 작성 규칙'만 적용 / 요구 ID 체계와 필수 항목을 지켜서 작성",
+  "글로벌 표준": "예) ISO/IEC/IEEE 29148의 요구 품질 특성만 적용 / 용어 정의는 3장을 따름",
+  "글로벌 규제": "예) UN R155 7.2절 사이버보안 요구 표현을 따름 / 법규 조항 번호를 출처에 기재",
+  "기존 산출물": "예) 이 SyRS의 문장 형식·항목 구성·ID 표기를 따라 작성 / 시험 절차는 이 명세서처럼 단계별로",
+  "기타": "예) 사내 용어집의 표기를 따름",
+};
 
 // ── 작성 가이드의 적용 대상(scope) — 라이브러리는 전역 공용, 가이드마다 "어느 과제·어느 단계의 AI 작성에 쓰는지"를 서버(writing_guides.scope)에 저장 ──
 //   all            : 공통 — 모든 과제·모든 단계 (용어집, 문서 작성 표준 등)
@@ -8932,21 +8940,29 @@ function buildGuideBlock(guides, cap = 4000) {
 
 // 가이드 원문 → AI 요약(핵심 작성 규칙만 추출) — 등록 시 1회 수행 후 저장, 작성 시에는 요약본만 주입
 // 원문이 길면 6,000자 단위 분할 호출 (Vercel 타임아웃 대응, 최대 3청크=18,000자)
-async function summarizeGuideText(name, category, text, onProg) {
+async function summarizeGuideText(name, category, text, onProg, instruction = "") {
   const src = String(text || "").slice(0, 18000);
+  const ins = String(instruction || "").replace(/\s+/g, " ").trim().slice(0, 400);
+  const prior = category === "기존 산출물"
+    ? `아래는 이전 과제의 산출물입니다(${name}). 내용 자체가 아니라 '작성 방식'만 추출하세요: 문장 형식(주어·조건·동작·기준의 순서), 항목 구성·필수 칸, ID·번호 표기 방식, 용어·표기 습관, 검증 기준·시험 절차의 서술 방식.
+금지: 고객사명·제품명·차종·과제명·부품번호·수치·고유 ID 같은 과제 고유 정보는 절대 옮기지 마세요(다른 고객 과제에 섞이면 비밀유지 위반). 예시가 필요하면 <값>·<대상>처럼 자리표시로 일반화하세요.`
+    : `아래 작성 가이드 문서(${category}: ${name})에서, AI가 프로젝트 산출물을 작성할 때 반드시 준수해야 할 핵심 작성 규칙만 추출하세요.
+규칙: 산출물 작성에 직접 영향을 주는 것만(용어·표기 규칙, 필수 항목·문서 구조, 품질기준·측정기준, ID 부여·추적성, 준수해야 할 표준·규제 조항). 배경 설명·일반론 제외.`;
   const chunks = [];
   for (let i = 0; i < src.length; i += 6000) chunks.push(src.slice(i, i + 6000));
   const parts = [];
   for (let i = 0; i < chunks.length; i++) {
     onProg?.(`가이드 핵심 규칙 추출 중… (${i + 1}/${chunks.length})`);
-    const r = await callClaudeJson(`당신은 SI 품질보증 전문가입니다. 아래 작성 가이드 문서(${category}: ${name})에서, AI가 요구사항 정의서·명세서 등 프로젝트 산출물을 작성할 때 반드시 준수해야 할 핵심 작성 규칙만 추출하세요.
-규칙: 산출물 작성에 직접 영향을 주는 것만(용어·표기 규칙, 필수 항목·문서 구조, 품질기준·측정기준, ID 부여·추적성, 준수해야 할 표준·규제 조항). 배경 설명·일반론 제외. 최대 12개, 각 60자 이내.
+    const r = await callClaudeJson(`당신은 품질보증 전문가입니다. ${prior}
+${ins ? `사용자 지시(무엇을 뽑을지·어떻게 쓸지 — 이 지시를 우선 따르되, 위 금지 사항은 지킨다): ${ins}\n` : ""}최대 12개, 각 60자 이내. 원문을 그대로 길게 옮기지 말고 규칙 문장으로 요약.
 JSON만 출력: {"rules":["규칙1","규칙2"]}
---- 가이드 원문 ---
+--- 원문 ---
 ${chunks[i]}`, 3000);
     (Array.isArray(r?.rules) ? r.rules : []).forEach(x => { const s = String(x || "").trim(); if (s) parts.push(s); });
   }
-  return [...new Set(parts)].map(s => "· " + s).join("\n").slice(0, 2000);
+  const body = [...new Set(parts)].map(s => "· " + s).join("\n").slice(0, 1600);
+  // 사용자 지시는 산출물 생성 때도 적용되도록 요약 앞에 함께 저장한다 (DB 스키마 변경 없음)
+  return ins ? `[적용 지시] ${ins}\n${body}` : body;
 }
 
 // ── 다중 파일 업로드 공용 헬퍼: txt·docx·xlsx 여러 개를 한 번에 텍스트로 추출 ──
@@ -8985,9 +9001,8 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
   const shown = showAll ? guides : visible;
   const [openPanel, setOpenPanel] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [gName, setGName] = useState("");
   const [gCat, setGCat] = useState(GUIDE_CATEGORIES[0]);
-  const [gText, setGText] = useState("");
+  const [gPrompt, setGPrompt] = useState("");   // 업로드 파일을 어떻게 쓸지 — 추출할 내용·적용 방법 (등록 시 추출과 생성 시 적용에 모두 쓰임)
   const [gFiles, setGFiles] = useState([]);   // 업로드된 가이드 파일들 [{name, text}]
   const [gDrag, setGDrag] = useState(false);  // 드래그앤드롭 하이라이트
   const [gBusy, setGBusy] = useState(false);
@@ -9007,7 +9022,6 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
     const { files, errors } = await readUploadFiles(fileArr);
     if (files.length) {
       setGFiles(prev => mergeUploadFiles(prev, files));
-      if (!gName.trim()) setGName(files[0].name.replace(/\.(txt|docx|xlsx)$/i, ""));
     }
     if (errors.length) setGErr(errors.join(" / "));
   }
@@ -9017,30 +9031,42 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
     await addGuideFiles(arr);
   }
 
+  // 가이드 이름 = 첫 파일명(확장자 제외) — 문서 코드(SY2101 등)가 있으면 적용 단계 자동 판정에도 쓰인다. 등록 후 ✎로 바꿀 수 있음
+  const autoName = gFiles.length ? gFiles[0].name.replace(/\.(txt|docx|xlsx)$/i, "") + (gFiles.length > 1 ? ` 외 ${gFiles.length - 1}건` : "") : "";
   async function register() {
-    if (!gName.trim()) { setGErr("가이드 이름을 입력해 주세요."); return; }
-    const combined = [gText.trim(), ...gFiles.map(f => `[파일: ${f.name}]\n${f.text}`)].filter(Boolean).join("\n\n");
-    if (combined.length < 50) { setGErr("가이드 내용을 50자 이상 입력하거나 파일을 업로드해 주세요."); return; }
+    if (!gFiles.length) { setGErr("가이드 파일을 업로드해 주세요 (txt·docx·xlsx — 웹·메일 내용은 .txt로 저장해 올리면 됩니다)."); return; }
+    const combined = gFiles.map(f => `[파일: ${f.name}]\n${f.text}`).join("\n\n");
+    if (combined.length < 50) { setGErr("파일에서 읽은 내용이 너무 짧습니다(50자 미만)."); return; }
     if (!gRights) { setGErr("자료 이용 권한 확인란에 체크해 주세요."); return; }
     setGBusy(true); setGErr(null);
     try {
-      const summary = await summarizeGuideText(gName.trim(), gCat, combined, setGProg);
+      const summary = await summarizeGuideText(autoName, gCat, combined, setGProg, gPrompt);
       if (!summary) throw new Error("가이드에서 작성 규칙을 추출하지 못했습니다. 내용을 확인해 주세요.");
       setGProg("가이드 저장 중…");
       const r = await fetch("/api/writing-guides", {
         method:"POST", headers:{ "Content-Type":"application/json" },
         // 저작권 보호: 가이드 원문은 서버에 보내지 않고, AI가 추출한 작성 규칙 요약만 저장한다
-        body: JSON.stringify({ name: gName.trim(), category: gCat, summary, rightsConfirmed: true, scope: defaultScope }),
+        body: JSON.stringify({ name: autoName.slice(0, 120), category: gCat, summary, rightsConfirmed: true, scope: defaultScope }),
       });
       const created = await r.json().catch(() => null);
       if (!r.ok || !created?.id) throw new Error(created?.error || `저장 실패 (status ${r.status})`);
       setGuides(gs => [...gs, created]);
       setSel(s => ({ ...s, [created.id]: true }));
-      setGName(""); setGText(""); setGFiles([]); setGCat(GUIDE_CATEGORIES[0]); setGRights(false); setAdding(false);
+      setGPrompt(""); setGFiles([]); setGCat(GUIDE_CATEGORIES[0]); setGRights(false); setAdding(false);
     } catch (e) { setGErr("가이드 등록 실패: " + e.message); }
     setGBusy(false); setGProg("");
   }
 
+  async function rename(g) {
+    const nm = window.prompt("가이드 이름 (문서 코드가 들어 있으면 적용 단계 자동 판정에 쓰입니다)", g.name);
+    if (nm === null || !nm.trim() || nm.trim() === g.name) return;
+    const name = nm.trim().slice(0, 120);
+    setGuides(gs => gs.map(x => x.id === g.id ? { ...x, name } : x));
+    try {
+      const r = await fetch("/api/writing-guides", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.id, name }) });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || `이름 저장 실패 (status ${r.status})`); }
+    } catch (e) { setGErr(e.message); }
+  }
   async function remove(g) {
     if (!window.confirm(`작성 가이드 "${g.name}"${josaEul(g.name)} 삭제할까요?\n(전역 라이브러리이므로 모든 프로젝트에서 제거됩니다)`)) return;
     try {
@@ -9073,6 +9099,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
                   <input type="checkbox" checked={here && !!sel[g.id]} disabled={disabled || !here} title={here ? "이번 AI 작성에 적용" : "이 단계에는 적용되지 않는 가이드"}
                     onChange={e=>setSel(s=>({ ...s, [g.id]: e.target.checked }))} style={{ cursor:"pointer" }} />
                   <span style={{ fontSize:11, fontWeight:600 }}>{g.name}</span>
+                  <button onClick={()=>rename(g)} disabled={disabled||gBusy} title="이름 바꾸기" style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:10.5, padding:0 }}>✎</button>
                   <span style={{ fontSize:9.5, color:T.accent, border:`1px solid ${T.accentDim}`, borderRadius:5, padding:"1px 6px" }}>{g.category}</span>
                   <select value={guideScopeOf(g)} onChange={e=>changeScope(g, e.target.value)} disabled={disabled}
                     title={"이 가이드를 어느 과제·단계의 AI 작성(및 QA 교차검토 3차 기준)에 적용할지 지정합니다. 서버에 저장되어 모든 사용자에게 같게 적용됩니다.\n공통 = 모든 과제·단계 / 일반 SI = 정보공학 요구정의·명세 / 자동차 = 해당 ASPICE 프로세스"}
@@ -9092,15 +9119,24 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
             <div onDragOver={e=>{ e.preventDefault(); if (!gBusy) setGDrag(true); }} onDragLeave={()=>setGDrag(false)}
               onDrop={e=>{ e.preventDefault(); setGDrag(false); addGuideFiles(Array.from(e.dataTransfer.files || [])); }}
               style={{ border:`1px dashed ${gDrag ? T.accent : T.border}`, borderRadius:8, padding:10, background: gDrag ? T.accent+"14" : "transparent" }}>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", gap:6, marginBottom:6 }}>
-                <input value={gName} onChange={e=>setGName(e.target.value)} placeholder={aspice ? `가이드 이름 (예: ${proc} ${ASPICE_PROC_SHORT[proc] || ""} 작성가이드) — 등록 시 적용 대상: ${GUIDE_SCOPE_LABEL[defaultScope]}` : "가이드 이름 (예: RD1202 - 요구사항정의서_작성가이드)"} disabled={gBusy} style={inp} />
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", gap:6, marginBottom:6, alignItems:"center" }}>
+                <div style={{ fontSize:10.5, color:T.muted }}>
+                  ① 파일을 올리고(아래 📎 또는 이 영역에 끌어다 놓기) ② 분류를 고른 뒤 ③ 파일을 어떻게 쓸지 적어 주세요.
+                  {" "}가이드 이름: <b style={{ color: autoName ? T.text : T.muted }}>{autoName || "첫 파일명으로 자동"}</b>{aspice ? ` · 적용 대상: ${GUIDE_SCOPE_LABEL[defaultScope]}` : ""}
+                </div>
                 <select value={gCat} onChange={e=>setGCat(e.target.value)} disabled={gBusy} style={inp}>
                   {GUIDE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
-              <textarea value={gText} onChange={e=>setGText(e.target.value)} disabled={gBusy}
-                placeholder="가이드 내용 붙여넣기, 파일 업로드 또는 이 영역에 파일 드래그앤드롭(여러 개 가능) — 등록 시 AI가 핵심 작성 규칙만 추출해 저장하며, 산출물 작성 시 해당 규칙이 적용됩니다."
-                style={{ ...inp, minHeight:70, resize:"vertical", lineHeight:1.5, marginBottom:6 }} />
+              <textarea value={gPrompt} onChange={e=>setGPrompt(e.target.value.slice(0, 400))} disabled={gBusy}
+                placeholder={`업로드한 파일을 어떻게 사용해 산출물을 만들지 적어 주세요 (선택 · 400자 이내) — ${GUIDE_CAT_HELP[gCat] || ""}\n등록할 때 이 지시대로 파일에서 작성 규칙을 뽑고, 산출물을 만들 때도 이 지시를 함께 적용합니다.`}
+                style={{ ...inp, minHeight:62, resize:"vertical", lineHeight:1.5, marginBottom:4 }} />
+              <div style={{ fontSize:10, color:T.muted, marginBottom:6, lineHeight:1.5 }}>
+                ℹ 작성 가이드는 파일에서 <b>작성 방식(규칙)</b>만 뽑아 저장합니다 — 원문은 저장하지 않으므로 "내용을 그대로 가져와라" 같은 지시는 적용되지 않습니다.
+                {gCat === "기존 산출물" && (aspice
+                  ? <> 이전 과제의 요구·시험 <b>내용</b>을 재사용하려면 V-모델 하단 <b>⋯ 더보기 → 이전 과제에서 가져오기(REU.2)</b>를 쓰세요. 고객사명·제품명·수치는 뽑지 않습니다(비밀유지).</>
+                  : <> 고객사명·제품명·수치는 뽑지 않습니다(비밀유지).</>)}
+              </div>
               <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                 <label style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"5px 10px", border:`1px dashed ${T.border}`, borderRadius:7, cursor: gBusy?"default":"pointer", fontSize:10.5, color:T.muted }}>
                   📎 파일 업로드 (txt·docx·xlsx · 여러 개)
@@ -9818,10 +9854,185 @@ function AeFlags({ r }) {
   return f.length ? <span title={f.map(x => x.msg).join("\n")} style={{ fontSize: 9.5, color: T.amber, whiteSpace: "nowrap" }}>⚠ {f.length}</span> : <span style={{ fontSize: 9.5, color: T.green }}>✓</span>;
 }
 
+
+// ═══ 이전 과제에서 가져오기 — ASPICE REU.2 재사용 (2026-10-23) ═══════════════════════
+// 다른 SPIDer 과제(서버) 또는 V-모델 백업 파일에서 요구·시험을 골라 이 과제로 복사한다.
+//  · 모두 이 과제 기준의 새 ID로 다시 채번 — 원래 ID는 reuse.fromId로 남김(재사용 증적)
+//  · 함께 가져온 항목끼리의 연결(고객 요구 → 시스템 요구 → SW·HW 요구 → 시험)은 새 ID로 다시 잇고, 함께 오지 않은 상위 연결은 끊어 '재지정 필요'로 표시
+//  · 요소·컴포넌트 할당과 설계(SWE.3·HWE.2)는 가져오지 않는다 — 구조가 다른 과제에 그대로 맞는다는 보장이 없으므로 새 과제에서 다시 할당
+//  · 가져온 항목은 모두 Draft·'검토 중'으로 시작하고 시험 결과는 비운다 (새 과제에서 다시 합의·검증)
+function reuseSource(srcReq) {
+  const m = AE.normalizeModel(srcReq?.aspice);
+  const items = (srcReq?.items || []).filter(it => it && it.id);
+  const stk = (srcReq?.stk?.items || []).filter(k => k && k.id);
+  return { m, items, stk,
+    groups: [
+      ["STK", "이해관계자 요구", stk.map(k => ({ id: k.id, label: k.title || String(k.text || "").slice(0, 60), sub: k.stakeholder || k.source || "" }))],
+      ["SYS", "시스템 요구", items.map(it => ({ id: it.id, label: it.name || "", sub: it.type || "", parents: it.stkIds || [] }))],
+      ["SW", "SW 요구", (m.reqs.SW || []).map(r => ({ id: r.id, label: r.title || "", sub: r.type || "", parents: r.parents || [] }))],
+      ["HW", "HW 요구", (m.reqs.HW || []).map(r => ({ id: r.id, label: r.title || "", sub: r.type || "", parents: r.parents || [] }))],
+    ] };
+}
+function applyReuse(baseReq, srcReq, sel, opts = {}, meta = {}) {
+  const src = reuseSource(srcReq);
+  const base = baseReq || {};
+  const bm = AE.normalizeModel(JSON.parse(JSON.stringify(base.aspice || null)));
+  const at = new Date().toISOString();
+  const mark = id => ({ from: meta.name || "", fromKey: meta.key || "", fromId: id, at });
+  const pick = lv => new Set(sel[lv] || []);
+  const notes = [];
+  // 1) 이해관계자 요구 — 새 과제에서 다시 합의
+  const baseStk = (base.stk?.items || []);
+  const stkSrc = src.stk.filter(k => pick("STK").has(k.id));
+  const stkNew = assignStkIds(stkSrc.map(k => ({ ...k, id: "", status: "검토 중", naReason: "", reuse: mark(k.id) })), { STK: Math.max(0, ...baseStk.map(k => Number((/^STK-?(\d{4})$/.exec(k.id) || [])[1] || 0)), Number(((base.idRegistry || {}).max || {}).STK || 0)) });
+  const stkMap = Object.fromEntries(stkSrc.map((k, i) => [k.id, stkNew[i].id]));
+  // 2) 시스템 요구 (확정 요구 목록) — 근거 고객 요구는 함께 가져온 것만 다시 연결
+  const sysSrc = src.items.filter(it => pick("SYS").has(it.id));
+  let sysCut = 0;
+  const sysNew = assignReqIds(sysSrc.map(it => { const ks = (it.stkIds || []).map(x => stkMap[x]).filter(Boolean); if ((it.stkIds || []).length > ks.length) sysCut++;
+    return { ...it, id: "", stkIds: ks, wbsNo: "공통", reuse: mark(it.id) }; }), reqIdFloor(base));
+  const sysMap = Object.fromEntries(sysSrc.map((it, i) => [it.id, sysNew[i].id]));
+  // V-모델 쪽 시스템 요구 속성(검증 방법·안전·검증 기준 수정 여부)은 새 ID로 미리 넣어 두면 동기화 때 그대로 이어받는다
+  const srcSysAttr = Object.fromEntries((src.m.reqs.SYS || []).map(r => [r.id, r]));
+  sysSrc.forEach(it => { const a = srcSysAttr[it.id]; if (a) bm.reqs.SYS.push({ ...a, id: sysMap[it.id], parents: (a.parents || []).map(x => stkMap[x]).filter(Boolean), status: "Draft", release: "" }); });
+  // 3) SW·HW 요구 — 개발 범위에 있는 레벨만
+  const lvMap = { SYS: sysMap };
+  const added = { SW: 0, HW: 0 }; let lowCut = 0;
+  ["SW", "HW"].forEach(lv => {
+    const want = (src.m.reqs[lv] || []).filter(r => pick(lv).has(r.id));
+    if (!want.length) return;
+    if (!bm.scope[lv]) { notes.push(`${lv} 요구 ${want.length}건은 이 과제의 개발 범위에 ${lv}가 없어 가져오지 않았습니다`); return; }
+    const map = {};
+    want.forEach(r => { const nid = AE.nextId(AE.REQ_PREFIX[lv], bm.reqs[lv]); map[r.id] = nid;
+      const ps = (r.parents || []).map(x => sysMap[x]).filter(Boolean); if ((r.parents || []).length > ps.length) lowCut++;
+      const { reuse: _x, ...rest } = r;
+      bm.reqs[lv].push({ ...rest, id: nid, parents: ps, origin: "manual", status: "Draft", release: "", reuse: mark(r.id) }); added[lv]++; });
+    lvMap[lv] = map;
+  });
+  // 4) 검증 시험 — 요구를 대상으로 하는 시험(SYS.5 · SWE.6 · HWE.4)만, 대상이 함께 온 것만
+  let nTest = 0;
+  if (opts.tests !== false) {
+    (src.m.tests || []).forEach(t => {
+      const tl = AE.TEST_LEVELS[t.level]; if (!tl || tl.targetKind !== "req" || !bm.scope[tl.level]) return;
+      const mp = lvMap[tl.level]; if (!mp) return;
+      const tg = (t.targets || []).map(x => mp[x]).filter(Boolean); if (!tg.length) return;
+      const { result: _r, resultLog: _l, ...rest } = t;
+      bm.tests.push({ ...rest, id: AE.nextId(tl.prefix, bm.tests.filter(x => x.level === t.level), 4), targets: tg, origin: "manual", reuse: mark(t.id) }); nTest++;
+    });
+  }
+  if (sysCut + lowCut) notes.push(`함께 가져오지 않은 상위 요구와의 연결 ${sysCut + lowCut}건은 끊었습니다 — 새 과제의 상위 요구로 다시 연결하세요`);
+  const log = { at, from: meta.name || "", fromKey: meta.key || "", counts: { STK: stkNew.length, SYS: sysNew.length, SW: added.SW, HW: added.HW, tests: nTest },
+    idMap: { ...Object.fromEntries(Object.entries(stkMap)), ...sysMap, ...(lvMap.SW || {}), ...(lvMap.HW || {}) } };
+  bm.reuseLog = [...(bm.reuseLog || []), log].slice(-50);
+  bm.updatedAt = at;
+  const allStk = [...baseStk, ...stkNew];
+  const allItems = [...(base.items || []), ...sysNew];
+  const req = { ...base, items: allItems, aspice: bm,
+    ...(allStk.length ? { stk: { ...(base.stk || {}), items: allStk, updatedAt: at } } : {}),
+    idRegistry: nextIdRegistry({ ...base, items: [...(base.items || []), ...baseStk] }, [...allItems, ...allStk]) };
+  return { req, log, notes };
+}
+
+// 이전 과제 고르기·항목 선택 창
+function ReuseDialog({ onClose, onApply, form, busy }) {
+  const [list, setList] = useState(null);         // 서버 과제 목록
+  const [err, setErr] = useState(null);
+  const [srcKey, setSrcKey] = useState("");
+  const [src, setSrc] = useState(null);           // { name, key, req }
+  const [loading, setLoading] = useState(false);
+  const [grp, setGrp] = useState("SYS");
+  const [sel, setSel] = useState({ STK: [], SYS: [], SW: [], HW: [] });
+  const [q, setQ] = useState("");
+  const [withTests, setWithTests] = useState(true);
+  const fileRef = useRef(null);
+  useEffect(() => { fetch("/api/projects").then(r => r.json()).then(d => setList((Array.isArray(d) ? d : []).filter(p => p.tailoring?.track === "aspice" && (p.tailoring?.requirements?.aspice || p.tailoring?.requirementsBlob?.path) && !(p.name === form?.name && p.client === form?.client)))).catch(e => setErr(e.message)); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  async function loadProject(id) {
+    setSrcKey(id); setSrc(null); setErr(null); if (!id) return;
+    const p = (list || []).find(x => x.id === id); if (!p) return;
+    setLoading(true);
+    try { const h = await hydrateProjectRequirements(p); setSrc({ name: `${p.name} (${p.client || "-"})`, key: `project:${p.id}`, req: h.tailoring?.requirements || null }); setSel({ STK: [], SYS: [], SW: [], HW: [] }); }
+    catch (e) { setErr("과제 데이터를 불러오지 못했습니다: " + e.message); }
+    setLoading(false);
+  }
+  async function loadFile(f) {
+    if (!f) return; setErr(null);
+    try { const b = parseVmodelBackup(await f.text()); setSrcKey(""); setSrc({ name: `${b.project?.name || f.name} (백업 파일)`, key: `backup:${f.name}`, req: b.requirements }); setSel({ STK: [], SYS: [], SW: [], HW: [] }); }
+    catch (e) { setErr("백업 파일을 읽지 못했습니다: " + e.message); }
+  }
+  const S = src?.req ? reuseSource(src.req) : null;
+  const G = S ? Object.fromEntries(S.groups.map(([k, l, rows]) => [k, { label: l, rows }])) : {};
+  const rows = S ? (G[grp]?.rows || []).filter(r => !q.trim() || `${r.id} ${r.label} ${r.sub}`.toLowerCase().includes(q.trim().toLowerCase())) : [];
+  const toggle = (lv, id) => setSel(s0 => { const set = new Set(s0[lv]); set.has(id) ? set.delete(id) : set.add(id); return { ...s0, [lv]: [...set] }; });
+  const setAll = (lv, ids, on) => setSel(s0 => { const set = new Set(s0[lv]); ids.forEach(id => on ? set.add(id) : set.delete(id)); return { ...s0, [lv]: [...set] }; });
+  // 선택한 하위 요구의 상위(시스템 요구 → 고객 요구)도 함께 선택 — 연결이 끊기지 않게
+  function addParents() {
+    if (!S) return;
+    setSel(s0 => {
+      const sys = new Set(s0.SYS), stk = new Set(s0.STK);
+      ["SW", "HW"].forEach(lv => (G[lv]?.rows || []).filter(r => s0[lv].includes(r.id)).forEach(r => (r.parents || []).forEach(p => sys.add(p))));
+      (G.SYS?.rows || []).filter(r => sys.has(r.id)).forEach(r => (r.parents || []).forEach(p => stk.add(p)));
+      return { ...s0, SYS: [...sys], STK: [...stk] };
+    });
+  }
+  const total = sel.STK.length + sel.SYS.length + sel.SW.length + sel.HW.length;
+  const inp = { padding: "5px 8px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 11.5, fontFamily: "inherit" };
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1300, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, width: "min(960px, 100%)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>♻ 이전 과제에서 가져오기 <span style={{ fontSize: 11, color: T.accent, fontWeight: 400 }}>ASPICE REU.2 재사용</span></div>
+          <div style={{ fontSize: 11, color: T.muted, marginTop: 4, lineHeight: 1.6 }}>고른 요구·시험을 이 과제의 <b>새 ID</b>로 복사합니다(원래 ID는 재사용 기록에 남음). 함께 가져온 항목끼리의 연결은 다시 잇고, 요소·컴포넌트 할당과 설계는 가져오지 않습니다. 가져온 항목은 모두 <b>Draft·검토 중</b>으로 시작하고 시험 결과는 비웁니다.
+            <span style={{ color: T.amber }}> 다른 고객사 과제에서 가져오면 고객명·제품명·수치가 남을 수 있으니 비밀유지 범위를 확인하세요.</span></div>
+        </div>
+        <div style={{ padding: "10px 16px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", borderBottom: `1px solid ${T.border}` }}>
+          <span style={{ fontSize: 11.5, fontWeight: 600 }}>가져올 과제</span>
+          <select value={srcKey} onChange={e => loadProject(e.target.value)} disabled={loading || busy} style={{ ...inp, minWidth: 320 }}>
+            <option value="">{list === null ? "서버 과제 목록 불러오는 중…" : `서버에 저장된 ASPICE 과제 선택 (${list.length}건)`}</option>
+            {(list || []).map(p => <option key={p.id} value={p.id}>{p.name} · {p.client || "-"} · {p.tailoring?.savedBy?.at ? new Date(p.tailoring.savedBy.at).toLocaleDateString("ko-KR") : p.created_at ? new Date(p.created_at).toLocaleDateString("ko-KR") : ""}</option>)}
+          </select>
+          <span style={{ fontSize: 11, color: T.muted }}>또는</span>
+          <Btn variant="outline" onClick={() => fileRef.current && fileRef.current.click()} disabled={loading || busy} style={{ fontSize: 11, padding: "5px 10px" }}>📂 백업 파일(.json)</Btn>
+          <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; loadFile(f); }} />
+          {loading && <span style={{ fontSize: 11, color: T.amber }}>⏳ 불러오는 중…</span>}
+          {src && <span style={{ fontSize: 11, color: T.green }}>✓ {src.name}</span>}
+        </div>
+        {err && <div style={{ padding: "6px 16px", color: T.red, fontSize: 11.5 }}>{err}</div>}
+        {S && (<>
+          <div style={{ padding: "8px 16px", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {S.groups.map(([k, l, rs]) => <button key={k} onClick={() => setGrp(k)} style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${grp === k ? T.accent : T.border}`, background: grp === k ? T.accentDim : "transparent", color: T.text }}>{l} <b>{sel[k].length}</b>/{rs.length}</button>)}
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="ID·제목 검색" style={{ ...inp, marginLeft: "auto", width: 200 }} />
+          </div>
+          <div style={{ padding: "0 16px 6px", display: "flex", gap: 10, fontSize: 11 }}>
+            <button onClick={() => setAll(grp, rows.map(r => r.id), true)} style={{ background: "none", border: "none", color: T.accent, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>보이는 항목 모두 선택</button>
+            <button onClick={() => setAll(grp, rows.map(r => r.id), false)} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>선택 해제</button>
+            <button onClick={addParents} title="선택한 SW·HW 요구의 상위 시스템 요구와, 그 시스템 요구의 근거 고객 요구를 함께 선택합니다" style={{ background: "none", border: "none", color: T.accent, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>선택한 요구의 상위 요구도 선택</button>
+          </div>
+          <div style={{ flex: 1, overflowY: "auto", padding: "0 16px", minHeight: 160 }}>
+            {!rows.length && <div style={{ fontSize: 11.5, color: T.muted, padding: 12 }}>이 과제에 해당 항목이 없습니다.</div>}
+            {rows.map(r => <label key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 6px", borderBottom: `1px solid ${T.border}`, fontSize: 11.5, cursor: "pointer" }}>
+              <input type="checkbox" checked={sel[grp].includes(r.id)} onChange={() => toggle(grp, r.id)} />
+              <span style={{ fontFamily: "monospace", color: T.accent, minWidth: 82 }}>{r.id}</span>
+              <span style={{ flex: 1 }}>{r.label}</span>
+              {r.sub && <span style={{ fontSize: 10, color: T.muted }}>{r.sub}</span>}
+              {(r.parents || []).length > 0 && <span style={{ fontSize: 10, color: T.muted }}>↑ {(r.parents || []).slice(0, 3).join(", ")}{r.parents.length > 3 ? " …" : ""}</span>}
+            </label>)}
+          </div>
+        </>)}
+        <div style={{ padding: "10px 16px", borderTop: `1px solid ${T.border}`, display: "flex", gap: 8, alignItems: "center" }}>
+          <label style={{ fontSize: 11.5, display: "inline-flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={withTests} onChange={e => setWithTests(e.target.checked)} /> 가져온 요구의 검증 시험(SYS.5·SWE.6·HWE.4)도 함께</label>
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 11.5, color: T.muted }}>선택 {total}건</span>
+          <Btn variant="outline" onClick={onClose} style={{ fontSize: 12, padding: "6px 14px" }}>닫기</Btn>
+          <Btn onClick={() => onApply(src, sel, { tests: withTests })} disabled={!S || !total || busy} style={{ fontSize: 12, padding: "6px 14px" }}>♻ {total}건 가져오기</Btn>
+        </div>
+      </div>
+    </div>, document.body);
+}
 function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequirements, ossp, initTab, tailoring }) {
   const draftSt = useDraftStatus();   // 브라우저 임시저장(IndexedDB) 실제 기록 결과
   const srvSt = useServerStatus();    // 서버(팀 공유) 저장 결과
   const [moreOpen, setMoreOpen] = useState(false);   // 하단 '⋯ 더보기' 메뉴 (백업·되돌리기)
+  const [reuseOpen, setReuseOpen] = useState(false); // 이전 과제에서 가져오기 (REU.2)
   const [items, setItems] = useState(() => (requirements?.items || []).map(x => ({ ...x })));
   const [model, setModel] = useState(() => {
     // 기존 연결의 기준선을 현재 저장본 내용으로 먼저 등록한 뒤 확정 요구로 동기화 (변경 감지)
@@ -10785,6 +10996,22 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
     } catch (x) { setErr("백업 내보내기 실패: " + x.message); }
   }
   const bakInputRef = useRef(null);
+  // 이전 과제에서 가져오기 — 지금 편집 내용을 기준으로 합친 뒤 저장하고 창을 새 데이터로 다시 구성
+  function applyReuseImport(src, sel, opts) {
+    if (reqDirty) { setErr("SYS.1·SYS.2에서 아직 확정하지 않은 요구 편집이 있습니다 — [확정·V-모델 반영] 후에 가져오세요."); return; }
+    try {
+      const { req: base } = buildSaveOut();
+      const { req, log, notes } = applyReuse(base, src.req, sel, opts, { name: src.name, key: src.key });
+      const c = log.counts;
+      const msg = `「${src.name}」에서 가져옵니다.\n\n· 이해관계자 요구 ${c.STK} · 시스템 요구 ${c.SYS} · SW 요구 ${c.SW} · HW 요구 ${c.HW} · 검증 시험 ${c.tests}\n· 모두 새 ID로 채번, Draft·검토 중 상태로 추가${notes.length ? "\n\n" + notes.map(n => "· " + n).join("\n") : ""}\n\n계속할까요?`;
+      if (!window.confirm(msg)) return;
+      try { localStorage.removeItem(reqDraftKey); } catch (_) {}
+      setReqDraft(null);
+      setRequirements(req);
+      setReuseOpen(false);
+      if (onReload) onReload();
+    } catch (x) { setErr("가져오기 실패: " + x.message); }
+  }
   async function importBackup(file) {
     if (!file) return;
     try {
@@ -12496,8 +12723,9 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               {moreOpen && <>
                 <div onClick={() => setMoreOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 20 }} />
                 <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 6px)", zIndex: 21, width: 330, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, padding: 6, boxShadow: "0 8px 24px rgba(0,0,0,0.45)" }}>
-                  <div style={{ fontSize: 10, color: T.muted, padding: "4px 8px 6px" }}>작업 데이터 (SPIDer 복원용 — 고객 제출용 아님)</div>
+                  <div style={{ fontSize: 10, color: T.muted, padding: "4px 8px 6px" }}>작업 데이터 (재사용·복원용 — 고객 제출용 아님)</div>
                   {[
+                    ["♻ 이전 과제에서 가져오기 (REU.2)", "다른 SPIDer 과제나 백업 파일의 요구·시험을 골라 새 ID로 복사합니다. 파생 개발·유사 과제의 재사용용입니다.", () => { setMoreOpen(false); setReuseOpen(true); }, busy],
                     ["💾 작업 데이터 백업 파일 받기 (.json)", "지금 V-모델 전체(요구·설계·코드·회로·시험·검토 판정)를 파일로 받아 둡니다. 서버 저장이 안 될 때의 비상용입니다.", () => { setMoreOpen(false); exportBackup(); }, busy || !model.reqs.SYS.length],
                     ["📂 백업 파일에서 되돌리기", "백업 파일(또는 산출물 ZIP 안의 99_SPIDer_V모델_백업.json)의 시점으로 V-모델을 바꿉니다. 확인 후 진행합니다.", () => { setMoreOpen(false); bakInputRef.current && bakInputRef.current.click(); }, busy],
                   ].map(([label, desc, fn, dis]) => (
@@ -12510,6 +12738,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               </>}
             </div>
             <input ref={bakInputRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; importBackup(f); }} />
+            {reuseOpen && <ReuseDialog onClose={() => setReuseOpen(false)} onApply={applyReuseImport} form={form} busy={busy} />}
             <Btn variant="outline" onClick={requestClose} style={{ fontSize: 12, padding: "7px 14px" }}>닫기</Btn>
             <Btn onClick={() => save()} disabled={busy} title="이 PC와 서버에 저장해 같은 프로젝트의 팀원과 공유합니다. 창은 닫히지 않습니다." style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
           </div>
