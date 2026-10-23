@@ -11323,8 +11323,72 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, marginBottom: 2 }}>{activeProc ? `${activeProc.id === "TRACE" || activeProc.id === "ARTIFACTS" ? "" : activeProc.id + " "}${activeProc.short}` : AE_TABS.find(t => t[0] === tab)?.[1]} — 이 단계에서 할 일</div>
                     <div style={{ color: T.muted, marginBottom: 6 }}>{AE_GUIDE[tab].why}</div>
+                    {tab === "review" ? (() => {
+                      // SUP.1 교차검토 작업 순서 표시줄 — 선택한 산출물의 '다음 할 일'(ai → judge → fix)과 같은 규칙으로 현재 단계를 표시
+                      const S = AE.reviewScope(rvLevel) || AE.reviewScope("SYS");
+                      const noun = AE.REVIEW_KINDS[S.kind]?.noun || "항목";
+                      const cnt = AE.reviewView(model).count(rvLevel);
+                      const changedN = rvSel ? AE.reviewTargets(model, rvLevel, "changed", rvSel.id).length : AE.reviewItems(model, rvLevel).length;
+                      const fixN = AE.fixQueueTargets(model, rvLevel).length;
+                      const next = changedN ? "ai" : cnt.open ? "judge" : fixN ? "fix" : null;
+                      const errN = findings.filter(f => f.sev === "error").length;
+                      const steps = [
+                        { k: "sel", t: "대상 선택", d: "현황표에서 산출물 고르기" },
+                        { k: "rule", t: "① 규칙 검사", d: "AI 없이 오류 0" },
+                        { k: "ai", t: "② 검토 AI", d: "미검토·변경분 검토" },
+                        { k: "judge", t: "③ 사람 판정", d: "맞음 · 틀림(사유) · 보류" },
+                        { k: "fix", t: "④ 수정안", d: "'맞음'만 고쳐 승인" },
+                        { k: "rev", t: "Reviewed", d: "빠진 곳 점검에서 상태 올리기" },
+                      ];
+                      const cur = { ai: 2, judge: 3, fix: 4 }[next] ?? 5;
+                      const pill = { 2: `검토할 ${noun} ${changedN}건`, 3: `미판정 ${cnt.open}건`, 4: `고칠 ${noun} ${fixN}건`, 5: "이 산출물 완료" }[cur];
+                      const scrollTo = id => setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 30);
+                      const go = k => { if (k === "rev") { goProc("TRACE"); return; } if (k === "sel") { scrollTo("rv-cov"); return; } setRvStepOpen(k); scrollTo(`rv-${k}`); };
+                      const X = i => 50 + i * 100, Y = 62;
+                      const stateOf = i => i === 1 && errN ? "warn" : i < cur ? "done" : i === cur ? "now" : "todo";
+                      const nodeTitle = i => `${steps[i].t} — ${steps[i].d}${i === 1 && errN ? ` (규칙 오류 ${errN}건)` : ""}`;
+                      return (
+                        <div style={{ margin: "4px 0 2px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, fontSize: 10.5, color: T.muted, maxWidth: 780 }}>
+                            <span>교차검토 작업 순서</span>
+                            <span>{S.label} · <span style={{ color: T.accent }}>{cur + 1} / {steps.length} 단계</span></span>
+                          </div>
+                          <div style={{ maxWidth: 780 }}>
+                            <svg viewBox="0 0 600 78" width="100%" role="img" aria-label={`교차검토 작업 순서 — 현재 ${steps[cur].t}`} style={{ display: "block", overflow: "visible" }}>
+                              <defs><marker id="ae-rv-ah" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L8 5L1 9" fill="none" stroke={T.muted} strokeWidth="1.6" strokeLinecap="round" /></marker></defs>
+                              <path d={`M${X(4)} ${Y - 12} C ${X(4)} 16, ${X(2)} 16, ${X(2)} ${Y - 22}`} fill="none" stroke={T.muted} strokeWidth="1" strokeDasharray="3 4" markerEnd="url(#ae-rv-ah)" />
+                              <text x={X(3)} y="11" textAnchor="middle" fontSize="10.5" fill={T.muted}>고친 뒤 재검토</text>
+                              <line x1={X(0)} y1={Y} x2={X(Math.min(cur, 5))} y2={Y} stroke={T.green} strokeWidth="2" />
+                              {cur < 5 && <line x1={X(cur)} y1={Y} x2={X(5)} y2={Y} stroke={T.muted + "66"} strokeWidth="2" />}
+                              {steps.map((s, i) => { const st = stateOf(i), x = X(i); return (
+                                <g key={s.k} onClick={() => go(s.k)} style={{ cursor: "pointer" }}><title>{nodeTitle(i)}</title>
+                                  {st === "done" && <><circle cx={x} cy={Y} r="10" fill={T.green} /><path d={`M${x - 4.5} ${Y + 0.2}l3 3 6-6.4`} fill="none" stroke={T.bg} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></>}
+                                  {st === "warn" && <><circle cx={x} cy={Y} r="10" fill={T.amber} /><text x={x} y={Y + 4} textAnchor="middle" fontSize="12" fontWeight="700" fill={T.bg}>!</text></>}
+                                  {st === "now" && <><circle cx={x} cy={Y} r="15" fill={T.accent + "2A"} /><circle cx={x} cy={Y} r="10" fill={T.surface} stroke={T.accent} strokeWidth="2" /><circle cx={x} cy={Y} r="4" fill={T.accent} /></>}
+                                  {st === "todo" && <><circle cx={x} cy={Y} r="10" fill={T.surface} stroke={T.muted} strokeWidth="1" />
+                                    {i === 5 ? <path d={`M${x - 3.5} ${Y + 5}V${Y - 4.5}h7l-1.8 2.4 1.8 2.4h-7`} fill="none" stroke={T.muted} strokeWidth="1.2" strokeLinejoin="round" />
+                                      : <text x={x} y={Y + 4} textAnchor="middle" fontSize="11" fill={T.muted}>{i}</text>}</>}
+                                </g>); })}
+                            </svg>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", textAlign: "center", marginTop: 4 }}>
+                              {steps.map((s, i) => { const st = stateOf(i); return (
+                                <button key={s.k} onClick={() => go(s.k)} title={nodeTitle(i)} style={{ background: "none", border: "none", padding: "0 3px", cursor: "pointer", fontFamily: "inherit", minWidth: 0 }}>
+                                  <div style={{ fontSize: 11.5, fontWeight: 700, color: st === "now" ? T.accent : st === "warn" ? T.amber : st === "done" ? T.text : T.muted }}>{s.t}</div>
+                                  <div style={{ fontSize: 10, lineHeight: 1.4, color: st === "now" ? T.accent : T.muted }}>{i === 1 && errN ? `규칙 오류 ${errN}건` : s.d}</div>
+                                  {st === "now" && <span style={{ display: "inline-block", marginTop: 4, fontSize: 10, padding: "1px 8px", borderRadius: 999, background: T.accent + "22", color: T.accent }}>{pill}</span>}
+                                </button>); })}
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.border}`, fontSize: 11, flexWrap: "wrap" }}>
+                            <span style={{ color: T.green }}>✓</span>
+                            <span style={{ color: T.muted }}>끝 기준 — 현황표의 모든 산출물이 <span style={{ color: T.text }}>검토됨 100% · 미판정 0</span>. 끝나면 '빠진 곳 점검'에서 [교차검토 끝난 요구 → Reviewed]로 상태를 올립니다.</span>
+                            <span style={{ flex: 1 }} />
+                            <button onClick={() => go(steps[cur].k)} style={{ ...small, padding: "2px 10px" }}>{cur < 5 ? `${steps[cur].t}로 이동 ↓` : "빠진 곳 점검으로 →"}</button>
+                          </div>
+                        </div>); })() : (<>
                     <ol style={{ margin: "0 0 6px 18px", padding: 0 }}>{AE_GUIDE[tab].todo.map((t, i) => <li key={i} style={{ marginBottom: 2 }}>{t}</li>)}</ol>
                     <div style={{ color: T.green, fontSize: 11 }}>✓ 끝났다고 보는 기준: {AE_GUIDE[tab].done}</div>
+                    </>)}
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
                     
@@ -11905,9 +11969,10 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
             const cell = { padding: "5px 6px", borderTop: `1px solid ${T.border}` };
             return (<>
               <div className="ae-hint" style={{ fontSize: 10.5, color: T.muted, marginBottom: 8, lineHeight: 1.6 }}>
-                <b style={{ color: T.text }}>3단 교차검토</b> — 생성한 V-모델 산출물 전부(요구·아키텍처·상세설계·검증 명세)를 대상으로 ① 규칙 엔진이 결정론적으로 점검하고, ② 생성 AI와 <b>다른</b> 검토 AI가 산출물 종류별 기준으로 의견을 내며(의견의 대상 ID·기준·근거 인용은 규칙으로 다시 검증), ③ QA 담당자가 유효·무효·의견으로 판정합니다. 심사 증적은 ③ 판정 기록입니다.
+                <b style={{ color: T.text }}>3단 교차검토</b> — 생성한 V-모델 산출물 전부(요구·아키텍처·상세설계·검증 명세)를 대상으로 ① 규칙 엔진이 결정론적으로 점검하고, ② 생성 AI와 <b>다른</b> 검토 AI가 산출물 종류별 기준으로 의견을 내며(의견의 대상 ID·기준·근거 인용은 규칙으로 다시 검증), ③ QA 담당자가 맞음·틀림·보류로 판정합니다. 심사 증적은 ③ 판정 기록입니다.
               </div>
 
+              <div id="rv-cov" />
               <AeSec title={`전체 산출물 현황 — ${cov.length}종 · 검토 대상 항목 ${totItems}건 중 현재 내용으로 검토 끝남 ${totAny}건 · 판정 기다리는 의견 ${totOpen}건 · 맞음 판정 의견 ${totValid}건`}
                 right={rvRunning
                   ? <button onClick={() => { rvStop.current = true; }} title="지금 보내고 있는 묶음이 끝나면 멈춥니다. 그때까지 받은 의견은 반영되고, 남은 항목은 '변경분 검토'로 이어서 할 수 있습니다" style={{ ...small, color: T.red, borderColor: T.red + "88" }}>■ 검토 중지</button>
@@ -12462,7 +12527,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                     <b style={{ color: T.green }}>영향 없음</b><span>하위를 고칠 필요가 없음 → 연결을 그대로 인정합니다. (예: 검증 기준만 추가됐고 하위 요구 내용과 어긋나지 않음)</span>
                     <b style={{ color: T.red }}>하위 수정 필요</b><span>하위를 고쳐야 함 → 무엇을 고칠지 의견을 적고 누릅니다. 고친 뒤 <b>수정 완료</b>를 누르면 연결이 인정됩니다. (예: 시험의 합격 기준을 새 검증 기준에 맞춰 수정)</span>
                   </div>
-                  <div style={{ marginTop: 4 }}>판정은 추적 매트릭스의 '변경 영향·판정 이력' 시트에 남습니다. QA 교차검토의 유효·무효(AI 의견이 맞는지)와는 다른 판정입니다.</div></div>}
+                  <div style={{ marginTop: 4 }}>판정은 추적 매트릭스의 '변경 영향·판정 이력' 시트에 남습니다. QA 교차검토의 맞음·틀림·보류(AI 의견이 맞는지)와는 다른 판정입니다.</div></div>}
                 {Object.entries(groups).map(([up, ls]) => {
                   const cur = lstat.reqById[up];
                   const sus = ls.filter(l => l.state === "suspect");
