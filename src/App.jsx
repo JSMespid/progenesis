@@ -1938,7 +1938,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       editing={!!editingId} saving={savingProject}
       onSaveDraft={saveDraft} onServerSave={() => serverSave({ explicit: true })} loadDrafts={loadDrafts} onRestoreDraft={async (id)=>{ if (await restoreDraft(id)) setWizardKey(k => k + 1); }} />,
     project_detail: <ProjectDetail project={currentProject} nav={nav} onDelete={deleteProject} onEdit={editProject} reqLoad={reqLoad} />,
-    ossp: <OSSPPage nav={navFromMenu} customOSSP={customOSSP} builtinOSSP={builtinOSSP} onAdd={addOSSP} onDelete={deleteOSSP} />,
+    ossp: <OSSPPage nav={navFromMenu} customOSSP={customOSSP} builtinOSSP={builtinOSSP} onAdd={addOSSP} onDelete={deleteOSSP} canEdit={role !== "viewer"} />,
     regulation: <LibraryPage nav={nav} kind="regulation"
       title="규제 (Regulation / Compliance)" subtitle="프로젝트가 준수해야 할 규제·컴플라이언스 자산"
       categories={["법령/규정","감독규정","인증/심사기준","보안/개인정보","산업표준","기타"]} />,
@@ -8996,9 +8996,7 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
   const aspice = track === "aspice";
   const defaultScope = aspice ? (ASPICE_PROC_IDS.includes(proc) ? `aspice:${proc}` : "aspice") : (proc === "derive" || proc === "spec" ? `si:${proc}` : "si");
   const visible = guides.filter(g => guideApplies(g, track, proc));
-  const hiddenN = guides.length - visible.length;
-  const [showAll, setShowAll] = useState(false);
-  const shown = showAll ? guides : visible;
+  const [openRule, setOpenRule] = useState({});   // 가이드별 '규칙 보기' 펼침
   const [openPanel, setOpenPanel] = useState(false);
   const [adding, setAdding] = useState(false);
   const [gCat, setGCat] = useState(GUIDE_CATEGORIES[0]);
@@ -9011,10 +9009,6 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
   const [gRights, setGRights] = useState(false);   // 자료 이용 권한 확인 (등록 필수)
   const inp = { width:"100%", padding:"5px 7px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text, fontSize:11, fontFamily:"inherit", boxSizing:"border-box" };
   const applied = visible.filter(g => sel[g.id]).length;
-  async function changeScope(g, scope) {
-    setGuides(gs => gs.map(x => x.id === g.id ? { ...x, scope } : x));
-    try { await saveGuideScope(g.id, scope); } catch (e) { setGErr(e.message); }
-  }
 
   async function addGuideFiles(fileArr) {
     if (gBusy) return;
@@ -9057,62 +9051,42 @@ function WritingGuidePanel({ guides, setGuides, sel, setSel, disabled, track = "
     setGBusy(false); setGProg("");
   }
 
-  async function rename(g) {
-    const nm = window.prompt("가이드 이름 (문서 코드가 들어 있으면 적용 단계 자동 판정에 쓰입니다)", g.name);
-    if (nm === null || !nm.trim() || nm.trim() === g.name) return;
-    const name = nm.trim().slice(0, 120);
-    setGuides(gs => gs.map(x => x.id === g.id ? { ...x, name } : x));
-    try {
-      const r = await fetch("/api/writing-guides", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.id, name }) });
-      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || `이름 저장 실패 (status ${r.status})`); }
-    } catch (e) { setGErr(e.message); }
-  }
-  async function remove(g) {
-    if (!window.confirm(`작성 가이드 "${g.name}"${josaEul(g.name)} 삭제할까요?\n(전역 라이브러리이므로 모든 프로젝트에서 제거됩니다)`)) return;
-    try {
-      const r = await fetch(`/api/writing-guides?id=${g.id}`, { method:"DELETE" });
-      if (!r.ok) throw new Error(`삭제 실패 (status ${r.status})`);
-      setGuides(gs => gs.filter(x => x.id !== g.id));
-      setSel(s => { const n = { ...s }; delete n[g.id]; return n; });
-    } catch (e) { setGErr(e.message); }
-  }
 
   return (
     <div style={{ border:`1px solid ${T.amber}44`, borderLeft:`3px solid ${T.amber}`, borderRadius:9, marginBottom:12, background:T.amber+"0A" }}>
       <div onClick={()=>setOpenPanel(o=>!o)} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 12px", cursor:"pointer" }}>
         <span style={{ fontSize:11.5, fontWeight:600, color:T.amber }}>📐 작성 가이드{aspice && ASPICE_PROC_IDS.includes(proc) ? ` — ${proc}` : ""}</span>
         <span style={{ fontSize:10.5, color: applied ? T.accent : T.muted }}>
-          {!guides.length ? "등록된 가이드 없음" : `이 단계 적용 ${applied}건${hiddenN ? ` · 다른 과제·단계용 ${hiddenN}건` : ""}`}
+          {!visible.length ? "이 단계 가이드 없음" : `이 단계 적용 ${applied}/${visible.length}건`}
         </span>
         <span className={hintClass} style={{ fontSize:10, color:T.muted }}>{aspice
-          ? "— 이 단계의 AI 작성에 적용되는 작성 가이드입니다. 여기서 등록하면 이 단계가 적용 대상이 되고, 적용 대상은 가이드별로 바꿀 수 있습니다 (라이브러리는 전역 공용)"
-          : "— 방법론 작성가이드·글로벌 표준(PMBOK®·CMMI)·규제를 등록하면 AI가 준수하여 작성합니다 (전역 공용 · 적용 대상은 가이드별 지정)"}</span>
+          ? "— 체크한 가이드를 이 단계 AI 작성에 적용합니다. 여기서 등록하면 이 단계에 적용됩니다 (적용 대상 변경·이름·삭제는 OSSP 라이브러리 → 작성 가이드)"
+          : "— 체크한 가이드를 AI 작성에 적용합니다 (적용 대상 변경·이름·삭제는 OSSP 라이브러리 → 작성 가이드)"}</span>
         <div style={{ flex:1 }} />
         <span style={{ fontSize:10, color:T.muted }}>{openPanel ? "▲" : "▼"}</span>
       </div>
       {openPanel && (
         <div style={{ padding:"0 12px 10px" }}>
-          {shown.length > 0 && (
+          {visible.length > 0 && (
             <div style={{ display:"flex", flexDirection:"column", gap:4, marginBottom:8 }}>
-              {shown.map(g => { const here = guideApplies(g, track, proc); return (
-                <div key={g.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 8px", border:`1px solid ${T.border}`, borderRadius:7, background:T.surface, opacity: here ? 1 : .55 }}>
-                  <input type="checkbox" checked={here && !!sel[g.id]} disabled={disabled || !here} title={here ? "이번 AI 작성에 적용" : "이 단계에는 적용되지 않는 가이드"}
-                    onChange={e=>setSel(s=>({ ...s, [g.id]: e.target.checked }))} style={{ cursor:"pointer" }} />
-                  <span style={{ fontSize:11, fontWeight:600 }}>{g.name}</span>
-                  <button onClick={()=>rename(g)} disabled={disabled||gBusy} title="이름 바꾸기" style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:10.5, padding:0 }}>✎</button>
-                  <span style={{ fontSize:9.5, color:T.accent, border:`1px solid ${T.accentDim}`, borderRadius:5, padding:"1px 6px" }}>{g.category}</span>
-                  <select value={guideScopeOf(g)} onChange={e=>changeScope(g, e.target.value)} disabled={disabled}
-                    title={"이 가이드를 어느 과제·단계의 AI 작성(및 QA 교차검토 3차 기준)에 적용할지 지정합니다. 서버에 저장되어 모든 사용자에게 같게 적용됩니다.\n공통 = 모든 과제·단계 / 일반 SI = 정보공학 요구정의·명세 / 자동차 = 해당 ASPICE 프로세스"}
-                    style={{ fontSize:9.5, padding:"1px 4px", background:T.bg, border:`1px solid ${T.amber}66`, borderRadius:5, color: here ? T.amber : T.muted, fontFamily:"inherit", cursor:"pointer", maxWidth:200 }}>
-                    {GUIDE_SCOPES.map(([v, l]) => <option key={v} value={v}>{l}{!g.scope && v === guideDefaultScope(g) ? " (자동)" : ""}</option>)}
-                  </select>
-                  <span title={g.summary} style={{ fontSize:10, color:T.muted, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{String(g.summary||"").replace(/\n/g," ")}</span>
-                  <button onClick={()=>remove(g)} disabled={disabled||gBusy} title="삭제" style={{ background:"none", border:"none", color:T.red, cursor:"pointer", fontSize:11 }}>✕</button>
+              {visible.map(g => { const op = !!openRule[g.id]; const lines = String(g.summary || "").split("\n").map(x => x.trim()).filter(Boolean); return (
+                <div key={g.id} style={{ border:`1px solid ${T.border}`, borderRadius:7, background:T.surface }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 8px" }}>
+                    <input type="checkbox" checked={!!sel[g.id]} disabled={disabled} title="이번 AI 작성에 적용"
+                      onChange={e=>setSel(s=>({ ...s, [g.id]: e.target.checked }))} style={{ cursor:"pointer" }} />
+                    <span style={{ fontSize:11, fontWeight:600 }}>{g.name}</span>
+                    <span style={{ fontSize:9.5, color:T.accent, border:`1px solid ${T.accentDim}`, borderRadius:5, padding:"1px 6px" }}>{g.category}</span>
+                    <div style={{ flex:1 }} />
+                    <button onClick={()=>setOpenRule(o=>({ ...o, [g.id]: !op }))} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:10.5, fontFamily:"inherit" }}>{op ? "▾ 규칙 접기" : `▸ 규칙 보기 (${lines.length})`}</button>
+                  </div>
+                  {op && <div style={{ padding:"0 12px 8px 30px", fontSize:10.5, color:T.text, lineHeight:1.6 }}>
+                    {lines.map((l, i) => <div key={i} style={{ color: l.startsWith("[적용 지시]") ? T.amber : T.text }}>{l}</div>)}
+                    <div style={{ color:T.muted, marginTop:4 }}>적용 대상: {GUIDE_SCOPE_LABEL[guideScopeOf(g)] || guideScopeOf(g)} — 바꾸려면 OSSP 라이브러리 → 작성 가이드</div>
+                  </div>}
                 </div>
               ); })}
             </div>
           )}
-          {hiddenN > 0 && <div style={{ marginBottom:8 }}><button onClick={()=>setShowAll(v=>!v)} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:10.5, padding:0, fontFamily:"inherit", textDecoration:"underline" }}>{showAll ? "이 단계 가이드만 보기" : `다른 과제·단계용 가이드 ${hiddenN}건 보기`}</button></div>}
           {!adding ? (
             <button onClick={()=>setAdding(true)} disabled={disabled} style={{ background:"none", border:`1px dashed ${T.border}`, borderRadius:7, color:T.accent, cursor:"pointer", fontSize:11, padding:"5px 12px", fontFamily:"inherit" }}>＋ 가이드 등록</button>
           ) : (
@@ -13974,7 +13948,81 @@ function LibraryPage({ nav, kind, title, subtitle, categories }) {
   );
 }
 
-function OSSPPage({ nav, customOSSP=[], builtinOSSP=[], onAdd, onDelete }) {
+
+// ── 작성 가이드 관리 (OSSP 라이브러리 → 작성 가이드 탭) — 전체 목록·적용 대상·이름·규칙·삭제를 한 곳에서 ──
+// 각 단계 작성 화면은 '고르기·등록'만 하고, 고치기·지우기는 여기서만 한다 (전역 라이브러리라 잘못 지우면 모든 과제에서 사라지므로)
+function WritingGuideLibrary({ canEdit = true }) {
+  const [guides, setGuides] = useState(null);
+  const [err, setErr] = useState(null);
+  const [open, setOpen] = useState({});
+  const [q, setQ] = useState("");
+  useEffect(() => { fetchWritingGuides().then(setGuides).catch(e => { setErr(e.message); setGuides([]); }); }, []);
+  async function patch(g, body, local) {
+    setErr(null);
+    setGuides(gs => gs.map(x => x.id === g.id ? { ...x, ...local } : x));
+    try {
+      const r = await fetch("/api/writing-guides", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.id, ...body }) });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || `저장 실패 (status ${r.status})`); }
+    } catch (e) { setErr(e.message); }
+  }
+  function rename(g) {
+    const nm = window.prompt("가이드 이름 (문서 코드가 들어 있으면 적용 단계 자동 판정에 쓰입니다)", g.name);
+    if (nm === null || !nm.trim() || nm.trim() === g.name) return;
+    const name = nm.trim().slice(0, 120); patch(g, { name }, { name });
+  }
+  async function remove(g) {
+    if (!window.confirm(`작성 가이드 "${g.name}"${josaEul(g.name)} 삭제할까요?\n(전역 라이브러리이므로 모든 과제에서 제거됩니다)`)) return;
+    try {
+      const r = await fetch(`/api/writing-guides?id=${g.id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(`삭제 실패 (status ${r.status})`);
+      setGuides(gs => gs.filter(x => x.id !== g.id));
+    } catch (e) { setErr(e.message); }
+  }
+  if (guides === null) return <Card style={{ padding: 16, fontSize: 12, color: T.muted }}>작성 가이드 불러오는 중…</Card>;
+  const list = guides.filter(g => !q.trim() || `${g.name} ${g.category} ${g.summary}`.toLowerCase().includes(q.trim().toLowerCase()));
+  const order = GUIDE_SCOPES.map(([v]) => v);
+  const groups = order.map(v => [v, list.filter(g => guideScopeOf(g) === v)]).filter(([, gs]) => gs.length);
+  return (
+    <Card style={{ padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>📐 작성 가이드 <span style={{ fontSize: 12, color: T.muted, fontWeight: 400 }}>{guides.length}건 · 전역 공용</span></div>
+        <div style={{ flex: 1 }} />
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="이름·분류·규칙 검색" style={{ padding: "5px 8px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 11.5, fontFamily: "inherit", width: 200 }} />
+      </div>
+      <div style={{ fontSize: 11, color: T.muted, marginBottom: 12, lineHeight: 1.6 }}>등록은 각 단계 작성 화면(V-모델 탭·요구사항 작성)에서 하고, 여기서는 적용 대상·이름을 고치거나 삭제합니다. 적용 대상을 바꾸면 그 단계 작성 화면에 나타납니다.</div>
+      {err && <div style={{ color: T.red, fontSize: 11.5, marginBottom: 8 }}>{err}</div>}
+      {!groups.length && <div style={{ fontSize: 12, color: T.muted }}>{guides.length ? "검색 결과가 없습니다." : "등록된 작성 가이드가 없습니다."}</div>}
+      {groups.map(([v, gs]) => (
+        <div key={v} style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: T.amber, marginBottom: 4 }}>{GUIDE_SCOPE_LABEL[v]} <span style={{ color: T.muted, fontWeight: 400 }}>{gs.length}건</span></div>
+          {gs.map(g => { const op = !!open[g.id]; const lines = String(g.summary || "").split("\n").map(x => x.trim()).filter(Boolean); return (
+            <div key={g.id} style={{ border: `1px solid ${T.border}`, borderRadius: 7, background: T.surface, marginBottom: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px" }}>
+                <span style={{ fontSize: 11.5, fontWeight: 600 }}>{g.name}</span>
+                {canEdit && <button onClick={() => rename(g)} title="이름 바꾸기" style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 11, padding: 0 }}>✎</button>}
+                <span style={{ fontSize: 9.5, color: T.accent, border: `1px solid ${T.accentDim}`, borderRadius: 5, padding: "1px 6px" }}>{g.category}</span>
+                <div style={{ flex: 1 }} />
+                <select value={guideScopeOf(g)} disabled={!canEdit} onChange={e => patch(g, { scope: e.target.value }, { scope: e.target.value })} title="이 가이드를 어느 과제·단계의 AI 작성(및 QA 교차검토 3차 기준)에 적용할지"
+                  style={{ fontSize: 10.5, padding: "2px 6px", background: T.bg, border: `1px solid ${T.amber}66`, borderRadius: 5, color: T.amber, fontFamily: "inherit", maxWidth: 230 }}>
+                  {GUIDE_SCOPES.map(([sv, l]) => <option key={sv} value={sv}>{l}{!g.scope && sv === guideDefaultScope(g) ? " (자동)" : ""}</option>)}
+                </select>
+                <button onClick={() => setOpen(o => ({ ...o, [g.id]: !op }))} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 10.5, fontFamily: "inherit" }}>{op ? "▾ 접기" : `▸ 규칙 ${lines.length}`}</button>
+                {canEdit && <button onClick={() => remove(g)} title="삭제 (모든 과제에서 제거)" style={{ background: "none", border: "none", color: T.red, cursor: "pointer", fontSize: 11 }}>✕</button>}
+              </div>
+              {op && <div style={{ padding: "0 12px 8px 12px", fontSize: 11, lineHeight: 1.6 }}>
+                {lines.map((l, i) => <div key={i} style={{ color: l.startsWith("[적용 지시]") ? T.amber : T.text }}>{l}</div>)}
+                <div style={{ color: T.muted, marginTop: 4, fontSize: 10.5 }}>등록 {g.created_at ? new Date(g.created_at).toLocaleDateString("ko-KR") : "-"}</div>
+              </div>}
+            </div>
+          ); })}
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+function OSSPPage({ nav, customOSSP=[], builtinOSSP=[], onAdd, onDelete, canEdit = true }) {
+  const [libTab, setLibTab] = useState("ossp");   // ossp | guides
   const [showForm, setShowForm] = useState(false);
   const [label, setLabel] = useState("");
   const [version, setVersion] = useState("");
@@ -14048,8 +14096,13 @@ function OSSPPage({ nav, customOSSP=[], builtinOSSP=[], onAdd, onDelete }) {
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
         <button onClick={()=>nav("dashboard")} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:20 }}>←</button>
         <div style={{ flex:1 }}><h1 style={{ fontSize:17, fontWeight:700 }}>OSSP 라이브러리</h1><p style={{ fontSize:11, color:T.muted }}>조직 표준 프로세스 및 자산 구성</p></div>
-        <Btn variant="primary" onClick={()=>{ setShowForm(v=>!v); reset(); }} style={{ fontSize:12, padding:"7px 14px" }}>{showForm ? "취소" : "+ OSSP 등록"}</Btn>
+        {libTab === "ossp" && <Btn variant="primary" onClick={()=>{ setShowForm(v=>!v); reset(); }} style={{ fontSize:12, padding:"7px 14px" }}>{showForm ? "취소" : "+ OSSP 등록"}</Btn>}
       </div>
+      <div style={{ display:"flex", gap:4, marginBottom:16, background:T.surface, borderRadius:10, padding:3, border:`1px solid ${T.border}` }}>
+        {[["ossp","OSSP·템플릿"],["guides","작성 가이드"]].map(([k,l]) => <button key={k} onClick={()=>setLibTab(k)} style={{ flex:1, padding:"7px 10px", borderRadius:8, border:"none", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight: libTab===k ? 700 : 400, background: libTab===k ? T.accentDim : "transparent", color: libTab===k ? T.text : T.muted }}>{l}</button>)}
+      </div>
+      {libTab === "guides" && <WritingGuideLibrary canEdit={canEdit} />}
+      {libTab === "ossp" && <>
 
       {showForm && (
         <Card style={{ padding:18, marginBottom:18, border:`1px solid ${T.accent}55` }}>
@@ -14083,6 +14136,7 @@ function OSSPPage({ nav, customOSSP=[], builtinOSSP=[], onAdd, onDelete }) {
         <div style={{ fontSize:12, fontWeight:600, color:T.muted, marginTop:8 }}>기본 제공</div>
         {(builtinOSSP.length > 0 ? builtinOSSP : OSSP_OPTIONS).map(o=>renderCard(o, "builtin"))}
       </div>
+      </>}
     </div>
   );
 }
