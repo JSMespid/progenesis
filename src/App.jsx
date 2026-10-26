@@ -10131,6 +10131,9 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   const inp = { width: "100%", padding: "4px 6px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 11, fontFamily: "inherit", boxSizing: "border-box" };
   const ta = { ...inp, minHeight: 40, resize: "vertical", lineHeight: 1.45 };
   const small = { background: "none", border: `1px solid ${T.border}`, borderRadius: 6, color: T.accent, cursor: "pointer", fontSize: 10.5, padding: "3px 9px", fontFamily: "inherit" };
+  // 판정·수정 영역 버튼 — 배경이 채워진 버튼(btn)과 선택형 버튼(seg)으로, 본문 텍스트와 한눈에 구분되게
+  const btn = { ...small, background: T.subtle, border: "1px solid #2E3550", color: T.text };
+  const seg = on => ({ ...small, background: on ? T.accent : T.subtle, color: on ? "#fff" : T.text, borderColor: on ? T.accent : "#2E3550" });
   const set = fn => setModel(m => { const n = AE.normalizeModel(JSON.parse(JSON.stringify(m))); fn(n); return n; });
 
   // ── 공통: AI 호출 래퍼 (청크 진행률) ──
@@ -11238,23 +11241,23 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
         {(() => { const S = AE.reviewScope(rvEdit.key); if (S?.kind !== "req") return null;
           const src = (AE.reviewItems(model, rvEdit.key).find(it => it.id === rvEdit.id) || {}).src || {};
           const fl = AE.qualityFlags({ ...src, title: rvEdit.vals.title ?? src.title, text: rvEdit.vals.text ?? src.text, verifCriteria: rvEdit.vals.verifCriteria ?? src.verifCriteria });
-          return <div style={{ fontSize: 10.5, marginBottom: 6, color: fl.length ? T.amber : T.green }}>규칙 판정(입력 즉시 반영): {fl.length ? fl.map(x => x.msg).join(" · ") : "✓ 품질 플래그 없음 — 적용하면 경고가 사라집니다"}</div>; })()}
+          return <div style={{ fontSize: 10.5, marginBottom: 6, color: fl.length ? T.amber : T.green }}><span title="입력하는 즉시 규칙으로 다시 검사합니다. 품질 플래그가 없으면 적용 후 경고가 사라집니다.">{fl.length ? `⚠ ${fl.map(x => x.msg).join(" · ")}` : "✓ 품질 플래그 없음"}</span></div>; })()}
         {rvEdit.msg && <div style={{ fontSize: 10.5, color: T.amber, marginBottom: 6 }}>⚠ {rvEdit.msg}</div>}
         {rvEdit.aiDraft && <div style={{ fontSize: 10.5, color: T.accent, marginBottom: 6, padding: "6px 8px", background: T.accent + "12", borderRadius: 6 }}>✦ AI 수정안 초안이 채워져 있습니다(의견 {rvEdit.aiDraft.opinions}건 반영). <b>적용 전에 내용을 확인하세요</b> — 원문에 없는 수치는 'TBD(확인 필요)'로 들어옵니다.{rvEdit.aiDraft.rationale ? <div style={{ color: T.muted, marginTop: 2 }}>변경 이유: {rvEdit.aiDraft.rationale}</div> : null}</div>}
         {sp.fields.map(fd => (
           <div key={fd.k} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 5 }}>
-            <span style={{ width: 120, flexShrink: 0, fontSize: 10.5, color: T.muted, paddingTop: 5 }}>{fd.label}{fd.sysItem && <div style={{ fontSize: 9.5 }}>(확정 요구에 반영)</div>}
+            <span style={{ width: 120, flexShrink: 0, fontSize: 10.5, color: T.muted, paddingTop: 5 }}><span title={fd.sysItem ? "확정 요구 목록에도 함께 반영됩니다" : undefined} style={fd.sysItem ? { borderBottom: `1px dotted ${T.muted}`, cursor: "help" } : undefined}>{fd.label}</span>
               {rvEdit.aiDraft && fd.k in rvEdit.aiDraft.fields && <div style={{ fontSize: 9.5, color: T.accent }}>✦ AI 초안 <button onClick={() => setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: x.aiDraft.original[fd.k] } }))} title="이 필드만 원래 값으로" style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 9.5, padding: 0, textDecoration: "underline" }}>원래대로</button></div>}</span>
             {fd.rows > 1
               ? <textarea rows={fd.rows} value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...ta, minHeight: 0, flex: 1 }} />
               : <input value={rvEdit.vals[fd.k] ?? ""} onChange={e => { const val = e.target.value; setRvEdit(x => ({ ...x, vals: { ...x.vals, [fd.k]: val } })); }} style={{ ...inp, flex: 1 }} />}
           </div>))}
         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center", marginTop: 4 }}>
-          <span style={{ fontSize: 10, color: T.muted, marginRight: "auto" }}>적용하면 이 항목의 검토 의견은 '내용 변경됨'이 되고, 연결된 하위 항목에는 변경 영향 검토가 표시될 수 있습니다.{AE.reviewScope(rvEdit.key)?.kind === "test" ? " 수정한 시험은 수동 작성으로 바뀌어 규칙 재생성 때 덮어쓰지 않습니다." : ""}</span>
-          <button onClick={aiFixDraft} disabled={busy || !!draftAt} title="판정된(틀림 제외)·미판정 의견과 관련 상위 항목을 근거로 필드별 수정안을 만들어 채웁니다. 적용은 직접 누릅니다" style={{ ...small, color: T.accent }}>{draftAt ? "✦ 초안 만드는 중…" : "✦ AI 수정안 초안"}</button>
-          <button onClick={() => setTab(sp.tab)} style={small}>원래 탭에서 열기</button>
-          <button onClick={() => setRvEdit(null)} style={small}>취소</button>
-          <button onClick={applyReviewEditUI} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>적용</button>
+          <span style={{ marginRight: "auto" }} />
+          <button onClick={aiFixDraft} disabled={busy || !!draftAt} title="AI 수정안 초안 — 판정된(틀림 제외)·미판정 의견과 관련 상위 항목을 근거로 필드별 수정안을 만들어 칸에 채웁니다. 적용은 직접 누릅니다." style={{ ...btn, color: T.accent }}>{draftAt ? "✦ 만드는 중…" : "✦ AI 초안"}</button>
+          <button onClick={() => setTab(sp.tab)} title="이 항목이 있는 원래 탭으로 이동해서 고칩니다" style={btn}>원래 탭 ↗</button>
+          <button onClick={() => setRvEdit(null)} title="고친 내용을 버리고 닫습니다" style={btn}>취소</button>
+          <button onClick={applyReviewEditUI} title={`고친 내용을 반영하고 수정 이력을 남깁니다.\n이 항목의 검토 의견은 '내용 변경됨'이 되고, 연결된 하위 항목에는 변경 영향 검토가 표시될 수 있습니다.${AE.reviewScope(rvEdit.key)?.kind === "test" ? "\n수정한 시험은 수동 작성으로 바뀌어 규칙 재생성 때 덮어쓰지 않습니다." : ""}`} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>적용</button>
         </div>
         {draftAt > 0 && <AeDraftProgress at={draftAt} />}
       </div>);
@@ -12256,7 +12259,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
 
               <div id="rv-judge" />
               <AeSec {...stepSec("judge")} title={`③ 사람 판정(QA 담당자) — 판정 ${cnt.valid + cnt.opinion + cnt.invalid} / ${cnt.total}건${cnt.stale ? ` · 의견 받은 뒤 내용 바뀜 ${cnt.stale}` : ""}`}
-                right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정", cnt.open], ["valid", "맞음", cnt.valid], ["opinion", "보류", cnt.opinion], ["invalid", "틀림", cnt.invalid], ["all", "전체", cnt.total]].map(([k, l, n]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.text, borderColor: rvFilter === k ? T.accent : T.border }}>{l} <b style={{ fontWeight: 700 }}>{n}</b></button>)}
+                right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정", cnt.open], ["valid", "맞음", cnt.valid], ["opinion", "보류", cnt.opinion], ["invalid", "틀림", cnt.invalid], ["all", "전체", cnt.total]].map(([k, l, n]) => <button key={k} onClick={() => setRvFilter(k)} style={seg(rvFilter === k)}>{l} <b style={{ fontWeight: 700 }}>{n}</b></button>)}
                   {(() => { const vtN = v.list.filter(f => f.level === rvLevel && !f.removed && f.judge?.state === "valid" && !f.edits.length).length; const more = rvFilter === "edited" || rvFilter === "validTodo";
                     return <select value={more ? rvFilter : ""} onChange={e => e.target.value && setRvFilter(e.target.value)} title="수정 진행 상황으로 보기 — ④ 수정안 단계와 관련된 보기" style={{ ...small, color: more ? T.accent : T.muted, background: T.bg, borderColor: more ? T.accent : T.border }}>
                       <option value="">그 밖의 보기 ▾</option><option value="validTodo">맞음인데 아직 안 고침 ({vtN})</option><option value="edited">대상을 고친 의견 ({cnt.edited})</option></select>; })()}</div>}>
@@ -12279,23 +12282,26 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                   return (<>
                     <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 8, fontSize: 10.5 }}>
                       <span style={{ color: T.muted }}>보기:</span>
-                      <button onClick={() => setRvGroup(true)} style={{ ...small, background: rvGroup ? T.accent : "none", color: rvGroup ? "#fff" : T.accent }}>대상별 묶음</button>
-                      <button onClick={() => setRvGroup(false)} style={{ ...small, background: !rvGroup ? T.accent : "none", color: !rvGroup ? "#fff" : T.accent }}>의견별 표</button>
+                      <button onClick={() => setRvGroup(true)} title="요구(대상)마다 의견을 묶어 봅니다" style={seg(rvGroup)}>대상별</button>
+                      <button onClick={() => setRvGroup(false)} title="의견을 한 줄씩 표로 봅니다" style={seg(!rvGroup)}>표</button>
                       <span style={{ color: T.muted, marginLeft: 6 }}>정렬:</span>
-                      <button onClick={() => setRvSort("sev")} style={{ ...small, background: rvSort === "sev" ? T.accent : "none", color: rvSort === "sev" ? "#fff" : T.accent }}>중대 먼저</button>
-                      <button onClick={() => setRvSort("id")} style={{ ...small, background: rvSort === "id" ? T.accent : "none", color: rvSort === "id" ? "#fff" : T.accent }}>ID 순</button>
+                      <button onClick={() => setRvSort("sev")} title="중대 → 경미 → 제안 순으로" style={seg(rvSort === "sev")}>중대 먼저</button>
+                      <button onClick={() => setRvSort("id")} title="요구 ID 순으로" style={seg(rvSort === "id")}>ID 순</button>
+                      {rvGroup && (() => { const ks = [...new Set(sorted.map(f => f.reqId))].map(id => `jg|${rvLevel}|${id}`); return ks.length > 1 && <>
+                        <button onClick={() => setCardsOpen(ks, true)} title="모든 대상을 펼칩니다" style={{ ...btn, marginLeft: 6 }}>▾ 모두 펼침</button>
+                        <button onClick={() => setCardsOpen(ks, false)} title="모든 대상을 접습니다" style={btn}>▸ 모두 접음</button>
+                      </>; })()}
                       {openList.length > 1 && <>
                         <span style={{ flex: 1 }} />
-                        <span style={{ color: T.muted }} title="'맞음'은 의견마다 확인해서 판정합니다. 일괄 처리는 사유를 함께 남기는 보류·틀림만 제공합니다.">표시된 미판정 {openList.length}건 일괄 (사유 입력):</span>
-                        <button disabled={busy} onClick={() => bulk(openList, "opinion")} style={{ ...small, color: T.accent }}>△ 모두 보류</button>
-                        <button disabled={busy} onClick={() => bulk(openList, "invalid")} style={{ ...small, color: T.muted }}>✕ 모두 틀림</button>
+                        <button disabled={busy} onClick={() => bulk(openList, "opinion")} title={`표시된 미판정 ${openList.length}건을 모두 '보류'로 판정합니다 — 같은 사유를 입력받습니다.\n'맞음'은 의견마다 확인해서 판정합니다.`} style={{ ...btn, color: T.accent }}>△ 일괄 보류 {openList.length}</button>
+                        <button disabled={busy} onClick={() => bulk(openList, "invalid")} title={`표시된 미판정 ${openList.length}건을 모두 '틀림'으로 판정합니다 — 같은 사유를 입력받습니다.\n'맞음'은 의견마다 확인해서 판정합니다.`} style={btn}>✕ 일괄 틀림 {openList.length}</button>
                       </>}
                     </div>
                     {rvGroup && (() => {
                       const groups = [];
                       sorted.forEach(f => { let g = groups.find(x => x.id === f.reqId); if (!g) { g = { id: f.reqId, title: f.reqTitle, fs: [] }; groups.push(g); } g.fs.push(f); });
                       const gKeys = groups.map(g => `jg|${rvLevel}|${g.id}`);
-                      const foldBar = groups.length > 1 && <div key="__fold" style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginBottom: 6 }}>
+                      const foldBar = false && <div key="__fold" style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginBottom: 6 }}>
                         <button onClick={() => setCardsOpen(gKeys, true)} style={{ ...small, color: T.muted }}>▾ 대상 모두 펼치기</button>
                         <button onClick={() => setCardsOpen(gKeys, false)} style={{ ...small, color: T.muted }}>▸ 대상 모두 접기</button>
                       </div>;
@@ -12322,18 +12328,18 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                                     <div style={{ color: T.accent, fontSize: 10 }}>{full ? "▴ 줄이기" : "▾ 전체 보기"}</div>
                                   </div>; })()}
                                 {gOpen && refs.length > 0 && <details style={{ fontSize: 10.5, marginTop: 4 }}>
-                                  <summary style={{ cursor: "pointer", color: T.accent }}>관련 상위·참조 항목 {refs.length}건 보기 (일관성·완전성 지적은 이것과 비교해 판정)</summary>
+                                  <summary title="일관성·완전성 지적은 이 상위·참조 항목과 비교해서 판정합니다" style={{ cursor: "pointer", color: T.accent }}>상위·참조 {refs.length}건</summary>
                                   {refs.slice(0, 6).map(r => <div key={r.id} style={{ marginTop: 3, paddingLeft: 8, borderLeft: `2px solid ${T.border}`, color: T.text }}><span style={{ fontFamily: "monospace", color: T.accent }}>{r.id}</span> <span style={{ color: T.muted }}>{r.구분}</span> {r.제목 ? <b>{r.제목} </b> : null}{r.내용 || r.책임 || r.설계 || r["신호·데이터"] || ""}{r.검증기준 ? <div style={{ color: T.muted }}>검증 기준: {r.검증기준}</div> : null}</div>)}
                                 </details>}
                               </div>
                               <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
                                 {open_.length > 1 && <div style={{ display: "flex", gap: 3 }}>
-                                  <span style={{ fontSize: 10, color: T.muted, alignSelf: "center" }}>이 대상 미판정 {open_.length}건 전부:</span>
-                                  <button disabled={busy} onClick={() => bulk(open_, "valid")} style={{ ...small, padding: "2px 7px", color: T.green }}>✓ 맞음</button>
-                                  <button disabled={busy} onClick={() => bulk(open_, "invalid")} style={{ ...small, padding: "2px 7px", color: T.muted }}>✕ 틀림</button>
-                                  <button disabled={busy} onClick={() => bulk(open_, "opinion")} style={{ ...small, padding: "2px 7px", color: T.accent }}>△ 보류</button>
+                                  <span title={`이 대상의 미판정 의견 ${open_.length}건을 한 번에 판정합니다`} style={{ fontSize: 10, color: T.muted, alignSelf: "center", cursor: "help" }}>{open_.length}건 일괄</span>
+                                  <button disabled={busy} onClick={() => bulk(open_, "valid")} title={`이 대상의 미판정 ${open_.length}건을 모두 '맞음'으로`} style={{ ...btn, padding: "2px 7px", color: T.green }}>✓</button>
+                                  <button disabled={busy} onClick={() => bulk(open_, "invalid")} title={`이 대상의 미판정 ${open_.length}건을 모두 '틀림'으로 (사유 입력)`} style={{ ...btn, padding: "2px 7px" }}>✕</button>
+                                  <button disabled={busy} onClick={() => bulk(open_, "opinion")} title={`이 대상의 미판정 ${open_.length}건을 모두 '보류'로 (사유 입력)`} style={{ ...btn, padding: "2px 7px", color: T.accent }}>△</button>
                                 </div>}
-                                {sp && <button disabled={busy} onClick={() => openEdit(`grp|${g.id}`, rvLevel, g.id)} style={{ ...small, padding: "3px 9px", background: rvEdit?.fkey === `grp|${g.id}` ? T.accent : "none", color: rvEdit?.fkey === `grp|${g.id}` ? "#fff" : T.accent }}>✎ 대상 수정 (의견 전부 반영)</button>}
+                                {sp && <button disabled={busy} onClick={() => openEdit(`grp|${g.id}`, rvLevel, g.id)} title={"이 자리에서 요구를 직접 고칩니다.\n달린 의견들의 제안을 참고로 보여 주며, 자동으로 반영되지는 않습니다. '적용'을 눌러야 바뀌고 수정 이력이 남습니다."} style={rvEdit?.fkey === `grp|${g.id}` ? { ...small, padding: "3px 9px", background: T.accent, color: "#fff", borderColor: T.accent } : { ...btn, padding: "3px 9px", color: T.accent }}>✎ 직접 고치기</button>}
                               </div>
                             </div>
                             {gOpen && <div style={{ marginTop: 6, borderTop: `1px solid ${T.border}` }}>
@@ -12353,7 +12359,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                                   <div>
                                     <div style={{ fontSize: 10, marginBottom: 2, color: f.judge ? jColor[f.judge.state] : T.amber }}>{f.judge ? `판정: ${AE.REVIEW_JUDGE[f.judge.state]}` : "○ 미판정"}</div>
                                     <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-                                      {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...small, padding: "2px 6px", background: on ? jColor[st] : "none", color: on ? "#fff" : T.muted, borderColor: on ? jColor[st] : T.border }}>{AE.REVIEW_JUDGE_SHORT[st]}</button>; })}
+                                      {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...btn, padding: "2px 7px", background: on ? jColor[st] : T.subtle, color: on ? "#fff" : T.text, borderColor: on ? jColor[st] : "#2E3550" }}>{({ valid: "✓ 맞음", invalid: "✕ 틀림", opinion: "△ 보류" })[st]}</button>; })}
                                       {f.judge && <button onClick={() => setModel(m => AE.judgeReview(m, [f.key], null))} style={{ ...small, padding: "2px 6px", color: T.muted }} title="판정 취소">↺</button>}
                                     </div>
                                     {f.judge?.note && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 2 }}>— {f.judge.note}</div>}
@@ -12402,7 +12408,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                             <div style={{ fontSize: 10, marginBottom: 3, color: f.judge ? jColor[f.judge.state] : T.amber }}>{f.judge ? `판정: ${AE.REVIEW_JUDGE[f.judge.state]}` : "○ 미판정 — 아래에서 선택"}</div>
                             <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                               {/* 선택 전에는 세 버튼 모두 같은 회색 — 색이 있으면 이미 선택된 것으로 오인됨. 선택된 판정만 색을 채운다 */}
-                              {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...small, padding: "2px 7px", background: on ? jColor[st] : "none", color: on ? "#fff" : T.muted, borderColor: on ? jColor[st] : T.border, fontWeight: on ? 700 : 400 }}>{AE.REVIEW_JUDGE_SHORT[st]}</button>; })}
+                              {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...btn, padding: "2px 7px", background: on ? jColor[st] : T.subtle, color: on ? "#fff" : T.text, borderColor: on ? jColor[st] : "#2E3550", fontWeight: on ? 700 : 400 }}>{({ valid: "✓ 맞음", invalid: "✕ 틀림", opinion: "△ 보류" })[st]}</button>; })}
                               {f.judge && <button onClick={() => setModel(m => AE.judgeReview(m, [f.key], null))} style={{ ...small, padding: "2px 7px", color: T.muted }} title="판정 취소">↺</button>}
                             </div>
                             {f.judge && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 3 }}>{String(f.judge.at).slice(0, 16).replace("T", " ")}{f.judge.note ? ` — ${f.judge.note}` : ""}</div>}
