@@ -504,6 +504,8 @@ function deleteDraftRec(id) {
 // state: none(서버에 아직 없음·프로젝트명 미입력) | pending | ok | conflict(다른 팀원이 먼저 저장) | locked(다른 팀원 편집 중) | error
 const serverStatus = { state: "none", at: null, err: "", by: "" };
 const _serverSubs = new Set();
+// 저장 충돌 시 '내 내용으로 덮어쓰기' — 메인(App)이 등록하고 V-모델 창의 ✓ 저장이 호출한다
+let _srvForceHook = null;
 function setServerStatus(p) { Object.assign(serverStatus, p); _serverSubs.forEach(f => { try { f({ ...serverStatus }); } catch (_) {} }); }
 function useServerStatus() {
   const [st, setSt] = useState(() => ({ ...serverStatus }));
@@ -1663,6 +1665,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     }
     if (srvBusyRef.current) { srvAgainRef.current = true; return false; }   // 진행 중이면 끝난 뒤 한 번 더
     srvBusyRef.current = true;
+    const force = forceNextRef.current; forceNextRef.current = false;   // 사용자가 확인한 덮어쓰기 1회
     setServerStatus({ state: "pending", err: "" });
     const fail = (state, msg, by = "") => {
       setServerStatus({ state, err: msg, by });
@@ -1670,7 +1673,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         srvWarnRef.current = state + msg;
         alert((state === "conflict" ? "⚠ 저장하지 않았습니다 — " : state === "locked" ? "🔒 저장하지 않았습니다 — " : "서버 저장 실패: ") + msg +
           "\n\n지금 작업 내용은 이 PC(브라우저)에 그대로 보관되어 있습니다." +
-          (state === "conflict" ? "\nV-모델 [⋯ 더보기 → 작업 데이터 백업 파일 받기]로 내 변경을 파일로 받아 둔 뒤, 대시보드에서 프로젝트를 다시 열어 최신 내용을 확인하세요." : ""));
+          (state === "conflict" ? "\n\n· 내 내용을 살리려면: V-모델 하단 [✓ 저장]을 다시 누르면 덮어쓸지 묻습니다(백업 파일을 먼저 받아 둡니다).\n· 상대 내용을 살리려면: 대시보드에서 프로젝트를 다시 열어 최신 내용을 확인하세요." : ""));
       }
       return false;
     };
@@ -1680,8 +1683,14 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       const bodyText = JSON.stringify(editingIdRef.current ? { id: editingIdRef.current, expectRev: projectRevRef.current, record } : record);
       const bodyBytes = new Blob([bodyText]).size;
       if (bodyBytes > 4.3 * 1024 * 1024) return fail("error", `프로젝트 데이터가 ${(bodyBytes / 1048576).toFixed(1)}MB로 서버 요청 한도(4.5MB)를 넘습니다. 로고 이미지·산출물 데이터 크기를 확인해 주세요.`);
-      const res = await fetch("/api/projects", { method: editingIdRef.current ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: bodyText });
-      const j = await res.json().catch(() => ({}));
+      let res = await fetch("/api/projects", { method: editingIdRef.current ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: bodyText });
+      let j = await res.json().catch(() => ({}));
+      if (res.status === 409 && force && editingIdRef.current && j.currentRev != null) {
+        // 사용자가 덮어쓰기를 확인함 — 서버의 현재 버전을 기준으로 한 번 다시 저장(서버의 버전 확인은 그대로 거친다)
+        projectRevRef.current = j.currentRev;
+        res = await fetch("/api/projects", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: editingIdRef.current, expectRev: projectRevRef.current, record }) });
+        j = await res.json().catch(() => ({}));
+      }
       if (res.status === 409) return fail("conflict", `${j.savedBy?.name || "다른 팀원"}님이 ${j.savedBy?.at ? hhmm(j.savedBy.at) + "에 " : ""}먼저 저장했습니다. 덮어쓰지 않았습니다.`, j.savedBy?.name || "");
       if (res.status === 423) return fail("locked", `${j.holder?.name || "다른 팀원"}님이 편집 권한을 가지고 있습니다.`, j.holder?.name || "");
       if (!res.ok) return fail("error", j.error || `HTTP ${res.status}`);
@@ -1707,7 +1716,9 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
     }
   }
   const serverSaveRef = useRef(null);
-  serverSaveRef.current = serverSave;   // 타이머에서 항상 최신 상태로 저장
+  serverSaveRef.current = serverSave;
+  const forceNextRef = useRef(false);
+  _srvForceHook = () => { forceNextRef.current = true; setTimeout(() => serverSaveRef.current && serverSaveRef.current({ explicit: true }), 1500); };   // 타이머에서 항상 최신 상태로 저장
   // 편집 잠금 연장 — 위저드를 열어 둔 동안 60초마다. 다른 팀원이 가져갔으면 표시
   useEffect(() => {
     if (!editingId || page !== "new_project" || role === "viewer") return;
@@ -12887,7 +12898,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               return inh.length ? <div style={{ fontSize: 9.5, color: T.amber, marginTop: 2 }}>⚠ {inh.map(([lv, n]) => `${lv} ${n}건`).join(" · ")}이 시스템 요구를 그대로 복사한 초안입니다 — 요소를 실제 구성(HW/SW)으로 나누고 담당 요소에만 할당한 뒤 다시 파생하세요.</div> : null;
             })()}
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexShrink: 0, whiteSpace: "nowrap", alignItems: "center" }}>
             <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="고객·심사 제출용 문서(명세서·설계서·검증 명세·결과서·추적 매트릭스·설계 모델·소스)를 OSSP 양식으로 만들어 ZIP 하나로 내려받습니다 (지금 화면 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 산출물 내려받기 (ZIP)</Btn>
             {reqDirty && <button onClick={() => setTab("req", "STK")} title="SYS.1·SYS.2에서 고친 요구를 아직 확정하지 않았습니다 — [✓ 확정]을 눌러야 V-모델과 저장에 포함됩니다" style={{ alignSelf: "center", fontSize: 10.5, color: T.amber, background: "none", border: `1px solid ${T.amber}88`, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>● 요구 확정 안 됨 →</button>}
             {(() => {
@@ -12896,7 +12907,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               if (dirty) return S(T.amber, "● 저장 안 된 변경 있음", "✓ 저장을 누르면 이 PC와 서버에 저장됩니다");
               if (draftSt.state === "error") return S(T.red, "⚠ 이 PC 저장 실패", draftSt.err, true);
               if (srvSt.state === "pending" || draftSt.state === "pending") return S(T.muted, "⏳ 저장 중…", "이 PC와 서버에 저장하고 있습니다");
-              if (srvSt.state === "conflict") return S(T.red, "⚠ 다른 팀원이 먼저 저장 — 서버 저장 안 됨", srvSt.err, true);
+              if (srvSt.state === "conflict") return S(T.red, "⚠ 저장 충돌", `${srvSt.err}\n✓ 저장을 누르면 내 내용으로 덮어쓸지 묻습니다.`, true);
               if (srvSt.state === "locked") return S(T.red, `🔒 ${srvSt.by || "다른 팀원"} 편집 중 — 서버 저장 안 됨`, srvSt.err, true);
               if (srvSt.state === "error") return S(T.red, "⚠ 서버 저장 실패 — 이 PC에만 보관", srvSt.err, true);
               if (srvSt.state === "ok" && srvSt.at) return S(T.green, `✓ 저장됨 ${hhmm(srvSt.at)} · 팀 공유${srvSt.by ? ` (${srvSt.by})` : ""}`, "서버에 저장되어 같은 프로젝트의 팀원이 각자 PC에서 볼 수 있습니다");
@@ -12925,7 +12936,15 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
             <input ref={bakInputRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; importBackup(f); }} />
             {reuseOpen && <ReuseDialog onClose={() => setReuseOpen(false)} onApply={applyReuseImport} form={form} busy={busy} />}
             <Btn variant="outline" onClick={requestClose} style={{ fontSize: 12, padding: "7px 14px" }}>닫기</Btn>
-            <Btn onClick={() => save()} disabled={busy} title="이 PC와 서버에 저장해 같은 프로젝트의 팀원과 공유합니다. 창은 닫히지 않습니다." style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
+            <Btn onClick={() => {
+              if (srvSt.state === "conflict") {
+                if (!window.confirm(`⚠ ${srvSt.err}\n\n[확인]을 누르면 지금 이 화면의 내용으로 서버 저장본을 덮어씁니다.\n${srvSt.by || "다른 팀원"}님이 저장한 내용은 이 내용으로 바뀝니다.\n덮어쓰기 전에 지금 내용을 백업 파일(.json)로 자동으로 받아 둡니다.\n\n[취소]를 누르면 저장하지 않습니다.`)) return;
+                exportBackup();   // 백업 파일 받기 + 이 PC 저장
+                if (_srvForceHook) _srvForceHook();
+                return;
+              }
+              save();
+            }} disabled={busy} title={srvSt.state === "conflict" ? `저장 충돌 — ${srvSt.err}\n누르면 내 내용으로 덮어쓸지 확인합니다(백업 파일을 먼저 받아 둡니다).` : "이 PC와 서버에 저장해 같은 프로젝트의 팀원과 공유합니다. 창은 닫히지 않습니다."} style={{ fontSize: 12, padding: "7px 14px" }}>✓ 저장</Btn>
           </div>
         </div>
       </div>
