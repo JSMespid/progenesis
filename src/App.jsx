@@ -12546,7 +12546,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                     <button onClick={() => setCardsOpen(fixQ.cards.map(c => `fq|${c.id}`), true)} style={{ ...small, color: T.muted }}>▾ 모두 펼치기</button>
                     <button onClick={() => setCardsOpen(fixQ.cards.map(c => `fq|${c.id}`), false)} style={{ ...small, color: T.muted }}>▸ 모두 접기</button>
                   </>}
-                  {fixQ && fixQ.key === rvLevel && fixQ.cards.some(c => c.status === "pending" && !c.err) && <button disabled={busy} onClick={approveAll} style={{ ...small, color: T.green }}>남은 {fixQ.cards.filter(c => c.status === "pending" && !c.err).length}건 모두 승인</button>}
+                  {fixQ && fixQ.key === rvLevel && fixQ.cards.some(c => c.status === "pending" && !c.err) && <button disabled={busy} onClick={approveAll} title={`AI·규칙 초안이 있는 대기 카드 ${fixQ.cards.filter(c => c.status === "pending" && !c.err).length}건을 모두 승인합니다.\n초안이 없는 카드 ${fixQ.cards.filter(c => c.status === "pending" && c.err).length}건은 제외됩니다 — 카드별로 '반영 완료'·'편집 후 승인'·'반려'로 처리하세요.`} style={{ ...small, color: T.green }}>초안 있는 {fixQ.cards.filter(c => c.status === "pending" && !c.err).length}건 모두 승인</button>}
                   <Btn disabled={busy || !AE.fixQueueTargets(model, rvLevel).length} onClick={genFixQueue} title="③에서 '맞음'으로 판정했지만 아직 고치지 않은 의견이 달린 항목마다 수정안을 만듭니다 — 규칙으로 되는 것은 규칙이, 문장은 생성 AI(Claude)가. 승인 전에는 아무것도 바뀌지 않습니다" style={{ fontSize: 11, padding: "4px 12px" }}>✦ 수정안 생성 ({K.noun} {AE.fixQueueTargets(model, rvLevel).length}건 · 의견 {AE.fixQueueTargets(model, rvLevel).reduce((a, t) => a + t.findings.length, 0)}건)</Btn>
                 </div>}>
                 <div className="ae-hint" style={{ fontSize: 10.5, color: T.muted, marginBottom: 8, lineHeight: 1.6 }}>
@@ -12569,7 +12569,10 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                         {!pend && <span style={{ fontSize: 10.5, color: String(c.status).startsWith("approved") ? T.green : T.muted }}>{String(c.status).startsWith("approved") ? "✓ 승인됨" : "반려됨"}</span>}
                       </div>
                       {cOpen && <>
-                      {c.err && <div style={{ fontSize: 10.5, color: T.amber, marginTop: 4 }}>⚠ {c.err}</div>}
+                      {c.err && (() => { const attrOnly = c.opinions.length > 0 && c.opinions.every(o => /-(STRUCT|COMM)$/.test(String(o.criterion || "")));
+                        return <div style={{ fontSize: 10.5, color: T.amber, marginTop: 4, lineHeight: 1.6 }}>⚠ {attrOnly
+                          ? "AI가 문장을 바꾸지 않았습니다 — 이 의견은 요구 문장(제목·내용·검증 기준)이 아니라 요구 속성(우선순위·그룹·합의 상태 등)에 관한 지적입니다. '원래 탭'에서 해당 칸을 고치거나, 이미 반영돼 있으면 '반영 완료'로 처리하세요."
+                          : /제안하지 않음/.test(c.err) ? "AI가 바꿀 내용을 제안하지 않았습니다 — 이미 반영됐거나 원문에 근거가 부족한 경우입니다. 확인 후 '반영 완료', '편집 후 승인', '반려' 중에서 처리하세요." : c.err}</div>; })()}
                       {Object.keys(c.fields).length > 0 && (
                         <div style={{ marginTop: 6, display: "grid", gridTemplateColumns: "110px 1fr 1fr", gap: "4px 8px", fontSize: 10.5 }}>
                           <span style={{ color: T.muted }}>필드</span><span style={{ color: T.muted }}>수정 전</span><span style={{ color: T.muted }}>수정 후</span>
@@ -12585,6 +12588,8 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                       {pend && (
                         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6 }}>
                           <button disabled={busy} onClick={() => finishQueueCard(c.id, "rejected")} style={{ ...small, color: T.muted }}>반려 (바꾸지 않음)</button>
+                          {c.err && <button disabled={busy} onClick={() => goItem(fixQ.key, c.id)} title="이 요구가 있는 원래 화면으로 이동해 우선순위·그룹·합의 상태 등 속성 칸을 고칩니다" style={{ ...small }}>원래 탭 ↗</button>}
+                          {c.err && <button disabled={busy} onClick={() => { if (!window.confirm(`${c.id} — 의견 ${c.opinions.length}건의 요지가 지금 내용에 이미 반영되어 있다고 기록합니다.\n내용은 바뀌지 않고, 수정 이력에 '반영 완료(변경 없음)'로 남습니다.\n\n계속할까요?`)) return; setModel(m => AE.markReviewResolved(m, fixQ.key, c.id, { via: "fix-queue(반영 확인)" })); finishQueueCard(c.id, "approved(변경 없음)"); }} title="고칠 것이 없을 때 — 내용은 그대로 두고 '반영 완료(변경 없음)'로 기록합니다" style={{ ...small, color: T.green }}>✓ 반영 완료</button>}
                           <button disabled={busy} onClick={() => { const sp = AE.reviewEditSpec(model, fixQ.key, c.id); if (!sp) return; setRvEdit({ fkey: `fq|${c.id}`, key: fixQ.key, id: c.id, vals: { ...sp.values, ...c.fields }, aiDraft: Object.keys(c.fields).length ? { fields: c.fields, original: Object.fromEntries(Object.keys(c.fields).map(k => [k, sp.values[k] ?? ""])), rationale: c.rationale, opinions: c.opinions.length } : null }); }} style={{ ...small, color: T.accent, background: rvEdit?.fkey === `fq|${c.id}` ? T.accent + "22" : "none" }}>✎ 편집 후 승인</button>
                           {Object.keys(c.fields).length > 0 && <button disabled={busy} onClick={() => approveCard(c)} style={{ ...small, background: T.green, color: "#fff", borderColor: T.green }}>✓ 승인</button>}
                         </div>)}
