@@ -10267,9 +10267,11 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
     const p = {}; spec.fields.forEach(f => { if (f.k in patch && String(patch[f.k] ?? "") !== String(spec.values[f.k] ?? "")) p[f.k] = patch[f.k]; });
     if (!Object.keys(p).length) return false;
     const S = AE.reviewScope(key);
-    if (S?.kind === "req" && S.lv === "SYS" && ("title" in p || "text" in p)) {
-      // 확정 요구(items)도 같이 고친다 — 여러 건을 연속 적용해도 서로 덮어쓰지 않도록 함수형 갱신
-      const fix = it => it.id !== id ? it : { ...it, ...("title" in p ? { name: p.title } : {}), ...("text" in p ? { detail: p.text } : {}) };
+    if ("priority" in p && !["상", "중", "하"].includes(String(p.priority).trim())) { setErr("우선순위는 상·중·하 중 하나로 입력하세요."); delete p.priority; if (!Object.keys(p).length) return false; }
+    if (S?.kind === "req" && S.lv === "SYS" && ["title", "text", "priority", "quality", "assumptions"].some(k => k in p)) {
+      // 확정 요구(items)도 같이 고친다 — 여러 건을 연속 적용해도 서로 덮어쓰지 않도록 함수형 갱신 (속성도 items가 원본이라 함께 고쳐야 다음 동기화 때 되돌아가지 않는다)
+      const fix = it => it.id !== id ? it : { ...it, ...("title" in p ? { name: p.title } : {}), ...("text" in p ? { detail: p.text } : {}),
+        ...("priority" in p ? { priority: String(p.priority).trim() } : {}), ...("quality" in p ? { quality: p.quality } : {}), ...("assumptions" in p ? { assumptions: p.assumptions } : {}) };
       setItems(list => list.map(fix));
       setReqDraft(d => d ? { ...d, items: (d.items || []).map(fix) } : d);
       setItemsVer(v => v + 1);

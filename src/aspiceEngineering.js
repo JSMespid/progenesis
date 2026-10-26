@@ -729,6 +729,7 @@ export function syncSysReqs(items, prev) {
     const base = {
       id: it.id, level: "SYS", title: it.name || "", text, type: it.type || "기능",
       source: it.source || "", priority: it.priority || "중", stkId: it.stkId || "",
+      quality: it.quality || "", assumptions: it.assumptions || "",
       parents: Array.isArray(it.stkIds) ? it.stkIds.filter(Boolean) : (it.stkId ? [it.stkId] : []),   // 이해관계자 요구(STK) 추적
     };
     const merged = { ...base,
@@ -1574,7 +1575,7 @@ export function promptReview({ level, reqs, parents = [], version = "4.0", guide
   const crit = `[1차 — ${vdaBasis(version)}]\n${vda.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}\n\n[2차 — ${REVIEW_CRITERIA_VER}, ${REVIEW_CRITERIA_BASIS}]\n${REVIEW_CRITERIA.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}`;
   const crit3 = orgGuideCriteria(guideBlock);
   // 속성(우선순위·상태·릴리스·출처)도 함께 보낸다 — 빠뜨리면 검토 AI가 '우선순위·분류가 없다(구조화 BP)'를 근거 없이 지적한다
-  const brief = r => ({ id: r.id, title: nz(r.title), text: nz(r.text), type: r.type || "", priority: r.priority || "", status: r.status || "Draft", release: nz(r.release), source: nz(r.source), stkId: nz(r.stkId), verifCriteria: nz(r.verifCriteria), parents: r.parents || [] });
+  const brief = r => ({ id: r.id, title: nz(r.title), text: nz(r.text), type: r.type || "", priority: r.priority || "", status: r.status || "Draft", release: nz(r.release), source: nz(r.source), stkId: nz(r.stkId), quality: nz(r.quality), assumptions: nz(r.assumptions), verifCriteria: nz(r.verifCriteria), parents: r.parents || [] });
   const usedParents = new Set(reqs.flatMap(r => r.parents || []));
   const par = parents.filter(p => usedParents.has(p.id)).map(p => ({ id: p.id, title: nz(p.title), text: nz(p.text) }));
   return `역할: 당신은 ASPICE ${proc} (${procLabel(proc, version)}) 산출물을 검토하는 독립 품질보증(QA) 검토자입니다.
@@ -1991,8 +1992,9 @@ export function reviewEditSpec(model, key, id) {
   const F = (k, label, rows = 2, extra = {}) => ({ k, label, rows, ...extra });
   if (S.kind === "req") {
     const r = (m.reqs[lv] || []).find(x => x.id === id); if (!r) return null;
-    return { tab: lv === "SYS" ? "SYS" : lv, values: { title: r.title || "", text: r.text || "", verifCriteria: r.verifCriteria || "" },
-      fields: [F("title", "제목", 1, lv === "SYS" ? { sysItem: "name" } : {}), F("text", "내용", 3, lv === "SYS" ? { sysItem: "detail" } : {}), F("verifCriteria", "검증 기준", 2)] };
+    return { tab: lv === "SYS" ? "SYS" : lv, values: { title: r.title || "", text: r.text || "", verifCriteria: r.verifCriteria || "", priority: r.priority || "중", quality: r.quality || "", assumptions: r.assumptions || "" },
+      fields: [F("title", "제목", 1, lv === "SYS" ? { sysItem: "name" } : {}), F("text", "내용", 3, lv === "SYS" ? { sysItem: "detail" } : {}), F("verifCriteria", "검증 기준", 2),
+        F("priority", "우선순위 (상·중·하)", 1, lv === "SYS" ? { sysItem: "priority" } : {}), F("quality", "품질특성 (ISO/IEC 25010)", 1, lv === "SYS" ? { sysItem: "quality" } : {}), F("assumptions", "가정·제약", 2, lv === "SYS" ? { sysItem: "assumptions" } : {})] };
   }
   if (S.kind === "arch") {
     if (id === `RATIONALE-${lv}`) return { tab: lv, values: { rationale: m.rationale[lv] || "" }, fields: [F("rationale", "아키텍처 분석·설계 근거", 4)] };
@@ -2035,6 +2037,7 @@ export function applyReviewEdit(model, key, id, patch, meta = {}) {
     const i = (m.reqs[lv] || []).findIndex(x => x.id === id); if (i < 0) return m;
     // SYS 요구의 제목·내용도 모델에 바로 반영한다(확정 요구 items는 화면이 함께 고침 → 다음 동기화 때 같은 값). 검증 기준은 사용자 수정 표시
     if (lv === "SYS" && "verifCriteria" in p) p.verifCriteriaEdited = true;
+    if ("priority" in p && !["상", "중", "하"].includes(String(p.priority).trim())) delete p.priority;   // 우선순위는 상·중·하만
     m.reqs[lv][i] = { ...m.reqs[lv][i], ...p };
   } else if (S.kind === "arch") {
     if (id === `RATIONALE-${lv}`) m.rationale[lv] = p.rationale ?? m.rationale[lv];
@@ -2159,6 +2162,7 @@ ${AI_FIDELITY}
 1) 아래 [지적]을 모두 반영하되, [관련 항목](상위 요구·원문)에 없는 수치·조건을 새로 만들지 않는다. 근거가 없으면 'TBD(확인 필요)'로 쓴다.
 2) 지적이 없는 부분은 원문을 유지한다(불필요한 문장 재배열 금지).
 3) 각 필드는 한 문단, 줄바꿈 없이. 바꾸지 않을 필드는 결과에서 생략한다.
+3-1) 속성 칸 규칙: priority(우선순위)는 상·중·하 중 하나만 쓰고 원문·상위 요구에 근거가 없으면 바꾸지 않는다. quality(품질특성)는 비기능 요구에만 ISO/IEC 25010 특성명(기능 적합성·성능 효율성·호환성·사용성·신뢰성·보안성·유지보수성·이식성) 중 하나로 쓴다. 원문에 없는 수치·조건을 쓴 경우 그 사실을 assumptions(가정·제약)에 'TBD(확인 필요)'로 적는다. 지적이 문장이 아니라 속성에 관한 것이면 해당 속성 칸을 고친다.
 4) 출력은 JSON만: {"fields":{"<필드키>":"<수정안>"},"rationale":"무엇을 왜 바꿨는지 한두 문장"}
 
 [필드 키와 현재 값]
@@ -2208,6 +2212,7 @@ ${AI_FIDELITY}
 1) 항목마다 [지적]을 모두 반영하되, [관련 항목](상위 요구·원문)에 없는 수치·조건을 새로 만들지 않는다. 근거가 없으면 'TBD(확인 필요)'로 쓴다.
 2) 지적이 없는 부분은 원문을 유지한다. 바꾸지 않을 필드는 결과에서 생략한다. 각 필드는 한 문단, 줄바꿈 없이.
 3) 단일성(SINGULAR) 지적은 한 항목 안에서 문장을 정리하되 항목을 쪼개지는 않는다(분할은 사람이 한다). 대신 rationale에 '분할 권장'을 적는다.
+3-1) 속성 칸 규칙: priority(우선순위)는 상·중·하 중 하나만 쓰고 원문·상위 요구에 근거가 없으면 바꾸지 않는다. quality(품질특성)는 비기능 요구에만 ISO/IEC 25010 특성명(기능 적합성·성능 효율성·호환성·사용성·신뢰성·보안성·유지보수성·이식성) 중 하나로 쓴다. 원문에 없는 수치·조건을 쓴 경우 그 사실을 assumptions(가정·제약)에 'TBD(확인 필요)'로 적는다. 지적이 문장이 아니라 속성에 관한 것이면 해당 속성 칸을 고친다.
 4) id는 [항목]에 있는 것만 쓴다. 출력은 JSON만:
 {"items":[{"id":"","fields":{"<필드키>":"<수정안>"},"rationale":"무엇을 왜 바꿨는지 한두 문장"}]}
 
