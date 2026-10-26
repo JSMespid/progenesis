@@ -10033,8 +10033,9 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
     const m = requirements?.aspice ? AE.baselineLinks(requirements.aspice) : AE.normalizeModel(null);
     if (!requirements?.aspice) {
       m.useAI = !(() => { try { return localStorage.getItem(PBS_NOAI_KEY) === "1"; } catch { return false; } })();
-      if (form?.aspiceVersion && AE.ASPICE_VERSIONS.some(v => v.id === form.aspiceVersion)) m.version = form.aspiceVersion;   // 시작 화면에서 고른 적용 기준
     }
+    // 적용 기준(ASPICE 버전)의 기준은 프로젝트 기본정보다 — 저장본이 있어도 항상 맞춘다 (기본정보 4.0인데 V-모델·검토 기준이 겸용으로 남던 문제)
+    if (form?.aspiceVersion && AE.ASPICE_VERSIONS.some(v => v.id === form.aspiceVersion)) m.version = form.aspiceVersion;
     // SW·HW 범위의 기준은 적용 범위(개발 범위)다 — 저장본이 있어도 항상 맞춘다 (WBS·산출물 목록과 V-모델 범위의 일치)
     if (tailoring?.aspiceScope) { m.scope.SW = aspiceGroupOn(tailoring.aspiceScope, "SWE"); m.scope.HW = aspiceGroupOn(tailoring.aspiceScope, "HWE"); }
     m.reqs.STK = AE.syncStkReqs(requirements?.stk?.items || [], m.reqs.STK);
@@ -10097,6 +10098,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   const metrics = AE.coverageMetrics(model);
   // 적용 범위(개발 범위)가 있는 과제는 SW·HW 범위를 그쪽에서만 바꾼다 — WBS·산출물 목록·V-모델 범위 일치
   const scopeLocked = !!tailoring?.aspiceScope;
+  const verLocked = !!(form?.aspiceVersion && AE.ASPICE_VERSIONS.some(v => v.id === form.aspiceVersion));   // 기본정보에 버전이 있으면 V-모델에서는 바꾸지 않는다
   const hiddenHW = !model.scope.HW ? (model.reqs.HW.length + model.comps.HW.length + model.tests.filter(t => /^HWE/.test(t.level)).length) : 0;
   const hiddenSW = !model.scope.SW ? (model.reqs.SW.length + model.comps.SW.length + (model.units.SW || []).length) : 0;
   const inp = { width: "100%", padding: "4px 6px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 11, fontFamily: "inherit", boxSizing: "border-box" };
@@ -11461,13 +11463,13 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
             <AeSec title="적용 기준·범위">
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                 {aspiceVersionChoices(V).map(v => (
-                  <button key={v.id} onClick={() => set(n => { n.version = v.id; })} title={v.desc}
+                  <button key={v.id} disabled={verLocked && V !== v.id} onClick={() => { if (!verLocked) set(n => { n.version = v.id; }); }} title={verLocked ? "적용 기준(ASPICE 버전)은 프로젝트 기본정보에서 바꿉니다" : v.desc}
                     style={{ ...small, padding: "6px 12px", fontSize: 11.5, color: V === v.id ? "#fff" : T.muted, background: V === v.id ? T.accent : "transparent", borderColor: V === v.id ? T.accent : T.border }}>{v.label}</button>))}
               </div>
-              <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>{AE.ASPICE_VERSIONS.find(v => v.id === V)?.desc}</div>
+              <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>{AE.ASPICE_VERSIONS.find(v => v.id === V)?.desc}{verLocked && " — 적용 기준은 프로젝트 기본정보의 ASPICE 버전을 따릅니다. 바꾸려면 기본정보에서 변경하세요."}</div>
               {V === "both" && <div style={{ fontSize: 11, color: T.amber, marginBottom: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 ⚠ 이 과제는 이전 설정인 '3.1 + 4.0 겸용'입니다. 신규 과제는 ASPICE 4.0이 기본이며, 4.0으로 바꾸면 산출물의 3.1 WP 번호 병기와 1차 검토 기준의 3.1 BP 병기가 빠집니다.
-                <button onClick={() => { if (window.confirm("적용 기준을 ASPICE 4.0으로 바꿀까요?\n산출물·검토 기준에서 3.1 병기가 빠집니다. (작성한 요구·설계·시험 내용은 그대로입니다)")) set(n => { n.version = "4.0"; }); }} style={{ ...small, padding: "3px 10px", fontSize: 11, color: T.accent, borderColor: T.accent }}>4.0으로 바꾸기</button>
+                {verLocked ? <span style={{ color: T.text }}>프로젝트 기본정보의 ASPICE 버전을 4.0으로 바꾸면 여기에도 반영됩니다.</span> : <button onClick={() => { if (window.confirm("적용 기준을 ASPICE 4.0으로 바꿀까요?\n산출물·검토 기준에서 3.1 병기가 빠집니다. (작성한 요구·설계·시험 내용은 그대로입니다)")) set(n => { n.version = "4.0"; }); }} style={{ ...small, padding: "3px 10px", fontSize: 11, color: T.accent, borderColor: T.accent }}>4.0으로 바꾸기</button>}
               </div>}
               <div style={{ display: "flex", gap: 16, fontSize: 11.5, flexWrap: "wrap" }}>
                 <label title="시스템 범위는 항상 포함 — SYS.1 이해관계자 요구(STK) 층부터 SYS.2~5까지"><input type="checkbox" checked disabled /> 시스템 (SYS.1~SYS.5)</label>
