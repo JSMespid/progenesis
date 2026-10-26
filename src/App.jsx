@@ -9212,6 +9212,12 @@ function ReqGenModal({ onClose, form, wbs, requirements, setRequirements, ossp, 
   const [prog, setProg] = useState(null);
   const [error, setError] = useState(null);
   const [open, setOpen] = useState({});   // 행별 상세(명세) 펼침
+  const focusKey = focusIds ? [...focusIds].join("|") : "";
+  useEffect(() => {
+    if (!focusIds || focusIds.size !== 1) return;
+    const id = [...focusIds][0]; const i = items.findIndex(x => x.id === id);
+    if (i >= 0) setOpen(o => ({ ...o, [i]: true }));
+  }, [focusKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [guides, setGuides] = useState([]);          // 작성 가이드 (전역 라이브러리)
   const [guideSel, setGuideSel] = useState({});      // { 가이드id: 적용 여부 } — 활성 가이드는 기본 적용
   const guideTrack = STK_ON ? "aspice" : "si";   // 과제 유형별 가이드 적용 대상
@@ -10111,6 +10117,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   const [artOpen, setArtOpen] = useState(() => new Set());   // 펼친 유닛·블록 그룹   // 문서 미리보기 { key, kind: html|sheets|loading|error, html, sheets, tab, bytes, ext }   // mode: diagram | code   // SWE.3 상세설계 다이어그램 보기 { unit id, kind }
   // 커버리지 "빠짐 N건" → 해당 탭으로 이동해 미연결 항목만 표시 ({ tab, level?, ids:Set, q })
   const [focus, setFocus] = useState(null);
+  const [rvBack, setRvBack] = useState(null);   // QA 교차검토 → '원래 탭'으로 이동한 항목 ID (돌아가기 띠 표시)
   const focusOn = tab === focus?.tab ? focus : null;
   const applyFocus = (list) => (focusOn && list.some(x => focusOn.ids.has(x.id))) ? list.filter(x => focusOn.ids.has(x.id)) : list;
   const goMissing = (c) => { setFocus({ key: c.key, tab: c.tab, level: c.level || null, ids: new Set(c.missing), q: c.q, n: c.missing.length }); setTab(c.tab, c.level || null); if (c.level) setVFilter(c.level); };
@@ -11266,7 +11273,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center", marginTop: 4 }}>
           <span style={{ marginRight: "auto" }} />
           <button onClick={aiFixDraft} disabled={busy || !!draftAt} title="AI 수정안 초안 — 판정된(틀림 제외)·미판정 의견과 관련 상위 항목을 근거로 필드별 수정안을 만들어 칸에 채웁니다. 적용은 직접 누릅니다." style={{ ...btn, color: T.accent }}>{draftAt ? "✦ 만드는 중…" : "✦ AI 초안"}</button>
-          <button onClick={() => setTab(sp.tab)} title="이 항목이 있는 원래 탭으로 이동해서 고칩니다" style={btn}>원래 탭 ↗</button>
+          <button onClick={() => goItem(rvEdit.key, rvEdit.id)} title={`${rvEdit.id}이(가) 있는 원래 화면(${AE.reviewScope(rvEdit.key)?.proc || ""})으로 이동해 그 항목을 펼쳐 보여 줍니다. 고친 뒤 위쪽의 '← QA 교차검토로'를 누르면 돌아옵니다.`} style={btn}>원래 탭 ↗</button>
           <button onClick={() => setRvEdit(null)} title="고친 내용을 버리고 닫습니다" style={btn}>취소</button>
           <button onClick={applyReviewEditUI} title={`고친 내용을 반영하고 수정 이력을 남깁니다.\n이 항목의 검토 의견은 '내용 변경됨'이 되고, 연결된 하위 항목에는 변경 영향 검토가 표시될 수 있습니다.${AE.reviewScope(rvEdit.key)?.kind === "test" ? "\n수정한 시험은 수동 작성으로 바뀌어 규칙 재생성 때 덮어쓰지 않습니다." : ""}`} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>적용</button>
         </div>
@@ -11317,6 +11324,25 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   const activeGrp = tab === "setup" ? null : activeProc ? activeProc.grp
     : tab === "req" || tab === "SYS" ? "SYS" : tab === "SW" ? "SWE" : tab === "HW" ? "HWE" : tab === "trace" || tab === "review" ? "QA" : null;
   const goProc = (id) => { const p = AE_PROCS.find(x => x.id === id); if (!p) return; setTabRaw(p.tab); setSub(p.sub || null); setFocus(null); if (p.tab === "verif") setVFilter(p.sub); };
+  // 검토 대상(산출물·ID)의 원래 위치로 이동 — 해당 프로세스 탭을 열고, 그 항목의 상세를 펼친 뒤 화면 가운데로 스크롤·강조한다
+  const flashId = (id, tries = 8) => setTimeout(() => {
+    const root = document.querySelector("[data-ae-root]") || document.body;
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: n => (n.nodeValue || "").trim() === id ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP });
+    let el = null; for (let n = w.nextNode(); n; n = w.nextNode()) { const e = n.parentElement; if (e && e.offsetParent !== null) { el = e; break; } }
+    if (!el) { if (tries > 0) flashId(id, tries - 1); return; }
+    const box = el.closest("[style*='border-radius']") || el;
+    box.scrollIntoView({ behavior: "smooth", block: "center" });
+    const prev = box.style.boxShadow; box.style.boxShadow = `0 0 0 2px ${T.accent}`; setTimeout(() => { box.style.boxShadow = prev; }, 2600);
+  }, 180);
+  const goItem = (key, id) => {
+    setRvBack(id);
+    const S = AE.reviewScope(key); const P = S && AE_PROCS.find(x => x.id === S.proc);
+    if (!P) { const sp = AE.reviewEditSpec(model, key, id); if (sp) setTab(sp.tab); return; }
+    goProc(S.proc);
+    if (P.tab === "req") setFocus({ key: "goto", tab: "req", ids: new Set([id]), q: id, n: 1, goto: true });
+    setOpen(o => ({ ...o, [`${S.lv}${id}`]: true, [id]: true }));
+    flashId(id);
+  };
   const goGroup = (g) => { const ps = procVisible.filter(p => p.grp === g); const p = ps.find(x => procStates[x.id] !== "done" && procStates[x.id] !== "na") || ps[0]; if (p) goProc(p.id); };
   const procMark = st => st === "done" ? "✓" : st === "partial" ? "●" : "○";
   const procColor = st => st === "done" ? T.green : st === "partial" ? T.amber : T.muted;
@@ -11481,9 +11507,15 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               <span style={{ flex: 1 }}>상위 요구 변경으로 검토가 필요한 추적 연결이 있습니다 — 변경 검토 {lstat.suspect}건{lstat.invalid ? ` · 무효(조치 필요) ${lstat.invalid}건` : ""}{lstat.orphan ? ` · 고아 연결 ${lstat.orphan}건` : ""}. 하위 문서는 자동으로 수정되지 않습니다.</span>
               <button onClick={() => setTab("trace")} style={{ ...small, color: T.amber, borderColor: T.amber + "88" }}>변경 영향 검토</button>
             </div>)}
+          {rvBack && tab !== "review" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11.5, padding: "7px 10px", background: T.green + "10", border: `1px solid ${T.green}55`, borderRadius: 8, marginBottom: 10 }}>
+              <span style={{ flex: 1 }}>QA 교차검토에서 <b>{rvBack}</b>(으)로 이동했습니다. 고친 뒤 돌아가서 판정을 이어 가세요.</span>
+              <button onClick={() => flashId(rvBack, 2)} title="이 항목 위치를 다시 보여 줍니다" style={small}>위치 다시 보기</button>
+              <button onClick={() => { setRvBack(null); setFocus(null); goProc("SUP.1"); setTimeout(() => document.getElementById("rv-judge")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120); }} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>← QA 교차검토로</button>
+            </div>)}
           {focusOn && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11.5, padding: "7px 10px", background: T.accent + "11", border: `1px solid ${T.accent}55`, borderRadius: 8, marginBottom: 10 }}>
-              <span style={{ flex: 1 }}>🔎 <b>"{focusOn.q}"</b>에서 빠진 {focusOn.n}건만 표시 중{(() => { const ids = [...focusOn.ids]; return ids.length <= 12 ? ` — ${ids.join(", ")}` : ` — ${ids.slice(0, 12).join(", ")} 외 ${ids.length - 12}건`; })()}</span>
+              {focusOn.goto ? <span style={{ flex: 1 }}>🔎 QA 교차검토에서 이동 — <b>{focusOn.q}</b>만 표시 중</span> : <span style={{ flex: 1 }}>🔎 <b>"{focusOn.q}"</b>에서 빠진 {focusOn.n}건만 표시 중{(() => { const ids = [...focusOn.ids]; return ids.length <= 12 ? ` — ${ids.join(", ")}` : ` — ${ids.slice(0, 12).join(", ")} 외 ${ids.length - 12}건`; })()}</span>}
               <button onClick={() => setFocus(null)} style={small}>전체 보기</button>
             </div>)}
           {focusOn && (() => {
