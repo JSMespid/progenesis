@@ -11981,7 +11981,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               }
               setModel(m => AE.judgeReview(m, [f.key], state, note));
             };
-            const chip = (label, val, color, key) => <button onClick={key ? () => setRvRule(r => r === key ? null : key) : undefined} title={key ? "눌러서 검사 결과 보기" : undefined}
+            const chip = (label, val, color, key, tip) => <button onClick={key ? () => setRvRule(r => r === key ? null : key) : undefined} title={tip ? `${tip}\n\n눌러서 검사 결과 보기` : key ? "눌러서 검사 결과 보기" : undefined}
               style={{ padding: "4px 10px", borderRadius: 8, background: rvRule === key && key ? color + "33" : color + "18", border: `1px solid ${rvRule === key && key ? color : color + "44"}`, color, fontSize: 11, cursor: key ? "pointer" : "default", fontFamily: "inherit" }}>{label} <b>{val}</b>{key ? (rvRule === key ? " ▴" : " ▾") : ""}</button>;
             const editorBox = editorBoxC, scopeOfId = scopeOfIdC, openEdit = openEditC;
             const totItems = cov.reduce((a, c) => a + c.total, 0), totAny = cov.reduce((a, c) => a + c.reviewedAny, 0);
@@ -12088,7 +12088,8 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               <AeSec {...stepSec("rule")} title="① 규칙 검사 — 결정론적 (같은 입력이면 같은 결과)" right={<button onClick={() => setTab("trace")} style={small}>추적성·충족도에서 보기</button>}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {chip(`${S.proc} 관련 규칙 지적`, `오류 ${hereN("error")} · 경고 ${hereN("warn")}`, hereN("error") ? T.red : ruleHere.length ? T.amber : T.green, "here")}
-                  {S.kind === "req" && chip(`품질 플래그 걸린 ${S.proc} ${K.noun}`, `${qf} / ${lvItems.length}건`, qf ? T.amber : T.green, "qf")}
+                  {S.kind === "req" && chip(`품질 플래그 걸린 ${S.proc} ${K.noun}`, `${qf} / ${lvItems.length}건`, qf ? T.amber : T.green, "qf",
+                    `품질 플래그란?\n${K.noun} 한 건의 문장을 AI 없이 규칙으로 읽어, 다시 볼 필요가 있는 ${K.noun}에 붙이는 표시입니다.\n오류가 아니라 "한 번 확인하세요"라는 신호이며, 고칠지는 QA 담당자가 판단합니다.\n\n이런 경우에 붙습니다\n· 모호어 — '적절히·충분히·효율적'처럼 잴 수 없는 말\n· 검증 기준 없음 — 무엇으로 합격을 판단할지 비어 있음\n· 정량 기준 없음 — 성능·비기능 ${K.noun}에 수치+단위나 적용 규격이 없음\n· 복합 요구 의심 — 한 문장에 여러 요구가 섞여 있음\n· 설계 제약 성격 — 시스템 ${K.noun}에 MCU·알고리즘 같은 설계 용어가 있음\n· 요구 내용 없음 — 제목과 내용이 모두 비어 있음\n\n근거: ASPICE 4.0 정보항목 17-00 요구사항 특성`)}
                   <span style={{ alignSelf: "center", fontSize: 10.5, color: T.muted, marginLeft: 4 }}>참고 — V-모델 전체:</span>
                   {chip("오류", sevN("error"), sevN("error") ? T.red : T.green, "error")}
                   {chip("경고", sevN("warn"), sevN("warn") ? T.amber : T.green, "warn")}
