@@ -11932,8 +11932,9 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
             const lvItems = AE.reviewItems(model, rvLevel);
             const itemIds = new Set(lvItems.map(it => it.id));
             const qf = S.kind === "req" ? (model.reqs[S.lv] || []).filter(r => AE.qualityFlags(r).length).length : 0;
-            const ruleHere = findings.filter(f => (f.ids || []).some(id => itemIds.has(id)));
-            const sevN = k => findings.filter(f => f.sev === k).length;
+            const ruleHere = findings.filter(f => (f.allIds || f.ids || []).some(id => itemIds.has(id)));
+            const sevN = k => findings.filter(f => f.sev === k).length;            // V-모델 전체
+            const hereN = k => ruleHere.filter(f => f.sev === k).length;          // 선택한 산출물 관련
             const RC = AE.reviewCriteriaFor(rvLevel, V);
 
             const critLabel = Object.fromEntries(RC.all.map(c => [c.code, c.label]));
@@ -12035,20 +12036,24 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                   <button onClick={() => open_(k, id)} title={`${hint}\n(식별자: ${id})`} style={{ flex: "1 1 150px", textAlign: "left", background: on ? T.accent + "18" : T.bg, border: `1.5px solid ${on ? T.accent : warn ? T.amber + "88" : T.border}`, borderRadius: 9, padding: "7px 10px", cursor: "pointer", fontFamily: "inherit", color: T.text }}>
                     <div style={{ fontSize: 10.5, color: on ? T.accent : T.muted, fontWeight: on ? 700 : 400 }}>{no} {title}</div>
                     <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.25, color: warn ? T.amber : T.text }}>{big}<span style={{ fontSize: 10.5, fontWeight: 500, color: T.muted, marginLeft: 3 }}>{unit}</span></div>
-                    <div className="ae-hint" style={{ fontSize: 10, color: T.muted, lineHeight: 1.45 }}>{hint}</div>
+                    <div className="ae-hint" style={{ fontSize: 10, color: T.muted, lineHeight: 1.45 }}>{String(hint).split("\n")[0]}</div>
                   </button>); };
                 const ruleN = ruleHere.length + qf;
                 const nextTxt = { ai: `검토 AI로 변경분 ${changedN}건 검토`, fix: `수정안 만들기 — ${K.noun} ${fixT.length}건`, judge: `남은 의견 ${cnt.open}건 판정` }[rvNextStep];
                 return (
                   <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: "9px 10px", marginBottom: 10, background: T.surface }}>
                     <div style={{ display: "flex", gap: 6, alignItems: "stretch", flexWrap: "wrap" }}>
-                      {step("rule", "①", "규칙 검사", sevN("error"), `오류 · 경고 ${sevN("warn")}`, "rv-rule", "AI 없이 규칙으로 추적성·품질을 점검 — 오류는 반드시 해소", sevN("error") > 0)}
+                      {step("rule", "①", "규칙 검사", hereN("error"), `오류 · 경고 ${hereN("warn")}${S.kind === "req" ? ` · 품질 플래그 ${qf}` : ""}`, "rv-rule",
+                        `${S.proc} 관련 규칙 지적: 오류 ${hereN("error")} · 경고 ${hereN("warn")}${S.kind === "req" ? ` · 품질 플래그 걸린 ${K.noun} ${qf} / ${lvItems.length}건` : ""}\n참고 — V-모델 전체: 오류 ${sevN("error")} · 경고 ${sevN("warn")}\nAI 없이 규칙으로 추적성·품질을 점검 — 오류는 반드시 해소`, hereN("error") > 0)}
                       <span style={{ alignSelf: "center", color: T.muted }}>→</span>
-                      {step("ai", "②", "검토 AI", changedN, `${K.noun} 검토할 것`, "rv-ai", `검토 AI에게 보낼 항목(처음이거나 검토 후 바뀐 것). 받은 의견 ${fsL.length}건`, !!changedN)}
+                      {step("ai", "②", "검토 AI", changedN, `${K.noun} 검토할 것`, "rv-ai",
+                        `검토할 ${K.noun} ${changedN} / ${lvItems.length}건 — ${rvSel ? `${rvSel.label.replace(/ \(.*\)$/, "")}에게 처음 보내거나 검토 후 바뀐 것` : "검토 AI 미선택: 전체가 대상"}\n지금까지 받은 의견 ${cnt.total}건`, !!changedN)}
                       <span style={{ alignSelf: "center", color: T.muted }}>→</span>
-                      {step("judge", "③", "사람 판정", cnt.open, "의견 미판정", "rv-judge", `맞음 ${cnt.valid} · 보류 ${cnt.opinion} · 틀림 ${cnt.invalid}`, !!cnt.open)}
+                      {step("judge", "③", "사람 판정", cnt.open, "의견 미판정", "rv-judge",
+                        `미판정 의견 ${cnt.open} / ${cnt.total}건 — QA 담당자가 맞음·보류·틀림을 판정할 것\n판정 끝남: 맞음 ${cnt.valid} · 보류 ${cnt.opinion} · 틀림 ${cnt.invalid}${(() => { const r = cnt.total - cnt.open - cnt.valid - cnt.opinion - cnt.invalid; return r > 0 ? ` · 대상 삭제 ${r}` : ""; })()}`, !!cnt.open)}
                       <span style={{ alignSelf: "center", color: T.muted }}>→</span>
-                      {step("fix", "④", "수정안", fixT.length, `${K.noun} 고칠 것`, "rv-fix", `'맞음'으로 판정했지만 아직 안 고친 의견 ${fixOps}건이 달린 ${K.noun} — 수정안을 만들어 승인`, !!fixT.length)}
+                      {step("fix", "④", "수정안", fixT.length, `${K.noun} 고칠 것`, "rv-fix",
+                        `고칠 ${K.noun} ${fixT.length}건 — '맞음'으로 판정했지만 아직 안 고친 의견 ${fixOps}건이 달린 ${K.noun}\n수정안을 만들어 승인`, !!fixT.length)}
                     </div>
                     <div style={{ fontSize: 11, marginTop: 7, color: rvNextStep ? T.text : T.green, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                       {rvNextStep ? <>👉 다음 할 일: <b>{nextTxt}</b>{curStep !== rvNextStep && <button onClick={() => open_(rvNextStep, `rv-${rvNextStep}`)} style={{ ...small, padding: "1px 8px" }}>그 단계 열기</button>}</> : "✓ 이 산출물은 검토·수정·판정이 모두 끝났습니다."}
@@ -12063,12 +12068,12 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               <div id="rv-rule" />
               <AeSec {...stepSec("rule")} title="① 규칙 검사 — 결정론적 (같은 입력이면 같은 결과)" right={<button onClick={() => setTab("trace")} style={small}>추적성·충족도에서 보기</button>}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {chip("V-모델 전체 오류", sevN("error"), sevN("error") ? T.red : T.green, "error")}
+                  {chip(`${S.proc} 관련 규칙 지적`, `오류 ${hereN("error")} · 경고 ${hereN("warn")}`, hereN("error") ? T.red : ruleHere.length ? T.amber : T.green, "here")}
+                  {S.kind === "req" && chip(`품질 플래그 걸린 ${S.proc} ${K.noun}`, `${qf} / ${lvItems.length}건`, qf ? T.amber : T.green, "qf")}
+                  <span style={{ alignSelf: "center", fontSize: 10.5, color: T.muted, marginLeft: 4 }}>참고 — V-모델 전체:</span>
+                  {chip("오류", sevN("error"), sevN("error") ? T.red : T.green, "error")}
                   {chip("경고", sevN("warn"), sevN("warn") ? T.amber : T.green, "warn")}
                   {chip("정보", sevN("info"), T.muted, "info")}
-                  {S.kind === "req"
-                    ? chip(`품질 플래그 걸린 ${S.proc} 요구`, `${qf} / ${lvItems.length}건`, qf ? T.amber : T.green, "qf")
-                    : chip(`${S.proc} 관련 규칙 지적`, ruleHere.length, ruleHere.some(f => f.sev === "error") ? T.red : ruleHere.length ? T.amber : T.green, "here")}
                 </div>
                 {rvRule && (() => {
                   const sevC = { error: T.red, warn: T.amber, info: T.muted };

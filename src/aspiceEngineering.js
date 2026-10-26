@@ -904,7 +904,7 @@ export const bpLabel = (key, version) => versionsOf(version).map(v => `${v}: ${(
 export function checkConsistency(model) {
   const m = normalizeModel(model);
   const F = [];
-  const add = (sev, bp, msg, ids = []) => F.push({ sev, bp, msg, ids: ids.slice(0, 30), count: ids.length });
+  const add = (sev, bp, msg, ids = []) => F.push({ sev, bp, msg, ids: ids.slice(0, 30), allIds: ids, count: ids.length });   // allIds: 산출물별 집계용(표시는 ids 30건)
   const scope = m.scope;
   const sysReq = m.reqs.SYS, sysComp = m.comps.SYS;
   const compIds = lv => new Set((m.comps[lv] || []).map(c => c.id));
