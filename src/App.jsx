@@ -9497,7 +9497,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
         } catch (_) { /* 명세 실패 — 개요만 있는 초안으로 남김 */ }
       }
       setItems(list);
-      setProg({ percent: 100, label: `미도출 ${miss.length}건 처리 — 기존 요구에 연결 ${linked} · 새 시스템 요구 ${created} · 원문 초안 ${fallback}. 검토 후 '확정·V-모델 반영'을 누르세요.` });
+      setProg({ percent: 100, label: `미도출 ${miss.length}건 처리 — 기존 요구에 연결 ${linked} · 새 시스템 요구 ${created} · 원문 초안 ${fallback}. 검토 후 '✓ 확정'을 누르세요.` });
     } catch (e) { setError("미도출 도출 실패: " + e.message); setProg(null); }
     setBusy(false);
   }
@@ -9514,12 +9514,12 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
       newId = next[next.length - 1]?.id || "";
       return next;
     });
-    setTimeout(() => setStkMsg(`${k.id} → 새 시스템 요구 ${newId || ""}를 원문으로 초안 작성했습니다. 아래 시스템 요구 목록 맨 끝에서 [상세]를 열어 요구사항명·검증 기준을 다듬은 뒤 '확정·V-모델 반영'을 누르세요.`), 0);
+    setTimeout(() => setStkMsg(`${k.id} → 새 시스템 요구 ${newId || ""}를 원문으로 초안 작성했습니다. 아래 시스템 요구 목록 맨 끝에서 [상세]를 열어 요구사항명·검증 기준을 다듬은 뒤 '✓ 확정'을 누르세요.`), 0);
   }
   function linkStk(k, reqId) {
     if (!reqId) return;
     setItems(list => list.map(it => it.id === reqId ? { ...it, stkIds: [...new Set([...(it.stkIds || []), k.id])] } : it));
-    setStkMsg(`${k.id}를 ${reqId}의 근거로 연결했습니다. ${reqId}의 본문·검증 기준에 이 조건(${String(k.text || "").slice(0, 30)}…)이 실제로 들어 있는지 [상세]에서 확인한 뒤 '확정·V-모델 반영'을 누르세요.`);
+    setStkMsg(`${k.id}를 ${reqId}의 근거로 연결했습니다. ${reqId}의 본문·검증 기준에 이 조건(${String(k.text || "").slice(0, 30)}…)이 실제로 들어 있는지 [상세]에서 확인한 뒤 '✓ 확정'을 누르세요.`);
   }
   function confirmSave() {
     const valid = items.filter(it => String(it.name || "").trim());
@@ -9609,7 +9609,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
                   <span>ID</span><span>요구 문장 (원문 발췌)</span><span>출처(문서·조항)</span><span>주체</span><span>유형</span><span title="고객과의 합의 상태 — 검토 중 · 합의 · 보류 · 해당 없음(사유 필수)">합의 상태</span><span title="이 원문에서 도출되어 근거로 연결된 시스템 요구(SYS.2) — 누르면 SYS.2 탭으로 이동">도출된 시스템 요구</span><span></span>
                 </div>
                 {stkMsg && <div style={{ fontSize:11, color:T.green, background:T.green + "12", border:`1px solid ${T.green}44`, borderRadius:7, padding:"6px 10px", display:"flex", gap:8, alignItems:"center" }}><span style={{ flex:1 }}>✓ {stkMsg}</span><button onClick={() => setStkMsg(null)} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer" }}>✕</button></div>}
-                {stk.some(k => !sysCount[k.id] && k.status !== "해당 없음") && <div style={{ fontSize:10.5, color:T.muted, padding:"0 4px" }}>'도출된 시스템 요구'가 비어 있는 요구는 <b style={{ color:T.accent }}>＋ 시스템 요구로</b>(새 시스템 요구 초안) 또는 <b>연결…</b>(기존 시스템 요구의 근거로 추가)로 처리하거나, 우리 범위가 아니면 합의 상태를 <b>해당 없음</b>으로 바꾸고 사유를 적으세요. 처리 후 아래 '확정·V-모델 반영'을 눌러야 반영됩니다.</div>}
+                {stk.some(k => !sysCount[k.id] && k.status !== "해당 없음") && <div style={{ fontSize:10.5, color:T.muted, padding:"0 4px" }}>'도출된 시스템 요구'가 비어 있는 요구는 <b style={{ color:T.accent }}>＋ 시스템 요구로</b>(새 시스템 요구 초안) 또는 <b>연결…</b>(기존 시스템 요구의 근거로 추가)로 처리하거나, 우리 범위가 아니면 합의 상태를 <b>해당 없음</b>으로 바꾸고 사유를 적으세요. 처리 후 아래 '✓ 확정'을 눌러야 반영됩니다.</div>}
                 {stk.map((k, i) => (!focusIds || !stk.some(x => focusIds.has(x.id)) || focusIds.has(k.id)) && (
                   <div key={k.id || i} style={{ display:"grid", gridTemplateColumns:"72px 1fr 130px 92px 90px 84px 150px 24px", gap:6, alignItems:"center", background:T.bg, border:`1px solid ${sysCount[k.id] || AE.stkClosed(k) ? T.border : T.amber + "66"}`, borderRadius:8, padding:"5px 8px", opacity: AE.stkClosed(k) ? 0.8 : 1 }}>
                     <span style={{ fontFamily:"monospace", fontSize:10, color:T.accent }}>{k.id}</span>
@@ -9718,7 +9718,7 @@ ${JSON.stringify(grp.map(g => ({ id: g.id, type: g.type, name: g.name, summary: 
             {!embedded && <Btn variant="outline" onClick={onClose} style={{ fontSize:12, padding:"7px 14px" }}>취소</Btn>}
             {STK_ON && (() => { const n = stk.filter(k => String(k.text || "").trim() && !["합의", "보류", "해당 없음"].includes(k.status)).length;
               return n ? <span title="ASPICE SYS.1: 이해관계자 요구는 고객과 합의해야 합니다. 합의 증적이 있으면 각 요구의 상태를 '합의'로 바꾸세요" style={{ alignSelf:"center", fontSize:10.5, color:T.amber, whiteSpace:"nowrap" }}>⚠ 미합의 {n}건</span> : null; })()}
-            <Btn onClick={confirmSave} disabled={busy || !items.length} title="이해관계자 요구(SYS.1)와 시스템 요구(SYS.2)를 확정해 V-모델 추적 모델에 반영합니다(내용이 바뀐 요구의 하위 연결은 '변경 검토 필요'로 표시). 반영 후 하단 [✓ 저장]으로 프로젝트에 저장합니다" style={{ fontSize:12, padding:"7px 14px" }}>{embedded ? `✓ 확정·V-모델 반영 (${STK_ON && stk.length ? `이해관계자 ${stk.length} · ` : ""}시스템 ${items.length}건)` : `✓ 확정 저장 (${items.length}건)`}</Btn>
+            <Btn onClick={confirmSave} disabled={busy || !items.length} title={`${embedded ? `확정·V-모델 반영 — ${STK_ON && stk.length ? `이해관계자 요구 ${stk.length}건 · ` : ""}시스템 요구 ${items.length}건` : `확정 저장 — ${items.length}건`}\n이해관계자 요구(SYS.1)와 시스템 요구(SYS.2)를 확정해 V-모델 추적 모델에 반영합니다.\n내용이 바뀐 요구의 하위 연결은 '변경 검토 필요'로 표시됩니다.\n반영 후 하단 [✓ 저장]으로 프로젝트에 저장합니다.`} style={{ fontSize:12, padding:"7px 14px" }}>{embedded ? "✓ 확정" : `✓ 확정 저장 (${items.length}건)`}</Btn>
           </div>
         </div>
   );
@@ -9804,7 +9804,7 @@ const AE_GUIDE = {
     todo: ["적용 기준(ASPICE 버전 — 프로젝트 기본정보에서 선택)과 개발 범위를 확인합니다.", "확보한 입력자료(고객 사양서·DBC·회의록 등)를 체크합니다. 없는 자료는 TBD로 남겨도 됩니다.", "통신 DB(DBC)가 있으면 끌어다 놓아 인터페이스 요구를 자동으로 만듭니다."],
     done: "버전·범위를 정하고 저장하면 끝. 입력자료는 나중에 추가해도 됩니다." },
   req: { why: "고객(OEM)이 말한 문장(이해관계자 요구)을 그대로 남기고, 그것을 우리 시스템이 검증할 수 있는 문장(시스템 요구)으로 다시 씁니다. 둘을 연결해 두어야 '고객 요구를 빠짐없이 분석했다'는 근거가 됩니다.",
-    todo: ["고객 사양서·RFQ 등을 붙여넣거나 파일을 올리고 [원문에서 요구 도출]을 누릅니다.", "이해관계자 요구마다 시스템 요구가 연결됐는지(SYS 칸) 확인하고, 0건이면 [＋ 도출]·[연결…]·'해당 없음'으로 처리합니다.", "시스템 요구의 [상세]에서 검증 기준(합격·불합격을 가를 수치)을 확인한 뒤 [확정·V-모델 반영]을 누릅니다."],
+    todo: ["고객 사양서·RFQ 등을 붙여넣거나 파일을 올리고 [원문에서 요구 도출]을 누릅니다.", "이해관계자 요구마다 시스템 요구가 연결됐는지(SYS 칸) 확인하고, 0건이면 [＋ 도출]·[연결…]·'해당 없음'으로 처리합니다.", "시스템 요구의 [상세]에서 검증 기준(합격·불합격을 가를 수치)을 확인한 뒤 [✓ 확정]을 누릅니다."],
     done: "모든 이해관계자 요구가 시스템 요구에 연결되거나 '해당 없음'(사유)이고, 확정을 눌렀으면 끝." },
   SYS: { why: "시스템을 요소(센서부·MCU·통신부 등)로 나누고, 각 시스템 요구를 담당 요소에 할당합니다. 이 할당이 다음 단계에서 SW/HW 요구를 내리는 기준이 됩니다.",
     todo: ["[AI 요소 설계·할당]으로 초안을 만들거나 직접 요소를 추가합니다. 요소 구분(SW·HW·HW+SW)이 중요합니다 — SW가 포함된 요소의 요구만 SW로 내려갑니다.", "요구마다 담당 요소 칩을 확인합니다.", "인터페이스(누가 → 누구에게, 무엇을, 얼마나 자주)와 운영 모드(startup·normal·sleep…)를 채웁니다."],
@@ -11054,7 +11054,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   const bakInputRef = useRef(null);
   // 이전 과제에서 가져오기 — 지금 편집 내용을 기준으로 합친 뒤 저장하고 창을 새 데이터로 다시 구성
   function applyReuseImport(src, sel, opts) {
-    if (reqDirty) { setErr("SYS.1·SYS.2에서 아직 확정하지 않은 요구 편집이 있습니다 — [확정·V-모델 반영] 후에 가져오세요."); return; }
+    if (reqDirty) { setErr("SYS.1·SYS.2에서 아직 확정하지 않은 요구 편집이 있습니다 — [✓ 확정] 후에 가져오세요."); return; }
     try {
       const { req: base } = buildSaveOut();
       const { req, log, notes } = applyReuse(base, src.req, sel, opts, { name: src.name, key: src.key });
@@ -11102,7 +11102,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   function requestClose() {
     // 진행 중인 작업·저장 안 된 변경·아직 처리하지 않은 수정안(저장 대상이 아닌 임시 결과)이 있으면 확인
     const warn = [];
-    if (reqDirty) warn.push("· SYS.1·SYS.2 요구 편집 내용을 아직 [확정·V-모델 반영]하지 않았습니다 (이 브라우저에 초안으로 보관되어 다시 열면 이어서 할 수 있지만, 확정 전에는 V-모델·저장에 포함되지 않습니다)");
+    if (reqDirty) warn.push("· SYS.1·SYS.2 요구 편집 내용을 아직 [✓ 확정]하지 않았습니다 (이 브라우저에 초안으로 보관되어 다시 열면 이어서 할 수 있지만, 확정 전에는 V-모델·저장에 포함되지 않습니다)");
     if (busy || brBusy || rvRunning) warn.push("· 지금 실행 중인 작업이 있습니다 (닫으면 중단되고 결과가 반영되지 않습니다)");
     if (dirty) warn.push("· 저장하지 않은 변경 내용이 있습니다");
     const pendFix = fixQ ? fixQ.cards.filter(c => c.status === "pending").length : 0;
@@ -12889,7 +12889,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <Btn variant="outline" onClick={downloadPkg} disabled={busy || !model.reqs.SYS.length} title="고객·심사 제출용 문서(명세서·설계서·검증 명세·결과서·추적 매트릭스·설계 모델·소스)를 OSSP 양식으로 만들어 ZIP 하나로 내려받습니다 (지금 화면 내용 기준)" style={{ fontSize: 12, padding: "7px 14px" }}>📦 산출물 내려받기 (ZIP)</Btn>
-            {reqDirty && <button onClick={() => setTab("req", "STK")} title="SYS.1·SYS.2에서 고친 요구를 아직 확정하지 않았습니다 — [확정·V-모델 반영]을 눌러야 V-모델과 저장에 포함됩니다" style={{ alignSelf: "center", fontSize: 10.5, color: T.amber, background: "none", border: `1px solid ${T.amber}88`, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>● 요구 확정 안 됨 →</button>}
+            {reqDirty && <button onClick={() => setTab("req", "STK")} title="SYS.1·SYS.2에서 고친 요구를 아직 확정하지 않았습니다 — [✓ 확정]을 눌러야 V-모델과 저장에 포함됩니다" style={{ alignSelf: "center", fontSize: 10.5, color: T.amber, background: "none", border: `1px solid ${T.amber}88`, borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>● 요구 확정 안 됨 →</button>}
             {(() => {
               // 저장 상태 — 서버(팀 공유)를 우선 표시하고, 서버에 아직 없을 때는 이 PC(브라우저) 기록 결과를 표시
               const S = (color, text, title, bold) => <span title={title} style={{ alignSelf: "center", fontSize: 10.5, color, whiteSpace: "nowrap", fontWeight: bold ? 700 : 400 }}>{text}</span>;
