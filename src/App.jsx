@@ -11479,7 +11479,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                       const cur = { ai: 2, judge: 3, fix: 4 }[next] ?? 5;
                       const pill = { 2: `검토할 ${noun} ${changedN}건`, 3: `미판정 ${cnt.open}건`, 4: `고칠 ${noun} ${fixN}건`, 5: "이 산출물 완료" }[cur];
                       const scrollTo = id => setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 30);
-                      const go = k => { if (k === "rev") { scrollTo("rv-reviewed"); return; } if (k === "sel") { scrollTo("rv-cov"); return; } setRvStepOpen(k); scrollTo(`rv-${k}`); };
+                      const go = k => { if (k === "rev") { scrollTo("rv-steps"); return; } if (k === "sel") { scrollTo("rv-cov"); return; } setRvStepOpen(k); scrollTo(`rv-${k}`); };
                       const X = i => 50 + i * 100, Y = 62;
                       const stateOf = i => i === 1 && errN ? "warn" : i < cur ? "done" : i === cur ? "now" : "todo";
                       const nodeTitle = i => `${steps[i].t} — ${steps[i].d}${i === 1 && errN ? ` (규칙 오류 ${errN}건)` : ""}`;
@@ -11517,13 +11517,10 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                           </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.border}`, fontSize: 11, flexWrap: "wrap" }}>
                             <span style={{ color: T.green }}>✓</span>
-                            <span style={{ color: T.muted }}>끝 기준 — 현황표의 모든 산출물이 <span style={{ color: T.text }}>검토됨 100% · 미판정 0</span>. 교차검토가 끝난 요구는 오른쪽 버튼으로 상태를 <span style={{ color: T.text }}>Reviewed</span>로 올립니다.</span>
+                            <span style={{ color: T.muted }}>끝 기준 — 현황표의 모든 산출물이 <span style={{ color: T.text }}>검토됨 100% · 미판정 0</span>. 교차검토가 끝난 요구는 아래 단계 칸의 <span style={{ color: T.text }}>⚑ Reviewed</span>에서 상태를 올립니다.</span>
                             <span style={{ flex: 1 }} />
                             {cur < 5 && <button onClick={() => go(steps[cur].k)} style={{ ...small, padding: "2px 10px" }}>{`${steps[cur].t}로 이동 ↓`}</button>}
-                            {(() => { const ready = AE.reviewReadyReqs(model); return <span id="rv-reviewed" style={{ display: "inline-flex", scrollMarginTop: 120 }}>
-                              <button disabled={busy || !ready.length} onClick={() => { if (!window.confirm(`교차검토가 끝난 요구 ${ready.length}건(현재 내용으로 검토됨 · 미판정 의견 없음 · 유효 의견은 수정 완료)의 상태를 Draft → Reviewed로 바꿉니다.\n변경은 수정 이력에 'QA 교차검토 근거'로 기록됩니다.\n\n계속할까요?`)) return; setModel(m => AE.markReviewed(m, ready)); setNote(`요구 ${ready.length}건을 Reviewed로 바꿨습니다 — 근거: QA 교차검토 판정 기록. 저장을 눌러 확정하세요.`); }}
-                                title={ready.length ? `교차검토가 끝난 요구 ${ready.length}건의 상태를 Draft → Reviewed로 올립니다(근거: 판정 기록).\n대상: 현재 내용으로 검토됨 · 미판정 의견 없음 · '맞음' 의견은 수정 완료` : "아직 Reviewed로 올릴 요구가 없습니다.\n대상: 현재 내용으로 검토됨 · 미판정 의견 없음 · '맞음' 의견은 수정 완료인 Draft 요구"}
-                                style={{ ...small, padding: "2px 10px", ...(ready.length ? { background: T.green, color: "#fff", borderColor: T.green } : { color: T.muted, cursor: "not-allowed" }) }}>⚑ Reviewed로 올리기 {ready.length}건</button></span>; })()}
+                            <button onClick={() => go("rev")} title="아래 단계 칸의 ⚑ Reviewed로 이동합니다" style={{ ...small, padding: "2px 10px" }}>⚑ Reviewed 칸으로 ↓</button>
                           </div>
                         </div>); })() : (<>
                     <ol style={{ margin: "0 0 6px 18px", padding: 0 }}>{AE_GUIDE[tab].todo.map((t, i) => <li key={i} style={{ marginBottom: 2 }}>{t}</li>)}</ol>
@@ -12188,7 +12185,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                 const ruleN = ruleHere.length + qf;
                 const nextTxt = { ai: `검토 AI로 변경분 ${changedN}건 검토`, fix: `수정안 만들기 — ${K.noun} ${fixT.length}건`, judge: `남은 의견 ${cnt.open}건 판정` }[rvNextStep];
                 return (
-                  <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: "9px 10px", marginBottom: 10, background: T.surface }}>
+                  <div id="rv-steps" style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: "9px 10px", marginBottom: 10, background: T.surface, scrollMarginTop: 120 }}>
                     <div style={{ display: "flex", gap: 6, alignItems: "stretch", flexWrap: "wrap" }}>
                       {step("rule", "①", "규칙 검사", hereN("error"), `오류 · 경고 ${hereN("warn")}${S.kind === "req" ? ` · 품질 플래그 ${qf}` : ""}`, "rv-rule",
                         `${S.proc} 규칙 검사 결과: 오류 ${hereN("error")} · 경고 ${hereN("warn")}${S.kind === "req" ? ` · 품질 플래그 ${qf}건 (${K.noun} ${lvItems.length}건 중)` : ""}\n\n규칙 검사란?\nAI를 쓰지 않고 정해 둔 규칙으로 산출물을 자동 점검합니다. 내용이 같으면 언제 돌려도 결과가 같습니다.\n· 오류 — 반드시 고쳐야 할 빈틈 (예: 다음 단계와 연결이 끊긴 항목)\n· 경고 — 확인이 필요한 항목 (예: 검증 기준이 비어 있음)${S.kind === "req" ? `\n· 품질 플래그 — 문장이 모호하거나 잴 수 없는 ${K.noun} (오류는 아니지만 한 번 확인)` : ""}\n\n참고 — V-모델 전체: 오류 ${sevN("error")} · 경고 ${sevN("warn")}`, hereN("error") > 0)}
@@ -12201,6 +12198,22 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                       <span style={{ alignSelf: "center", color: T.muted }}>→</span>
                       {step("fix", "④", "수정안", fixT.length, `${K.noun} 고칠 것`, "rv-fix",
                         `고칠 ${K.noun} ${fixT.length}건 — '맞음'으로 판정했지만 아직 안 고친 의견 ${fixOps}건이 달린 ${K.noun}\n수정안을 만들어 승인`, !!fixT.length)}
+                      {S.kind === "req" && (() => {
+                        // ⑤ Reviewed — 교차검토가 끝난 요구의 상태를 Draft → Reviewed로 (근거: 판정 기록). 빠진 곳 점검의 버튼과 같은 기능
+                        const all = model.reqs[S.lv] || [];
+                        const ready = AE.reviewReadyReqs(model).filter(x => x.lv === S.lv);
+                        const revN = all.filter(r => (r.status || "Draft") !== "Draft").length;
+                        const tip = `Reviewed로 올릴 수 있는 ${K.noun} ${ready.length}건 — 상태 Reviewed 이상 ${revN} / ${all.length}건\n\n대상: 현재 내용으로 검토됨 · 미판정 의견 없음 · '맞음' 의견은 수정 완료인 Draft ${K.noun}\n누르면 확인 후 Draft → Reviewed로 바꾸고, 수정 이력에 'QA 교차검토 근거'로 기록합니다.`;
+                        const doIt = () => { if (!ready.length) { alert(`아직 Reviewed로 올릴 ${K.noun}가 없습니다.\n\n${S.proc}의 ${K.noun}가 ②~④를 모두 마쳐야 합니다(현재 내용으로 검토됨 · 미판정 의견 없음 · '맞음' 의견은 수정 완료).`); return; }
+                          if (!window.confirm(`교차검토가 끝난 ${K.noun} ${ready.length}건(현재 내용으로 검토됨 · 미판정 의견 없음 · 유효 의견은 수정 완료)의 상태를 Draft → Reviewed로 바꿉니다.\n변경은 수정 이력에 'QA 교차검토 근거'로 기록됩니다.\n\n계속할까요?`)) return;
+                          setModel(m => AE.markReviewed(m, ready)); setNote(`${K.noun} ${ready.length}건을 Reviewed로 바꿨습니다 — 근거: QA 교차검토 판정 기록. 저장을 눌러 확정하세요.`); };
+                        return <>
+                          <span style={{ alignSelf: "center", color: T.muted }}>→</span>
+                          <button onClick={doIt} title={tip} style={{ flex: "1 1 150px", textAlign: "left", background: ready.length ? T.green + "14" : T.bg, border: `1.5px solid ${ready.length ? T.green : T.border}`, borderRadius: 9, padding: "7px 10px", cursor: "pointer", fontFamily: "inherit", color: T.text }}>
+                            <div style={{ fontSize: 10.5, color: ready.length ? T.green : T.muted, fontWeight: ready.length ? 700 : 400 }}>⚑ Reviewed</div>
+                            <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.25, color: ready.length ? T.green : T.text }}>{ready.length}<span style={{ fontSize: 10.5, fontWeight: 500, color: T.muted, marginLeft: 3 }}>{K.noun} 올릴 것</span></div>
+                            <div className="ae-hint" style={{ fontSize: 10, color: T.muted, lineHeight: 1.45 }}>{`Reviewed ${revN} / ${all.length}건 — 누르면 교차검토 끝난 ${K.noun}를 Reviewed로`}</div>
+                          </button></>; })()}
                     </div>
                     <div style={{ fontSize: 11, marginTop: 7, color: rvNextStep ? T.text : T.green, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                       {rvNextStep ? <>👉 다음 할 일: <b>{nextTxt}</b>{curStep !== rvNextStep && <button onClick={() => open_(rvNextStep, `rv-${rvNextStep}`)} style={{ ...small, padding: "1px 8px" }}>그 단계 열기</button>}</> : "✓ 이 산출물은 검토·수정·판정이 모두 끝났습니다."}
