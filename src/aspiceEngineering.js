@@ -715,7 +715,8 @@ export function normalizeModel(m) {
     tests: [...(x.tests || [])],
     linkReview: { ...(x.linkReview || {}) }, reqSnaps: { ...(x.reqSnaps || {}) }, reviewLog: [...(x.reviewLog || [])],
     units: { SW: [...((x.units || {}).SW || [])].map(repairUnitDD).map(repairCodeInit) },
-    aiReview: { runs: [...((x.aiReview || {}).runs || [])], findings: [...((x.aiReview || {}).findings || [])], hashes: { ...((x.aiReview || {}).hashes || {}) }, edits: [...((x.aiReview || {}).edits || [])] },
+    aiReview: { runs: [...((x.aiReview || {}).runs || [])], findings: [...((x.aiReview || {}).findings || [])], hashes: { ...((x.aiReview || {}).hashes || {}) }, edits: [...((x.aiReview || {}).edits || [])],
+      fixQueue: (x.aiReview || {}).fixQueue || null },   // ④ 수정안 승인 큐 — 저장해 두고 다시 열면 이어서 승인·반려
   };
 }
 

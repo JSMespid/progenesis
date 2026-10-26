@@ -10306,7 +10306,9 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
 
   // ── 수정안 승인 큐 ──
   // fixQ: { key, at, cards: [{ id, title, kind: "rule"|"ai", fields, original, fieldsSpec, rationale, opIds, opinions, status: pending|approved|rejected, err }] }
-  const [fixQ, setFixQ] = useState(null);
+  // 승인 큐는 V-모델에 함께 저장한다 — 생성에 몇 분이 걸리므로 창을 닫거나 새로 고쳐도 이어서 처리할 수 있어야 한다
+  const [fixQ, setFixQ] = useState(() => model?.aiReview?.fixQueue || null);
+  useEffect(() => { setModel(m => (m?.aiReview?.fixQueue === fixQ ? m : { ...m, aiReview: { ...(m.aiReview || {}), fixQueue: fixQ } })); }, [fixQ]);   // eslint-disable-line react-hooks/exhaustive-deps
   function genFixQueue() {
     const key = rvLevel;
     return run(`수정안 생성 — ${AE.reviewScope(key)?.label || key}`, async () => {
@@ -10348,7 +10350,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
     finishQueueCard(card.id, ok ? "approved" : "approved(변경 없음)");
   }
   function approveAll() {
-    const pend = (fixQ?.cards || []).filter(c => c.status === "pending" && !c.err);
+    const pend = (fixQ?.cards || []).filter(c => c.status === "pending" && !c.err).filter(c => { const sp = AE.reviewEditSpec(model, fixQ.key, c.id); return sp && Object.keys(c.fields).every(k => String(sp.values[k] ?? "").trim() === String(c.original[k] ?? "").trim()); });
     if (!pend.length) return;
     if (!window.confirm(`승인 대기 ${pend.length}건을 모두 승인합니다.\n각 항목의 수정안이 적용되고 이력에 남습니다.\n내용을 확인하지 않은 승인은 심사 때 설명하기 어렵습니다. 계속할까요?`)) return;
     pend.forEach(c => approveCard(c));
@@ -12559,6 +12561,9 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                   const pend = c.status === "pending";
                   const col = pend ? T.border : String(c.status).startsWith("approved") ? T.green + "66" : T.muted + "66";
                   const ck = `fq|${c.id}`;
+                  // 저장된 큐를 다시 열었을 때: 초안을 만든 뒤 대상 내용이 바뀌었으면 승인하지 않는다(최신 수정을 옛 초안으로 덮어쓰지 않게)
+                  const curSp = pend ? AE.reviewEditSpec(model, fixQ.key, c.id) : null;
+                  const stale = pend && (!curSp || Object.keys(c.fields).some(k => String(curSp.values[k] ?? "").trim() !== String(c.original[k] ?? "").trim()));
                   const cOpen = rvEdit?.fkey === ck || isCardOpen(ck, pend);
                   const cToggle = () => setCardsOpen([ck], !cOpen);
                   return (
@@ -12598,7 +12603,8 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                           {c.err && <button disabled={busy} onClick={() => goItem(fixQ.key, c.id)} title="이 요구가 있는 원래 화면으로 이동해 우선순위·그룹·합의 상태 등 속성 칸을 고칩니다" style={{ ...small }}>원래 탭 ↗</button>}
                           {c.err && <button disabled={busy} onClick={() => { if (!window.confirm(`${c.id} — 의견 ${c.opinions.length}건의 요지가 지금 내용에 이미 반영되어 있다고 기록합니다.\n내용은 바뀌지 않고, 수정 이력에 '반영 완료(변경 없음)'로 남습니다.\n\n계속할까요?`)) return; setModel(m => AE.markReviewResolved(m, fixQ.key, c.id, { via: "fix-queue(반영 확인)" })); finishQueueCard(c.id, "approved(변경 없음)"); }} title="고칠 것이 없을 때 — 내용은 그대로 두고 '반영 완료(변경 없음)'로 기록합니다" style={{ ...small, color: T.green }}>✓ 반영 완료</button>}
                           <button disabled={busy} onClick={() => { const sp = AE.reviewEditSpec(model, fixQ.key, c.id); if (!sp) return; setRvEdit({ fkey: `fq|${c.id}`, key: fixQ.key, id: c.id, vals: { ...sp.values, ...c.fields }, aiDraft: Object.keys(c.fields).length ? { fields: c.fields, original: Object.fromEntries(Object.keys(c.fields).map(k => [k, sp.values[k] ?? ""])), rationale: c.rationale, opinions: c.opinions.length } : null }); }} style={{ ...small, color: T.accent, background: rvEdit?.fkey === `fq|${c.id}` ? T.accent + "22" : "none" }}>✎ 편집 후 승인</button>
-                          {Object.keys(c.fields).length > 0 && <button disabled={busy} onClick={() => approveCard(c)} style={{ ...small, background: T.green, color: "#fff", borderColor: T.green }}>✓ 승인</button>}
+                          {stale && <span style={{ alignSelf: "center", fontSize: 10.5, color: T.amber, marginRight: "auto" }}>⚠ 초안을 만든 뒤 이 요구 내용이 바뀌었습니다 — '✦ 수정안 생성'으로 다시 만들거나 '편집 후 승인'으로 처리하세요.</span>}
+                          {Object.keys(c.fields).length > 0 && !stale && <button disabled={busy} onClick={() => approveCard(c)} style={{ ...small, background: T.green, color: "#fff", borderColor: T.green }}>✓ 승인</button>}
                         </div>)}
                       {rvEdit?.fkey === `fq|${c.id}` && <div style={{ marginTop: 8 }}>{editorBox(c.opinions.filter(o => o.suggestion).map(o => `[${critLabel[o.criterion] || o.criterion}] ${o.suggestion}`).join(" / "))}</div>}
                       </>}
