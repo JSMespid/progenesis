@@ -10309,14 +10309,22 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   // 승인 큐는 V-모델에 함께 저장한다 — 생성에 몇 분이 걸리므로 창을 닫거나 새로 고쳐도 이어서 처리할 수 있어야 한다
   const [fixQ, setFixQ] = useState(() => model?.aiReview?.fixQueue || null);
   useEffect(() => { setModel(m => (m?.aiReview?.fixQueue === fixQ ? m : { ...m, aiReview: { ...(m.aiReview || {}), fixQueue: fixQ } })); }, [fixQ]);   // eslint-disable-line react-hooks/exhaustive-deps
-  function genFixQueue() {
+  function genFixQueue(opts = {}) {
     const key = rvLevel;
     return run(`수정안 생성 — ${AE.reviewScope(key)?.label || key}`, async () => {
       const targets = AE.fixQueueTargets(model, key);
       if (!targets.length) return "수정안을 만들 대상이 없습니다 — ③에서 '맞음'으로 판정했지만 아직 안 고친 의견이 달린 항목이 없습니다.";
       const cards = [], aiTargets = [];
+      // 이미 만든 대기 카드는 그대로 둔다 — 대상 내용·의견이 같으면 다시 만들어도 같은 결과라 반복 작업만 늘어난다.
+      // (초안 없는 카드는 opts.retryErr일 때만 다시 만든다)
+      const prev = fixQ && fixQ.key === key ? fixQ.cards.filter(c => c.status === "pending" || c.status === "rejected") : [];   // 반려한 카드도 같은 내용이면 다시 만들지 않는다
+      let kept = 0;
       targets.forEach(t => {
         const sp = AE.reviewEditSpec(model, key, t.id);
+        const old = prev.find(c => c.id === t.id);
+        const sameOps = old && [...(old.opIds || [])].sort().join("|") === t.allFindings.map(f => f.key).sort().join("|");
+        const sameVals = old && sp && Object.keys(old.original || {}).every(k => String(sp.values[k] ?? "").trim() === String(old.original[k] ?? "").trim());
+        if (old && sameOps && sameVals && !(opts.retryErr && old.err)) { cards.push(old); kept++; return; }
         const base = { id: t.id, title: sp.values.title || sp.values.name || t.id, original: { ...sp.values }, fieldsSpec: sp.fields, opIds: t.allFindings.map(f => f.key), opinions: t.allFindings, status: "pending" };
         const rule = AE.ruleFixProposal(model, key, t.id, t.allFindings);
         if (rule) cards.push({ ...base, kind: "rule", fields: rule.fields, rationale: rule.rationale });
@@ -10338,7 +10346,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
       }
       setFixQ({ key, at: new Date().toISOString(), cards });
       const nAi = cards.filter(c => c.kind === "ai" && !c.err).length, nRule = cards.filter(c => c.kind === "rule").length;
-      return `수정안 ${nAi + nRule}건 준비 — 규칙 ${nRule} · AI ${nAi}${failed ? ` · 초안 실패 ${failed}건(직접 수정)` : ""}. 아래 승인 큐에서 카드마다 승인·편집·반려하세요. 승인 전에는 아무것도 바뀌지 않습니다.`;
+      return `수정안 ${nAi + nRule}건 준비 — 규칙 ${nRule} · AI ${nAi}${kept ? ` (이전 카드 ${kept}건은 그대로 유지)` : ""}${failed ? ` · 초안 없음 ${failed}건 — 카드에서 '반영 완료'·'편집 후 승인'·'반려'로 처리` : ""}. 승인 전에는 아무것도 바뀌지 않습니다.`;
     });
   }
   function finishQueueCard(id, status) { setFixQ(q => q ? { ...q, cards: q.cards.map(c => c.id === id ? { ...c, status } : c) } : q); }
@@ -12550,6 +12558,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                     <button onClick={() => { setRvStepOpen("fix"); setCardsOpen(fixQ.cards.map(c => `fq|${c.id}`), true); }} title="④ 영역을 열고 모든 수정안 카드를 펼칩니다" style={{ ...small, color: T.muted }}>▾ 모두 펼치기</button>
                     <button onClick={() => { setRvStepOpen("fix"); setCardsOpen(fixQ.cards.map(c => `fq|${c.id}`), false); }} title="④ 영역을 연 채로 모든 수정안 카드를 접어 제목만 보이게 합니다" style={{ ...small, color: T.muted }}>▸ 모두 접기</button>
                   </>}
+                  {fixQ && fixQ.key === rvLevel && fixQ.cards.some(c => c.status === "pending" && c.err) && <button disabled={busy} onClick={() => { setRvStepOpen("fix"); genFixQueue({ retryErr: true }); }} title="초안이 없는 카드만 AI에게 다시 요청합니다. 같은 내용이면 결과도 같을 수 있으니, 요구를 고쳤거나 프로그램이 바뀐 경우에만 쓰세요." style={{ ...small, color: T.muted }}>초안 없는 {fixQ.cards.filter(c => c.status === "pending" && c.err).length}건 다시 요청</button>}
                   {fixQ && fixQ.key === rvLevel && fixQ.cards.some(c => c.status === "pending" && !c.err) && <button disabled={busy} onClick={approveAll} title={`AI·규칙 초안이 있는 대기 카드 ${fixQ.cards.filter(c => c.status === "pending" && !c.err).length}건을 모두 승인합니다.\n초안이 없는 카드 ${fixQ.cards.filter(c => c.status === "pending" && c.err).length}건은 제외됩니다 — 카드별로 '반영 완료'·'편집 후 승인'·'반려'로 처리하세요.`} style={{ ...small, color: T.green }}>초안 있는 {fixQ.cards.filter(c => c.status === "pending" && !c.err).length}건 모두 승인</button>}
                   <Btn disabled={busy || !AE.fixQueueTargets(model, rvLevel).length} onClick={() => { setRvStepOpen("fix"); genFixQueue(); }} title="③에서 '맞음'으로 판정했지만 아직 고치지 않은 의견이 달린 항목마다 수정안을 만듭니다 — 규칙으로 되는 것은 규칙이, 문장은 생성 AI(Claude)가. 승인 전에는 아무것도 바뀌지 않습니다" style={{ fontSize: 11, padding: "4px 12px" }}>✦ 수정안 생성 ({K.noun} {AE.fixQueueTargets(model, rvLevel).length}건 · 의견 {AE.fixQueueTargets(model, rvLevel).reduce((a, t) => a + t.findings.length, 0)}건)</Btn>
                 </div>}>
