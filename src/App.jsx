@@ -10175,6 +10175,10 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   const isCardOpen = (k, dflt) => (k in cardOpen ? cardOpen[k] : dflt);
   const setCardsOpen = (keys, v) => setCardOpen(o => { const n = { ...o }; keys.forEach(k => { n[k] = v; }); return n; });
   const [rvSort, setRvSort] = useState("sev");
+  // 방금 판정한 의견은 필터·정렬이 바뀌기 전까지 그 자리에 남겨 둔다 — 판정하자마자 사라지거나 대상 카드가 다른 위치로 튀지 않게
+  const [rvKeep, setRvKeep] = useState({});
+  const keepRv = keys => setRvKeep(o => { const n = { ...o }; keys.forEach(k => { n[k] = true; }); return n; });
+  useEffect(() => { setRvKeep({}); }, [rvFilter, rvSort, rvLevel, rvGroup]);
   const [rvStepOpen, setRvStepOpen] = useState(null);   // 교차검토 단계 아코디언: rule | ai | fix | judge (null이면 '다음 할 일' 단계)       // 정렬: sev(중대 먼저) | id
   const [rvPick, setRvPick] = useState([]);          // 선택 검토할 산출물(검토 범위 key)
   const [rvRunning, setRvRunning] = useState(false);  // 검토 AI 호출 진행 중 (중지 버튼 표시)
@@ -11995,7 +11999,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
             const sevColor = { major: T.red, minor: T.amber, info: T.muted };
             const jColor = { valid: T.green, invalid: T.muted, opinion: T.accent };
             const reviewers = [...new Set(v.list.filter(f => f.level === rvLevel).map(f => f.reviewer || f.provider || "검토 AI"))];
-            const list = v.list.filter(f => f.level === rvLevel).filter(f => rvBy === "all" || (f.reviewer || f.provider || "검토 AI") === rvBy).filter(f => rvFilter === "all" ? true : rvFilter === "open" ? !f.judge : rvFilter === "edited" ? f.edits.length > 0 : rvFilter === "validTodo" ? f.judge?.state === "valid" && !f.edits.length && !f.removed : f.judge?.state === rvFilter);
+            const list = v.list.filter(f => f.level === rvLevel).filter(f => rvBy === "all" || (f.reviewer || f.provider || "검토 AI") === rvBy).filter(f => rvKeep[f.key] || rvFilter === "all" ? true : rvFilter === "open" ? !f.judge : rvFilter === "edited" ? f.edits.length > 0 : rvFilter === "validTodo" ? f.judge?.state === "valid" && !f.edits.length && !f.removed : f.judge?.state === rvFilter);
             const lastRun = [...v.runs].reverse().find(r => r.level === rvLevel && (!rvSel || r.provider === rvSel.id));
             const changedN = rvSel ? AE.reviewTargets(model, rvLevel, "changed", rvSel.id).length : lvItems.length;
             const rvNextStep = changedN ? "ai" : cnt.open ? "judge" : AE.fixQueueTargets(model, rvLevel).length ? "fix" : null;   // 판정 먼저 → 맞음 의견만 수정 (SUP.1 BP3→BP6)
@@ -12014,6 +12018,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                 note = window.prompt(state === "invalid" ? "지적이 틀렸다고 보는 이유를 적어 주세요 (심사 증적으로 남습니다)" : "보류 사유를 적어 주세요 (예: 고객 확인 필요)", f.judge?.note || "");
                 if (note === null) return;
               }
+              keepRv([f.key]); setRvStepOpen(p => p || "judge");
               setModel(m => AE.judgeReview(m, [f.key], state, note));
             };
             const chip = (label, val, color, key, tip) => <button onClick={key ? () => setRvRule(r => r === key ? null : key) : undefined} title={tip ? `${tip}\n\n눌러서 검사 결과 보기` : key ? "눌러서 검사 결과 보기" : undefined}
@@ -12277,6 +12282,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                     let note = "";
                     if (st === "invalid" || st === "opinion") { note = window.prompt(`${fs.length}건에 같은 사유를 적용합니다 — ${st === "invalid" ? "지적이 틀렸다고 보는 이유" : "보류 사유"}를 적어 주세요`, ""); if (note === null) return; }
                     else if (!window.confirm(`표시된 미판정 의견 ${fs.length}건을 모두 '맞음'으로 판정합니다. 이후 ④ [✦ 수정안 생성]으로 고치거나 대상별 ✎ 대상 수정에서 직접 고치면 됩니다.\n\n계속할까요?`)) return;
+                    keepRv(fs.map(f => f.key)); setRvStepOpen(p => p || "judge");
                     setModel(m => AE.judgeReview(m, fs.map(f => f.key), st, note));
                   };
                   return (<>
@@ -12287,6 +12293,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                       <span style={{ color: T.muted, marginLeft: 6 }}>정렬:</span>
                       <button onClick={() => setRvSort("sev")} title="중대 → 경미 → 제안 순으로" style={seg(rvSort === "sev")}>중대 먼저</button>
                       <button onClick={() => setRvSort("id")} title="요구 ID 순으로" style={seg(rvSort === "id")}>ID 순</button>
+                      {(() => { const kn = sorted.filter(f => rvKeep[f.key] && f.judge && rvFilter === "open").length; return kn > 0 && <button onClick={() => setRvKeep({})} title="방금 판정한 의견은 확인할 수 있도록 제자리에 남겨 둡니다. 누르면 미판정 목록에서 뺍니다." style={{ ...btn, marginLeft: 6, color: T.green }}>✓ 판정한 {kn}건 목록에서 빼기</button>; })()}
                       {rvGroup && (() => { const ks = [...new Set(sorted.map(f => f.reqId))].map(id => `jg|${rvLevel}|${id}`); return ks.length > 1 && <>
                         <button onClick={() => setCardsOpen(ks, true)} title="모든 대상을 펼칩니다" style={{ ...btn, marginLeft: 6 }}>▾ 모두 펼침</button>
                         <button onClick={() => setCardsOpen(ks, false)} title="모든 대상을 접습니다" style={btn}>▸ 모두 접음</button>
@@ -12310,7 +12317,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                         const refs = AE.reviewRefs(model, rvLevel, g.id);
                         const open_ = g.fs.filter(f => !f.judge && !f.removed);
                         const gk = `jg|${rvLevel}|${g.id}`;
-                        const gOpen = rvEdit?.fkey === `grp|${g.id}` || isCardOpen(gk, open_.length > 0);
+                        const gOpen = rvEdit?.fkey === `grp|${g.id}` || isCardOpen(gk, open_.length > 0 || g.fs.some(f => rvKeep[f.key]));   // 방금 판정한 대상은 접히지 않게
                         const gToggle = () => setCardsOpen([gk], !gOpen);
                         const sp = AE.reviewEditSpec(model, rvLevel, g.id);
                         const edited = g.fs.some(f => f.edits.length);
@@ -12360,7 +12367,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                                     <div style={{ fontSize: 10, marginBottom: 2, color: f.judge ? jColor[f.judge.state] : T.amber }}>{f.judge ? `판정: ${AE.REVIEW_JUDGE[f.judge.state]}` : "○ 미판정"}</div>
                                     <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                                       {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...btn, padding: "2px 7px", background: on ? jColor[st] : T.subtle, color: on ? "#fff" : T.text, borderColor: on ? jColor[st] : "#2E3550" }}>{({ valid: "✓ 맞음", invalid: "✕ 틀림", opinion: "△ 보류" })[st]}</button>; })}
-                                      {f.judge && <button onClick={() => setModel(m => AE.judgeReview(m, [f.key], null))} style={{ ...small, padding: "2px 6px", color: T.muted }} title="판정 취소">↺</button>}
+                                      {f.judge && <button onClick={() => { keepRv([f.key]); setModel(m => AE.judgeReview(m, [f.key], null)); }} style={{ ...small, padding: "2px 6px", color: T.muted }} title="판정 취소">↺</button>}
                                     </div>
                                     {f.judge?.note && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 2 }}>— {f.judge.note}</div>}
                                   </div>
@@ -12409,7 +12416,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                             <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                               {/* 선택 전에는 세 버튼 모두 같은 회색 — 색이 있으면 이미 선택된 것으로 오인됨. 선택된 판정만 색을 채운다 */}
                               {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...btn, padding: "2px 7px", background: on ? jColor[st] : T.subtle, color: on ? "#fff" : T.text, borderColor: on ? jColor[st] : "#2E3550", fontWeight: on ? 700 : 400 }}>{({ valid: "✓ 맞음", invalid: "✕ 틀림", opinion: "△ 보류" })[st]}</button>; })}
-                              {f.judge && <button onClick={() => setModel(m => AE.judgeReview(m, [f.key], null))} style={{ ...small, padding: "2px 7px", color: T.muted }} title="판정 취소">↺</button>}
+                              {f.judge && <button onClick={() => { keepRv([f.key]); setModel(m => AE.judgeReview(m, [f.key], null)); }} style={{ ...small, padding: "2px 7px", color: T.muted }} title="판정 취소">↺</button>}
                             </div>
                             {f.judge && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 3 }}>{String(f.judge.at).slice(0, 16).replace("T", " ")}{f.judge.note ? ` — ${f.judge.note}` : ""}</div>}
                             {!f.removed && <button disabled={busy} onClick={() => openEdit(f.key, rvLevel, f.reqId)}
