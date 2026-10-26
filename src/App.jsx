@@ -11487,7 +11487,6 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                         <div style={{ margin: "4px 0 2px" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, fontSize: 10.5, color: T.muted, maxWidth: 780 }}>
                             <span>교차검토 작업 순서</span>
-                            <span>{S.label} · <span style={{ color: T.accent }}>{cur + 1} / {steps.length} 단계</span></span>
                           </div>
                           <div style={{ maxWidth: 780 }}>
                             <svg viewBox="0 0 600 78" width="100%" role="img" aria-label={`교차검토 작업 순서 — 현재 ${steps[cur].t}`} style={{ display: "block", overflow: "visible" }}>
