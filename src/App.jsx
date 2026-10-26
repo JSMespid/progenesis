@@ -12235,8 +12235,11 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               </AeSec>
 
               <div id="rv-judge" />
-              <AeSec {...stepSec("judge")} title={`③ 사람 판정(QA 담당자) — 의견 ${cnt.total}건: 미판정 ${cnt.open} · 맞음 ${cnt.valid} · 보류 ${cnt.opinion} · 틀림 ${cnt.invalid}${cnt.edited ? ` | 의견 대상을 고친 의견 ${cnt.edited}` : ""}${cnt.stale ? ` · 의견 받은 뒤 내용 바뀜 ${cnt.stale}` : ""}`}
-                right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정"], ["valid", "✓ 맞음"], ["invalid", "✕ 틀림"], ["opinion", "△ 보류"], ["edited", "✎ 수정함"], ["validTodo", "맞음인데 아직 안 고침"], ["all", "전체"]].map(([k, l]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.accent }}>{l}</button>)}</div>}>
+              <AeSec {...stepSec("judge")} title={`③ 사람 판정(QA 담당자) — 판정 ${cnt.valid + cnt.opinion + cnt.invalid} / ${cnt.total}건${cnt.stale ? ` · 의견 받은 뒤 내용 바뀜 ${cnt.stale}` : ""}`}
+                right={<div style={{ display: "flex", gap: 3, flexWrap: "wrap", justifyContent: "flex-end" }}>{reviewers.length > 1 && <select value={rvBy} onChange={e => setRvBy(e.target.value)} style={{ ...small, color: T.text, background: T.bg }}><option value="all">검토 AI 전체</option>{reviewers.map(x => <option key={x} value={x}>{x}</option>)}</select>}{[["open", "미판정", cnt.open], ["valid", "맞음", cnt.valid], ["opinion", "보류", cnt.opinion], ["invalid", "틀림", cnt.invalid], ["all", "전체", cnt.total]].map(([k, l, n]) => <button key={k} onClick={() => setRvFilter(k)} style={{ ...small, background: rvFilter === k ? T.accent : "none", color: rvFilter === k ? "#fff" : T.text, borderColor: rvFilter === k ? T.accent : T.border }}>{l} <b style={{ fontWeight: 700 }}>{n}</b></button>)}
+                  {(() => { const vtN = v.list.filter(f => f.level === rvLevel && !f.removed && f.judge?.state === "valid" && !f.edits.length).length; const more = rvFilter === "edited" || rvFilter === "validTodo";
+                    return <select value={more ? rvFilter : ""} onChange={e => e.target.value && setRvFilter(e.target.value)} title="수정 진행 상황으로 보기 — ④ 수정안 단계와 관련된 보기" style={{ ...small, color: more ? T.accent : T.muted, background: T.bg, borderColor: more ? T.accent : T.border }}>
+                      <option value="">그 밖의 보기 ▾</option><option value="validTodo">맞음인데 아직 안 고침 ({vtN})</option><option value="edited">대상을 고친 의견 ({cnt.edited})</option></select>; })()}</div>}>
                 <div className="ae-hint" style={{ fontSize: 10.5, color: T.muted, marginBottom: 6, lineHeight: 1.6 }}>
                   각 의견마다 <b>"AI의 이 지적이 맞는가?"</b>를 판정합니다. <b style={{ color: T.green }}>✓ 맞음</b> = 지적이 맞다 → 산출물을 고친다(✎ 대상 수정) · <b>✕ 틀림</b> = 지적이 틀리거나 이 과제에 맞지 않다 → 그대로 두고 사유를 적는다 · <b style={{ color: T.accent }}>△ 보류</b> = 지금 판단하기 어렵다 → 참고로 남긴다. 빠진 곳 점검의 변경 영향 검토 '영향 없음·하위 수정 필요'와는 다른 판정입니다.
                 </div>
@@ -12263,8 +12266,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                       <button onClick={() => setRvSort("id")} style={{ ...small, background: rvSort === "id" ? T.accent : "none", color: rvSort === "id" ? "#fff" : T.accent }}>ID 순</button>
                       {openList.length > 1 && <>
                         <span style={{ flex: 1 }} />
-                        <span style={{ color: T.muted }}>표시된 미판정 {openList.length}건 일괄:</span>
-                        <button disabled={busy} onClick={() => bulk(openList, "valid")} style={{ ...small, color: T.green }}>✓ 모두 맞음</button>
+                        <span style={{ color: T.muted }} title="'맞음'은 의견마다 확인해서 판정합니다. 일괄 처리는 사유를 함께 남기는 보류·틀림만 제공합니다.">표시된 미판정 {openList.length}건 일괄 (사유 입력):</span>
                         <button disabled={busy} onClick={() => bulk(openList, "opinion")} style={{ ...small, color: T.accent }}>△ 모두 보류</button>
                         <button disabled={busy} onClick={() => bulk(openList, "invalid")} style={{ ...small, color: T.muted }}>✕ 모두 틀림</button>
                       </>}
@@ -12292,17 +12294,21 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                             <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
                               <div style={{ flex: 1, minWidth: 260 }}>
                                 <div style={{ fontSize: 11.5, display: "flex", alignItems: "baseline", gap: 2 }}><AeFoldBtn open={gOpen} onClick={gToggle} /><span onClick={gToggle} title={gOpen ? "눌러서 접기" : "눌러서 펼치기"} style={{ cursor: "pointer", userSelect: "none" }}><span style={{ fontFamily: "monospace", color: T.accent, marginRight: 6 }}>{g.id}</span><b>{g.title}</b> <span style={{ color: T.muted, fontSize: 10 }}>· 의견 {g.fs.length}건 · 미판정 {open_.length}{edited ? " · ✎ 수정함" : ""}</span></span></div>
-                                {gOpen && sp && <div style={{ fontSize: 10.5, color: T.muted, marginTop: 3, lineHeight: 1.5 }}>
-                                  {sp.fields.filter(fd => vals[fd.k]).slice(0, 4).map(fd => <div key={fd.k}><span style={{ color: T.muted }}>{fd.label}:</span> <span style={{ color: T.text }}>{String(vals[fd.k]).slice(0, 220)}{String(vals[fd.k]).length > 220 ? "…" : ""}</span></div>)}
-                                </div>}
+                                {gOpen && sp && (() => { const xk = `jgx|${rvLevel}|${g.id}`; const full = isCardOpen(xk, false);
+                                  const fds = sp.fields.filter(fd => vals[fd.k] && !(fd.k === "title" || (String(vals[fd.k]).trim() === String(g.title || "").trim()))).slice(0, 4);
+                                  if (!fds.length) return null;
+                                  return <div onClick={() => setCardsOpen([xk], !full)} title={full ? "눌러서 줄이기" : "눌러서 전체 보기"} style={{ fontSize: 10.5, color: T.muted, marginTop: 3, lineHeight: 1.5, cursor: "pointer" }}>
+                                    {fds.map(fd => <div key={fd.k} style={full ? {} : { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}><span style={{ color: T.muted }}>{fd.label}:</span> <span style={{ color: T.text }}>{String(vals[fd.k])}</span></div>)}
+                                    <div style={{ color: T.accent, fontSize: 10 }}>{full ? "▴ 줄이기" : "▾ 전체 보기"}</div>
+                                  </div>; })()}
                                 {gOpen && refs.length > 0 && <details style={{ fontSize: 10.5, marginTop: 4 }}>
                                   <summary style={{ cursor: "pointer", color: T.accent }}>관련 상위·참조 항목 {refs.length}건 보기 (일관성·완전성 지적은 이것과 비교해 판정)</summary>
                                   {refs.slice(0, 6).map(r => <div key={r.id} style={{ marginTop: 3, paddingLeft: 8, borderLeft: `2px solid ${T.border}`, color: T.text }}><span style={{ fontFamily: "monospace", color: T.accent }}>{r.id}</span> <span style={{ color: T.muted }}>{r.구분}</span> {r.제목 ? <b>{r.제목} </b> : null}{r.내용 || r.책임 || r.설계 || r["신호·데이터"] || ""}{r.검증기준 ? <div style={{ color: T.muted }}>검증 기준: {r.검증기준}</div> : null}</div>)}
                                 </details>}
                               </div>
                               <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
-                                {open_.length > 0 && <div style={{ display: "flex", gap: 3 }}>
-                                  <span style={{ fontSize: 10, color: T.muted, alignSelf: "center" }}>이 대상 의견 전부:</span>
+                                {open_.length > 1 && <div style={{ display: "flex", gap: 3 }}>
+                                  <span style={{ fontSize: 10, color: T.muted, alignSelf: "center" }}>이 대상 미판정 {open_.length}건 전부:</span>
                                   <button disabled={busy} onClick={() => bulk(open_, "valid")} style={{ ...small, padding: "2px 7px", color: T.green }}>✓ 맞음</button>
                                   <button disabled={busy} onClick={() => bulk(open_, "invalid")} style={{ ...small, padding: "2px 7px", color: T.muted }}>✕ 틀림</button>
                                   <button disabled={busy} onClick={() => bulk(open_, "opinion")} style={{ ...small, padding: "2px 7px", color: T.accent }}>△ 보류</button>
@@ -12312,9 +12318,14 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                             </div>
                             {gOpen && <div style={{ marginTop: 6, borderTop: `1px solid ${T.border}` }}>
                               {g.fs.map(f => (
-                                <div key={f.key} style={{ display: "grid", gridTemplateColumns: "86px 1fr 230px", gap: 8, padding: "5px 0", borderBottom: `1px solid ${T.border}22`, fontSize: 10.5, opacity: f.judge?.state === "invalid" ? 0.6 : 1 }}>
-                                  <div><div>{AE.isVdaCode(f.criterion) && <span style={{ fontSize: 9, color: "#fff", background: T.accent, borderRadius: 4, padding: "0 4px", marginRight: 4 }}>ASPICE BP</span>}{critLabel[f.criterion] || f.criterion}</div><div style={{ color: sevColor[f.severity], fontSize: 10 }}>{AE.REVIEW_SEV[f.severity]}</div>{f.reviewer && <div style={{ color: T.muted, fontSize: 9.5 }}>{f.reviewer.replace(/ \(.*\)$/, "")}</div>}{(agr[`${f.level}|${f.reqId}|${f.criterion}`] || 0) >= 2 && <div title="서로 다른 검토 AI가 같은 기준으로 같은 대상을 지적했습니다 — 독립된 두 검토가 일치" style={{ color: T.green, fontSize: 9.5, fontWeight: 700 }}>◎ 검토 AI {agr[`${f.level}|${f.reqId}|${f.criterion}`]}곳 일치</div>}</div>
+                                <div key={f.key} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 230px", gap: 10, padding: "5px 0", borderBottom: `1px solid ${T.border}22`, fontSize: 10.5, opacity: f.judge?.state === "invalid" ? 0.6 : 1 }}>
                                   <div style={{ lineHeight: 1.5 }}>
+                                    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 2 }}>
+                                      <span style={{ fontSize: 9.5, fontWeight: 700, color: sevColor[f.severity], border: `1px solid ${sevColor[f.severity]}`, borderRadius: 4, padding: "0 5px" }}>{AE.REVIEW_SEV[f.severity]}</span>
+                                      <b style={{ fontSize: 10.5 }}>{critLabel[f.criterion] || f.criterion}</b>
+                                      {f.reviewer && <span style={{ color: T.muted, fontSize: 9.5 }}>· {f.reviewer.replace(/ \(.*\)$/, "")}</span>}
+                                      {(agr[`${f.level}|${f.reqId}|${f.criterion}`] || 0) >= 2 && <span title="서로 다른 검토 AI가 같은 기준으로 같은 대상을 지적했습니다 — 독립된 두 검토가 일치" style={{ color: T.green, fontSize: 9.5, fontWeight: 700 }}>◎ 검토 AI {agr[`${f.level}|${f.reqId}|${f.criterion}`]}곳 일치</span>}
+                                    </div>
                                     {f.evidence && <div>근거: <span style={{ background: T.amber + "22", padding: "0 3px", borderRadius: 3 }}>"{f.evidence}"</span></div>}
                                     <div>{f.issue}</div>
                                     {f.suggestion && <div style={{ color: T.green }}>제안: {f.suggestion}</div>}
