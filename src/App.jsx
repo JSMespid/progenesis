@@ -9833,6 +9833,23 @@ const aeSecKey = t => String(typeof t === "string" ? t : "").replace(/\d+/g, "#"
 function AeFoldBtn({ open, onClick, title }) {
   return <button type="button" onClick={onClick} title={title || (open ? "접기" : "펼치기")} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 11, padding: "0 4px", lineHeight: 1, flexShrink: 0 }}>{open ? "▾" : "▸"}</button>;
 }
+// AI 수정안 초안 진행 표시 — AI 호출 1회라 실제 진척률은 알 수 없으므로, 움직이는 막대 + 경과 시간으로 '작업 중'임을 보여 준다
+function AeDraftProgress({ at }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 500); return () => clearInterval(t); }, []);
+  const sec = Math.max(0, Math.floor((now - at) / 1000));
+  return (
+    <div role="status" aria-live="polite" style={{ marginTop: 8 }}>
+      <style>{`@keyframes aeIndet{0%{left:-35%}100%{left:100%}}`}</style>
+      <div style={{ position: "relative", height: 4, borderRadius: 2, background: T.accent + "22", overflow: "hidden" }}>
+        <div style={{ position: "absolute", top: 0, bottom: 0, width: "35%", borderRadius: 2, background: T.accent, animation: "aeIndet 1.3s ease-in-out infinite" }} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: T.muted, marginTop: 4 }}>
+        <span><span style={{ color: T.accent }}>✦ AI가 검토 의견과 상위 항목을 읽고 수정안을 만드는 중입니다…</span>{sec >= 60 ? " 평소보다 오래 걸리고 있습니다. 조금 더 기다려 주세요." : " 완료되면 편집 칸에 채워집니다(바로 적용되지는 않습니다)."}</span>
+        <span style={{ fontVariantNumeric: "tabular-nums" }}>{sec}초</span>
+      </div>
+    </div>);
+}
 function AeSec({ title, right, children, open: openProp, onToggle, accent }) {
   const uid = React.useId();
   const rc = React.useContext(AeRunCtx);
@@ -10170,12 +10187,14 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   const hideGuide = (id, hide) => setGuideHidden(prev => { const n = new Set(prev); if (hide) n.add(id); else n.delete(id); try { localStorage.setItem(AE_LS_GUIDE, JSON.stringify([...n])); } catch (_) {} return n; });
   const closeIntro = () => { setIntroOpen(false); try { localStorage.setItem(AE_LS_INTRO, "1"); } catch (_) {} };
   const [rvRule, setRvRule] = useState(null);          // ① 규칙 검사 상세 펼침: error | warn | info | qf(요구 품질 플래그) | here(이 산출물 관련)       // 검토 기준 안내 펼침
-  const [rvEdit, setRvEdit] = useState(null);          // ③에서 검토 대상 직접 수정 { fkey, key, id, vals }
+  const [rvEdit, setRvEdit] = useState(null);
+  const [draftAt, setDraftAt] = useState(0);   // AI 수정안 초안 생성 시작 시각(0 = 진행 중 아님) — 버튼 아래 진행 막대          // ③에서 검토 대상 직접 수정 { fkey, key, id, vals }
   // 편집 중인 대상에 대해 AI 수정안 초안 — 판정된(틀림 제외)·미판정 의견과 관련 상위 항목을 근거로 필드별 수정안을 만들어 편집 칸에 채운다. 적용은 사람이 한다.
   function aiFixDraft() {
     if (!rvEdit) return;
     const { key, id } = rvEdit;
-    return run(`${id} AI 수정안 초안`, async () => {
+    setDraftAt(Date.now());
+    return Promise.resolve(run(`${id} AI 수정안 초안`, async () => {
       const sp = AE.reviewEditSpec(model, key, id);
       if (!sp) throw new Error("수정할 대상을 찾지 못했습니다.");
       const ops = AE.reviewView(model).list.filter(f => f.level === key && f.reqId === id && !f.removed && f.judge?.state !== "invalid");
@@ -10188,7 +10207,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
       if (!Object.keys(draft).length) throw new Error("AI가 바꿀 내용을 제안하지 않았습니다. 직접 수정하세요.");
       setRvEdit(x => x && x.id === id ? { ...x, vals: { ...x.vals, ...draft }, aiDraft: { fields: draft, original: Object.fromEntries(Object.keys(draft).map(k => [k, x.vals[k] ?? ""])), rationale: String(r.rationale || ""), opinions: ops.length } } : x);
       return `AI 수정안 초안 ${Object.keys(draft).length}개 필드 — 편집 칸에 채웠습니다. 내용을 확인·수정한 뒤 [적용]을 누르세요 (적용 전에는 아무것도 바뀌지 않습니다).`;
-    });
+    })).finally(() => setDraftAt(0));
   }
   // 검토 대상에 패치 적용(공용) — SYS 요구의 제목·내용은 확정 요구(items)가 원본이므로 items도 함께 고친다. 변경이 없으면 false
   function applyPatch(key, id, patch, via = "review") {
@@ -11232,11 +11251,12 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
           </div>))}
         <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center", marginTop: 4 }}>
           <span style={{ fontSize: 10, color: T.muted, marginRight: "auto" }}>적용하면 이 항목의 검토 의견은 '내용 변경됨'이 되고, 연결된 하위 항목에는 변경 영향 검토가 표시될 수 있습니다.{AE.reviewScope(rvEdit.key)?.kind === "test" ? " 수정한 시험은 수동 작성으로 바뀌어 규칙 재생성 때 덮어쓰지 않습니다." : ""}</span>
-          <button onClick={aiFixDraft} disabled={busy} title="판정된(틀림 제외)·미판정 의견과 관련 상위 항목을 근거로 필드별 수정안을 만들어 채웁니다. 적용은 직접 누릅니다" style={{ ...small, color: T.accent }}>✦ AI 수정안 초안</button>
+          <button onClick={aiFixDraft} disabled={busy || !!draftAt} title="판정된(틀림 제외)·미판정 의견과 관련 상위 항목을 근거로 필드별 수정안을 만들어 채웁니다. 적용은 직접 누릅니다" style={{ ...small, color: T.accent }}>{draftAt ? "✦ 초안 만드는 중…" : "✦ AI 수정안 초안"}</button>
           <button onClick={() => setTab(sp.tab)} style={small}>원래 탭에서 열기</button>
           <button onClick={() => setRvEdit(null)} style={small}>취소</button>
           <button onClick={applyReviewEditUI} style={{ ...small, background: T.accent, color: "#fff", borderColor: T.accent }}>적용</button>
         </div>
+        {draftAt > 0 && <AeDraftProgress at={draftAt} />}
       </div>);
   };
   // 규칙 지적의 ID → 그 ID를 가진 검토 범위(수정 가능 여부) — 이해관계자 요구 등 범위 밖 ID는 null
