@@ -11474,12 +11474,12 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                         { k: "ai", t: "② 검토 AI", d: "미검토·변경분 검토" },
                         { k: "judge", t: "③ 사람 판정", d: "맞음 · 틀림(사유) · 보류" },
                         { k: "fix", t: "④ 수정안", d: "'맞음'만 고쳐 승인" },
-                        { k: "rev", t: "Reviewed", d: "빠진 곳 점검에서 상태 올리기" },
+                        { k: "rev", t: "Reviewed", d: "교차검토 끝난 요구 상태 올리기" },
                       ];
                       const cur = { ai: 2, judge: 3, fix: 4 }[next] ?? 5;
                       const pill = { 2: `검토할 ${noun} ${changedN}건`, 3: `미판정 ${cnt.open}건`, 4: `고칠 ${noun} ${fixN}건`, 5: "이 산출물 완료" }[cur];
                       const scrollTo = id => setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 30);
-                      const go = k => { if (k === "rev") { goProc("TRACE"); return; } if (k === "sel") { scrollTo("rv-cov"); return; } setRvStepOpen(k); scrollTo(`rv-${k}`); };
+                      const go = k => { if (k === "rev") { scrollTo("rv-reviewed"); return; } if (k === "sel") { scrollTo("rv-cov"); return; } setRvStepOpen(k); scrollTo(`rv-${k}`); };
                       const X = i => 50 + i * 100, Y = 62;
                       const stateOf = i => i === 1 && errN ? "warn" : i < cur ? "done" : i === cur ? "now" : "todo";
                       const nodeTitle = i => `${steps[i].t} — ${steps[i].d}${i === 1 && errN ? ` (규칙 오류 ${errN}건)` : ""}`;
@@ -11517,9 +11517,13 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                           </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.border}`, fontSize: 11, flexWrap: "wrap" }}>
                             <span style={{ color: T.green }}>✓</span>
-                            <span style={{ color: T.muted }}>끝 기준 — 현황표의 모든 산출물이 <span style={{ color: T.text }}>검토됨 100% · 미판정 0</span>. 끝나면 '빠진 곳 점검'에서 [교차검토 끝난 요구 → Reviewed]로 상태를 올립니다.</span>
+                            <span style={{ color: T.muted }}>끝 기준 — 현황표의 모든 산출물이 <span style={{ color: T.text }}>검토됨 100% · 미판정 0</span>. 교차검토가 끝난 요구는 오른쪽 버튼으로 상태를 <span style={{ color: T.text }}>Reviewed</span>로 올립니다.</span>
                             <span style={{ flex: 1 }} />
-                            <button onClick={() => go(steps[cur].k)} style={{ ...small, padding: "2px 10px" }}>{cur < 5 ? `${steps[cur].t}로 이동 ↓` : "빠진 곳 점검으로 →"}</button>
+                            {cur < 5 && <button onClick={() => go(steps[cur].k)} style={{ ...small, padding: "2px 10px" }}>{`${steps[cur].t}로 이동 ↓`}</button>}
+                            {(() => { const ready = AE.reviewReadyReqs(model); return <span id="rv-reviewed" style={{ display: "inline-flex", scrollMarginTop: 120 }}>
+                              <button disabled={busy || !ready.length} onClick={() => { if (!window.confirm(`교차검토가 끝난 요구 ${ready.length}건(현재 내용으로 검토됨 · 미판정 의견 없음 · 유효 의견은 수정 완료)의 상태를 Draft → Reviewed로 바꿉니다.\n변경은 수정 이력에 'QA 교차검토 근거'로 기록됩니다.\n\n계속할까요?`)) return; setModel(m => AE.markReviewed(m, ready)); setNote(`요구 ${ready.length}건을 Reviewed로 바꿨습니다 — 근거: QA 교차검토 판정 기록. 저장을 눌러 확정하세요.`); }}
+                                title={ready.length ? `교차검토가 끝난 요구 ${ready.length}건의 상태를 Draft → Reviewed로 올립니다(근거: 판정 기록).\n대상: 현재 내용으로 검토됨 · 미판정 의견 없음 · '맞음' 의견은 수정 완료` : "아직 Reviewed로 올릴 요구가 없습니다.\n대상: 현재 내용으로 검토됨 · 미판정 의견 없음 · '맞음' 의견은 수정 완료인 Draft 요구"}
+                                style={{ ...small, padding: "2px 10px", ...(ready.length ? { background: T.green, color: "#fff", borderColor: T.green } : { color: T.muted, cursor: "not-allowed" }) }}>⚑ Reviewed로 올리기 {ready.length}건</button></span>; })()}
                           </div>
                         </div>); })() : (<>
                     <ol style={{ margin: "0 0 6px 18px", padding: 0 }}>{AE_GUIDE[tab].todo.map((t, i) => <li key={i} style={{ marginBottom: 2 }}>{t}</li>)}</ol>
