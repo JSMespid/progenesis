@@ -12031,11 +12031,11 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                 const go = id => setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 30);
                 const curStep = rvStepOpen || rvNextStep;
                 const open_ = (k, id) => { setRvStepOpen(k); go(id); };
-                const step = (k, no, title, big, unit, sub, id, hint, warn) => { const on = curStep === k; return (
-                  <button onClick={() => open_(k, id)} title={hint} style={{ flex: "1 1 150px", textAlign: "left", background: on ? T.accent + "18" : T.bg, border: `1.5px solid ${on ? T.accent : warn ? T.amber + "88" : T.border}`, borderRadius: 9, padding: "7px 10px", cursor: "pointer", fontFamily: "inherit", color: T.text }}>
+                const step = (k, no, title, big, unit, id, hint, warn) => { const on = curStep === k; return (
+                  <button onClick={() => open_(k, id)} title={`${hint}\n(식별자: ${id})`} style={{ flex: "1 1 150px", textAlign: "left", background: on ? T.accent + "18" : T.bg, border: `1.5px solid ${on ? T.accent : warn ? T.amber + "88" : T.border}`, borderRadius: 9, padding: "7px 10px", cursor: "pointer", fontFamily: "inherit", color: T.text }}>
                     <div style={{ fontSize: 10.5, color: on ? T.accent : T.muted, fontWeight: on ? 700 : 400 }}>{no} {title}</div>
                     <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.25, color: warn ? T.amber : T.text }}>{big}<span style={{ fontSize: 10.5, fontWeight: 500, color: T.muted, marginLeft: 3 }}>{unit}</span></div>
-                    <div className="ae-hint" style={{ fontSize: 10, color: T.muted, lineHeight: 1.45 }}>{sub}</div>
+                    <div className="ae-hint" style={{ fontSize: 10, color: T.muted, lineHeight: 1.45 }}>{hint}</div>
                   </button>); };
                 const ruleN = ruleHere.length + qf;
                 const nextTxt = { ai: `검토 AI로 변경분 ${changedN}건 검토`, fix: `수정안 만들기 — ${K.noun} ${fixT.length}건`, judge: `남은 의견 ${cnt.open}건 판정` }[rvNextStep];
