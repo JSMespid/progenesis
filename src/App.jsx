@@ -1685,7 +1685,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       if (bodyBytes > 4.3 * 1024 * 1024) return fail("error", `프로젝트 데이터가 ${(bodyBytes / 1048576).toFixed(1)}MB로 서버 요청 한도(4.5MB)를 넘습니다. 로고 이미지·산출물 데이터 크기를 확인해 주세요.`);
       let res = await fetch("/api/projects", { method: editingIdRef.current ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: bodyText });
       let j = await res.json().catch(() => ({}));
-      if (res.status === 409 && force && editingIdRef.current && j.currentRev != null) {
+      if (res.status === 409 && force && editingIdRef.current && "currentRev" in j) {   // 서버 버전이 비어 있는(null) 오래된 과제도 포함
         // 사용자가 덮어쓰기를 확인함 — 서버의 현재 버전을 기준으로 한 번 다시 저장(서버의 버전 확인은 그대로 거친다)
         projectRevRef.current = j.currentRev;
         res = await fetch("/api/projects", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: editingIdRef.current, expectRev: projectRevRef.current, record }) });
@@ -1706,6 +1706,7 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         if (draftIdRef.current) { const d = readDrafts().find(x => x.draftId === draftIdRef.current); if (d) putDraft({ ...d, editingId: row.id, serverRev: projectRevRef.current }); }
       }
       srvWarnRef.current = "";
+      if (force) setTimeout(() => alert("✓ 저장했습니다 — 지금 내용으로 서버 저장본을 덮어썼습니다.\n다른 PC에서 프로젝트를 열면 이 내용이 보입니다."), 50);
       setServerStatus({ state: "ok", at: row.tailoring?.savedBy?.at || new Date().toISOString(), err: "", by: row.tailoring?.savedBy?.name || "" });
       return true;
     } catch (e) {
