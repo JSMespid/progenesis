@@ -11121,11 +11121,18 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   // ── 변경 영향 검토: 유효/무효 판정 · 고아 연결 제거 ──
   const [reviewNote, setReviewNote] = useState({});   // { 상위ID: 판정 의견 }
   const [showLog, setShowLog] = useState(false);
+  const [impOpen, setImpOpen] = useState(true);   // 변경 영향 검토 섹션 펼침 — '판정 이력 보기'를 누르면 펼치고 이력으로 이동
   const [logFilter, setLogFilter] = useState("all");
   const lstat = AE.linkStatus(model);
   function judge(up, keys, state) {
-    const note = String(reviewNote[up] || "").trim();
-    if (state === "invalid" && !note) { setErr("무효 판정에는 의견(필요한 조치)을 입력해 주세요."); return; }
+    let note = String(reviewNote[up] || "").trim();
+    if (state === "invalid" && !note) {
+      // 의견 칸이 비어 있으면 그 자리에서 묻는다(화면 맨 위 오류 대신) — 고칠 내용은 RTM 판정 이력에 남는다
+      const p = window.prompt(`하위 ${keys.length}건에서 무엇을 고쳐야 하는지 적어 주세요.\n(추적 매트릭스의 '변경 영향·판정 이력'에 남습니다)`, "");
+      if (p === null) return;
+      note = p.trim();
+      if (!note) { setErr("'하위 수정 필요'에는 고칠 내용을 적어야 합니다."); return; }
+    }
     setErr(null);
     setModel(m => AE.resolveLinks(m, keys, state, note));
   }
@@ -12606,7 +12613,8 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               const fieldOf = { "제목": "title", "내용": "text", "검증 기준": "verifCriteria", "유형": "type" };
               return (
               <AeSec title={lstat.open.length ? `변경 영향 검토 — 검토 필요 ${lstat.open.length}건 (상위 요구 ${Object.keys(groups).length}건)` : "변경 영향 검토 — 미해결 연결 없음"}
-                right={model.reviewLog.length ? <button onClick={() => setShowLog(v => !v)} style={small}>{showLog ? "판정 이력 닫기" : `판정 이력 보기 (${model.reviewLog.length}건)`}</button> : null}>
+                open={impOpen} onToggle={setImpOpen}
+                right={model.reviewLog.length ? <button onClick={() => { const nv = !showLog; setShowLog(nv); if (nv) { setImpOpen(true); setTimeout(() => document.getElementById("impact-log")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); } }} title="지금까지 내린 변경 영향 판정(영향 없음·하위 수정 필요)의 기록을 이 영역 아래에 펼칩니다" style={small}>{showLog ? "판정 이력 닫기" : `판정 이력 보기 (${model.reviewLog.length}건)`}</button> : null}>
                 {lstat.open.length > 0 && <div style={{ fontSize: 10.5, color: T.muted, marginBottom: 8 }}>상위 요구의 제목·내용·검증 기준·유형이 바뀌면, 그 요구에서 내려간 하위 항목(요소 할당·하위 요구·시험)마다 <b>"상위가 바뀌었는데 이 하위는 그대로 둬도 되는가?"</b>를 묻는 목록입니다. 하위는 자동으로 고치지 않습니다.
                   <div style={{ marginTop: 4, display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px" }}>
                     <b style={{ color: T.green }}>영향 없음</b><span>하위를 고칠 필요가 없음 → 연결을 그대로 인정합니다. (예: 검증 기준만 추가됐고 하위 요구 내용과 어긋나지 않음)</span>
@@ -12664,9 +12672,9 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                   [...model.reviewLog].reverse().forEach(g => { const k = `${String(g.at || "").slice(0, 16)}|${g.up}`; if (!(k in idx)) { idx[k] = groups.length; groups.push({ at: String(g.at || "").slice(0, 16).replace("T", " "), up: g.up, fields: new Set(), items: [] }); } const G = groups[idx[k]]; (g.fields || []).forEach(f => G.fields.add(f)); G.items.push(g); });
                   const shown = logFilter === "fix" ? groups.filter(G => G.items.some(g => g.state !== "valid")) : groups;
                   return (
-                    <div style={{ marginTop: 6, borderTop: `1px solid ${T.border}`, paddingTop: 6 }}>
+                    <div id="impact-log" style={{ marginTop: 6, borderTop: `1px solid ${T.border}`, paddingTop: 6, scrollMarginTop: 80 }}>
                       <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 10.5, marginBottom: 5, flexWrap: "wrap" }}>
-                        <span style={{ color: T.muted }}>상위 요구 변경 {groups.length}건 · 하위 판정 {model.reviewLog.length}건 (영향 없음 {model.reviewLog.filter(g => g.state === "valid").length} · 하위 수정 {model.reviewLog.filter(g => g.state !== "valid").length})</span>
+                        <b style={{ fontSize: 11 }}>판정 이력</b><span style={{ color: T.muted }}>상위 요구 변경 {groups.length}건 · 하위 판정 {model.reviewLog.length}건 (영향 없음 {model.reviewLog.filter(g => g.state === "valid").length} · 하위 수정 {model.reviewLog.filter(g => g.state !== "valid").length})</span>
                         <span style={{ flex: 1 }} />
                         {[["all", "전체"], ["fix", "하위 수정이 있었던 것만"]].map(([k, l]) => <button key={k} onClick={() => setLogFilter(k)} style={{ ...small, padding: "1px 8px", ...(logFilter === k ? { background: T.accent, color: "#fff", borderColor: T.accent } : {}) }}>{l}</button>)}
                       </div>
