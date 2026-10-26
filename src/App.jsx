@@ -12570,9 +12570,14 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                       </div>
                       {cOpen && <>
                       {c.err && (() => { const attrOnly = c.opinions.length > 0 && c.opinions.every(o => /-(STRUCT|COMM)$/.test(String(o.criterion || "")));
-                        return <div style={{ fontSize: 10.5, color: T.amber, marginTop: 4, lineHeight: 1.6 }}>⚠ {attrOnly
-                          ? "AI가 문장을 바꾸지 않았습니다 — 이 의견은 요구 문장(제목·내용·검증 기준)이 아니라 요구 속성(우선순위·그룹·합의 상태 등)에 관한 지적입니다. '원래 탭'에서 해당 칸을 고치거나, 이미 반영돼 있으면 '반영 완료'로 처리하세요."
-                          : /제안하지 않음/.test(c.err) ? "AI가 바꿀 내용을 제안하지 않았습니다 — 이미 반영됐거나 원문에 근거가 부족한 경우입니다. 확인 후 '반영 완료', '편집 후 승인', '반려' 중에서 처리하세요." : c.err}</div>; })()}
+                        if (attrOnly) return <div style={{ fontSize: 10.5, color: T.text, marginTop: 6, lineHeight: 1.65, padding: "6px 10px", background: T.amber + "12", border: `1px solid ${T.amber}55`, borderRadius: 7 }}>
+                          <div style={{ color: T.amber, fontWeight: 700 }}>⚠ 고칠 문장이 없어 AI 초안이 없습니다</div>
+                          <div>이 의견은 문장이 아니라 <b>우선순위·분류·합의 상태</b> 같은 요구 <b>속성</b>에 대한 지적입니다. <b>원래 탭 ↗</b>에서 이 요구의 우선순위·유형 칸을 확인하세요.</div>
+                          <div>· 값이 <b>이미 있으면</b> — 검토 AI가 속성을 보지 못해 잘못 지적한 경우입니다. <b>✓ 반영 완료</b>로 정리하세요.</div>
+                          <div>· 값이 <b>비어 있으면</b> — 원래 탭에서 채운 뒤 <b>✓ 반영 완료</b>를 누르세요.</div>
+                          <div style={{ color: T.muted }}>합의 상태는 교차검토를 마친 뒤 ⚑ Reviewed → 고객 합의 후 Agreed로 관리합니다.</div>
+                        </div>;
+                        return <div style={{ fontSize: 10.5, color: T.amber, marginTop: 4, lineHeight: 1.6 }}>⚠ {/제안하지 않음/.test(c.err) ? "AI가 바꿀 내용을 제안하지 않았습니다 — 이미 반영됐거나 원문에 근거가 부족한 경우입니다. 확인 후 '반영 완료', '편집 후 승인', '반려' 중에서 처리하세요." : c.err}</div>; })()}
                       {Object.keys(c.fields).length > 0 && (
                         <div style={{ marginTop: 6, display: "grid", gridTemplateColumns: "110px 1fr 1fr", gap: "4px 8px", fontSize: 10.5 }}>
                           <span style={{ color: T.muted }}>필드</span><span style={{ color: T.muted }}>수정 전</span><span style={{ color: T.muted }}>수정 후</span>

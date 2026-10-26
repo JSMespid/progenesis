@@ -1573,7 +1573,8 @@ export function promptReview({ level, reqs, parents = [], version = "4.0", guide
   const vda = vdaCriteria(proc, version);
   const crit = `[1차 — ${vdaBasis(version)}]\n${vda.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}\n\n[2차 — ${REVIEW_CRITERIA_VER}, ${REVIEW_CRITERIA_BASIS}]\n${REVIEW_CRITERIA.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}`;
   const crit3 = orgGuideCriteria(guideBlock);
-  const brief = r => ({ id: r.id, title: nz(r.title), text: nz(r.text), type: r.type || "", verifCriteria: nz(r.verifCriteria), parents: r.parents || [] });
+  // 속성(우선순위·상태·릴리스·출처)도 함께 보낸다 — 빠뜨리면 검토 AI가 '우선순위·분류가 없다(구조화 BP)'를 근거 없이 지적한다
+  const brief = r => ({ id: r.id, title: nz(r.title), text: nz(r.text), type: r.type || "", priority: r.priority || "", status: r.status || "Draft", release: nz(r.release), source: nz(r.source), stkId: nz(r.stkId), verifCriteria: nz(r.verifCriteria), parents: r.parents || [] });
   const usedParents = new Set(reqs.flatMap(r => r.parents || []));
   const par = parents.filter(p => usedParents.has(p.id)).map(p => ({ id: p.id, title: nz(p.title), text: nz(p.text) }));
   return `역할: 당신은 ASPICE ${proc} (${procLabel(proc, version)}) 산출물을 검토하는 독립 품질보증(QA) 검토자입니다.
@@ -1591,6 +1592,7 @@ ${crit}${crit3}
 5) 문제가 없는 요구는 지적하지 않는다. 요구 하나당 최대 3건.
 6) issue와 suggestion은 한국어 한 문장, 줄바꿈 없이 작성한다. suggestion에 원문에 없는 수치를 확정값처럼 쓰지 말고 필요하면 'TBD(확인 필요)'로 쓴다.
 7) CONSIST는 [상위 요구]와 비교해 판단한다.
+8) 요구마다 type(유형)·priority(우선순위)·status(상태)·release(릴리스)·source(출처) 속성이 함께 주어진다. type과 priority 값이 있으면 '분류·우선순위가 없다'는 구조화 지적을 하지 않는다. status가 Draft인 것은 교차검토가 진행 중인 정상 상태이므로, 그것만으로 '합의 상태가 없다'는 합의·공유 지적을 하지 않는다.
 
 [상위 요구]
 ${par.length ? JSON.stringify(par) : "(없음)"}
