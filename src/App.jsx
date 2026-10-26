@@ -11492,8 +11492,9 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                           <div style={{ maxWidth: 780 }}>
                             <svg viewBox="0 0 600 78" width="100%" role="img" aria-label={`교차검토 작업 순서 — 현재 ${steps[cur].t}`} style={{ display: "block", overflow: "visible" }}>
                               <defs><marker id="ae-rv-ah" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L8 5L1 9" fill="none" stroke={T.muted} strokeWidth="1.6" strokeLinecap="round" /></marker></defs>
-                              <path d={`M${X(4)} ${Y - 12} C ${X(4)} 16, ${X(2)} 16, ${X(2)} ${Y - 22}`} fill="none" stroke={T.muted} strokeWidth="1" strokeDasharray="3 4" markerEnd="url(#ae-rv-ah)" />
-                              <text x={X(3)} y="11" textAnchor="middle" fontSize="10.5" fill={T.muted}>고친 뒤 재검토</text>
+                              <g><title>고치면 ① 규칙 검사는 즉시 자동으로 다시 계산되고(버튼 없음), 바뀐 항목은 ② 검토 AI의 '미검토·변경분 검토' 대상이 됩니다.</title>
+                                <path d={`M${X(4)} ${Y - 12} C ${X(4)} 14, ${X(1)} 14, ${X(1)} ${Y - 14}`} fill="none" stroke={T.muted} strokeWidth="1" strokeDasharray="3 4" markerEnd="url(#ae-rv-ah)" />
+                                <text x={(X(1) + X(4)) / 2} y="11" textAnchor="middle" fontSize="10.5" fill={T.muted}>고친 뒤 재검토 — ① 자동 재검사 → ② 변경분만</text></g>
                               <line x1={X(0)} y1={Y} x2={X(Math.min(cur, 5))} y2={Y} stroke={T.green} strokeWidth="2" />
                               {cur < 5 && <line x1={X(cur)} y1={Y} x2={X(5)} y2={Y} stroke={T.muted + "66"} strokeWidth="2" />}
                               {steps.map((s, i) => { const st = stateOf(i), x = X(i); return (
