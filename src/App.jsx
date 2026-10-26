@@ -133,10 +133,11 @@ const mgmtLevelLabel = (tailoring, guide) => guide?.mgmtActivities
   : (tailoring?.process?.level || "L3");
 
 const T = {
-  bg: "#0A0C10", surface: "#111318", border: "#1E2230",
-  accent: "#4F8EF7", accentDim: "#1E3A6E", accentGlow: "rgba(79,142,247,0.18)",
-  green: "#2DD4A0", amber: "#F5A623", red: "#FF5B5B",
-  text: "#E8EAF0", muted: "#6B7280", subtle: "#1C2030",
+  // 밝은 업무용 테마 — 연회색 바탕(bg) 위 흰 카드(surface), 포인트 블루(accent). 글자 대비 WCAG AA 이상
+  bg: "#F4F6FA", surface: "#FFFFFF", border: "#D9DFE8",
+  accent: "#2563EB", accentDim: "#DBEAFE", accentGlow: "rgba(37,99,235,0.10)",
+  green: "#15803D", amber: "#B45309", red: "#DC2626",
+  text: "#111827", muted: "#5B6472", subtle: "#EEF2F7",
 };
 
 function Badge({ color = T.accent, children }) {
@@ -157,11 +158,11 @@ function Card({ children, style={}, onClick, hover=false }) {
 
 function Btn({ children, variant="primary", onClick, style={}, disabled=false }) {
   const [hov, setHov] = useState(false);
-  const base = { primary:{bg:T.accent,color:"#fff",border:T.accent}, ghost:{bg:"transparent",color:T.muted,border:T.border}, outline:{bg:"transparent",color:T.accent,border:T.accent}, danger:{bg:T.red,color:"#fff",border:T.red} }[variant];
+  const base = { primary:{bg:T.accent,color:"#fff",border:T.accent,hov:"#1D4ED8"}, ghost:{bg:"#FFFFFF",color:T.text,border:"#C9D2DE",hov:T.subtle}, outline:{bg:"#FFFFFF",color:T.accent,border:T.accent,hov:T.accentDim}, danger:{bg:T.red,color:"#fff",border:T.red,hov:"#B91C1C"} }[variant];
   return (
     <button onClick={onClick} disabled={disabled} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
-      style={{ background:hov?(variant==="ghost"?T.subtle:base.bg):(variant==="primary"||variant==="danger"?base.bg:"transparent"),
-        color:variant==="ghost"&&hov?T.text:base.color, border:`1px solid ${base.border}`, borderRadius:10,
+      style={{ background:hov&&!disabled?base.hov:base.bg,
+        color:base.color, border:`1px solid ${base.border}`, borderRadius:10, boxShadow:"0 1px 2px rgba(16,24,40,0.06)",
         padding:"8px 16px", fontSize:13, fontWeight:600, cursor:disabled?"not-allowed":"pointer",
         opacity:disabled?0.4:1, transition:"all .15s", fontFamily:"inherit", letterSpacing:0.3, ...style }}>
       {children}
@@ -2035,7 +2036,10 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap');
         @keyframes spin{to{transform:rotate(360deg)}} @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
         *{box-sizing:border-box;margin:0;padding:0} ::-webkit-scrollbar{width:5px} ::-webkit-scrollbar-track{background:${T.bg}} ::-webkit-scrollbar-thumb{background:${T.border};border-radius:3px}
-        input,select{color-scheme:dark} input::placeholder{color:${T.muted}} button:focus{outline:none}
+        :root{color-scheme:light} input,select,textarea{color-scheme:light} input::placeholder,textarea::placeholder{color:#8A93A3} button:focus{outline:none} button:focus-visible{outline:2px solid ${T.accent};outline-offset:1px}
+        button[style*="background: none"]:not(:disabled){background:#FFFFFF !important; box-shadow:0 1px 2px rgba(16,24,40,0.06)}
+        button[style*="background: none"]:not(:disabled):hover{background:${T.subtle} !important}
+        button:not(:disabled):hover{filter:brightness(0.98)}
         @media(min-width:768px){ .layout{ flex-direction:row !important; } .sidebar{ display:flex !important; } .mobile-header{ display:none !important; } .main-content{ padding:32px 40px !important; } }
       `}</style>
 
@@ -4498,7 +4502,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
                   <td style={{ ...th, textAlign: "left", minWidth: 150 }} rowSpan={3}>단계별 산출물</td>
                   <td style={th} rowSpan={3}>전체</td>
                   <td style={th} rowSpan={3}>공통</td>
-                  {leaves.map((l, li) => <td key={"h1" + li} style={{ ...th, background: "#16233a" }}>{l.l1}</td>)}
+                  {leaves.map((l, li) => <td key={"h1" + li} style={{ ...th, background: T.accentDim, color: T.accent }}>{l.l1}</td>)}
                 </tr>
                 <tr>{leaves.map((l, li) => <td key={"h2" + li} style={th}>{l.l2 || "—"}</td>)}</tr>
                 <tr>{leaves.map((l, li) => <td key={"h3" + li} style={th}>{l.l3 || "—"}</td>)}</tr>
@@ -4520,7 +4524,7 @@ function StepWBS({ wbsData, setWbsData, generating, genError, genProgress, onRec
                         const on = !!selected[selKey(d, li)];
                         return (
                           <td key={li} onClick={() => { if (!isCom) toggleCell(d, li); }}
-                            style={{ ...cell, textAlign: "center", cursor: isCom ? "not-allowed" : "pointer", background: on ? T.accentDim : "transparent", color: on ? "#bfd4ff" : T.muted, userSelect: "none", opacity: isCom ? 0.4 : 1 }}>
+                            style={{ ...cell, textAlign: "center", cursor: isCom ? "not-allowed" : "pointer", background: on ? T.accentDim : "transparent", color: on ? T.accent : T.muted, userSelect: "none", opacity: isCom ? 0.4 : 1 }}>
                             {on ? "●" : ""}
                           </td>
                         );
@@ -10172,8 +10176,8 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
   const ta = { ...inp, minHeight: 40, resize: "vertical", lineHeight: 1.45 };
   const small = { background: "none", border: `1px solid ${T.border}`, borderRadius: 6, color: T.accent, cursor: "pointer", fontSize: 10.5, padding: "3px 9px", fontFamily: "inherit" };
   // 판정·수정 영역 버튼 — 배경이 채워진 버튼(btn)과 선택형 버튼(seg)으로, 본문 텍스트와 한눈에 구분되게
-  const btn = { ...small, background: T.subtle, border: "1px solid #2E3550", color: T.text };
-  const seg = on => ({ ...small, background: on ? T.accent : T.subtle, color: on ? "#fff" : T.text, borderColor: on ? T.accent : "#2E3550" });
+  const btn = { ...small, background: T.subtle, border: "1px solid #C9D2DE", color: T.text };
+  const seg = on => ({ ...small, background: on ? T.accent : T.subtle, color: on ? "#fff" : T.text, borderColor: on ? T.accent : "#C9D2DE" });
   const set = fn => setModel(m => { const n = AE.normalizeModel(JSON.parse(JSON.stringify(m))); fn(n); return n; });
 
   // ── 공통: AI 호출 래퍼 (청크 진행률) ──
@@ -12467,7 +12471,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                                   <div>
                                     <div style={{ fontSize: 10, marginBottom: 2, color: f.judge ? jColor[f.judge.state] : T.amber }}>{f.judge ? `판정: ${AE.REVIEW_JUDGE[f.judge.state]}` : "○ 미판정"}</div>
                                     <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-                                      {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...btn, padding: "2px 7px", background: on ? jColor[st] : T.subtle, color: on ? "#fff" : T.text, borderColor: on ? jColor[st] : "#2E3550" }}>{({ valid: "✓ 맞음", invalid: "✕ 틀림", opinion: "△ 보류" })[st]}</button>; })}
+                                      {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...btn, padding: "2px 7px", background: on ? jColor[st] : T.subtle, color: on ? "#fff" : T.text, borderColor: on ? jColor[st] : "#C9D2DE" }}>{({ valid: "✓ 맞음", invalid: "✕ 틀림", opinion: "△ 보류" })[st]}</button>; })}
                                       {f.judge && <button onClick={() => { keepRv([f.key]); setModel(m => AE.judgeReview(m, [f.key], null)); }} style={{ ...small, padding: "2px 6px", color: T.muted }} title="판정 취소">↺</button>}
                                     </div>
                                     {f.judge?.note && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 2 }}>— {f.judge.note}</div>}
@@ -12516,7 +12520,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                             <div style={{ fontSize: 10, marginBottom: 3, color: f.judge ? jColor[f.judge.state] : T.amber }}>{f.judge ? `판정: ${AE.REVIEW_JUDGE[f.judge.state]}` : "○ 미판정 — 아래에서 선택"}</div>
                             <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                               {/* 선택 전에는 세 버튼 모두 같은 회색 — 색이 있으면 이미 선택된 것으로 오인됨. 선택된 판정만 색을 채운다 */}
-                              {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...btn, padding: "2px 7px", background: on ? jColor[st] : T.subtle, color: on ? "#fff" : T.text, borderColor: on ? jColor[st] : "#2E3550", fontWeight: on ? 700 : 400 }}>{({ valid: "✓ 맞음", invalid: "✕ 틀림", opinion: "△ 보류" })[st]}</button>; })}
+                              {["valid", "invalid", "opinion"].map(st => { const on = f.judge?.state === st; return <button key={st} disabled={busy} title={AE.REVIEW_JUDGE_ABOUT[st]} onClick={() => judge(f, st)} style={{ ...btn, padding: "2px 7px", background: on ? jColor[st] : T.subtle, color: on ? "#fff" : T.text, borderColor: on ? jColor[st] : "#C9D2DE", fontWeight: on ? 700 : 400 }}>{({ valid: "✓ 맞음", invalid: "✕ 틀림", opinion: "△ 보류" })[st]}</button>; })}
                               {f.judge && <button onClick={() => { keepRv([f.key]); setModel(m => AE.judgeReview(m, [f.key], null)); }} style={{ ...small, padding: "2px 7px", color: T.muted }} title="판정 취소">↺</button>}
                             </div>
                             {f.judge && <div style={{ fontSize: 9.5, color: T.muted, marginTop: 3 }}>{String(f.judge.at).slice(0, 16).replace("T", " ")}{f.judge.note ? ` — ${f.judge.note}` : ""}</div>}
