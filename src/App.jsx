@@ -8403,7 +8403,7 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   const scopeName = k => { const S = AE.reviewScope(k); return S ? `${S.proc} ${S.label}` : (AE.LEVELS[k]?.reqProc || k); };
   const critName = (k, c) => (AE.reviewCriteriaFor(k, model.version).all.find(x => x.code === c) || {}).label || c;
   const rvRows = [["3단 교차검토 — 검토 AI 의견 및 QA 판정 기록"],
-    [`검토 기준: ① ${AE.vdaBasis(model.version)} → ② ${Object.values(AE.REVIEW_KINDS).map(K => `${K.ver} (${K.basis})`).join(" / ")} · 의견 ${rvw.list.length}건 · 미판정 ${rvw.count().open}건`],
+    [`검토 기준: ① ${AE.vdaBasis(model.version)} → ② ${Object.entries(AE.REVIEW_KINDS).map(([k, K]) => `${AE.criteriaName(k)} (${K.basis})`).join(" / ")} · 의견 ${rvw.list.length}건 · 미판정 ${rvw.count().open}건`],
     ["산출물", "검토 기준", "항목", "검토됨(현재 내용)", "미판정", "지적 맞음(수정 필요)", "상태"],
     ...rvCov.map(c => [`${c.proc} ${c.label}`, AE.REVIEW_KINDS[c.kind].ver, c.total, c.reviewedAny, c.open, c.valid, !c.total ? "항목 없음" : c.reviewedAny < c.total ? "검토 필요" : c.open ? "판정 필요" : "완료"]),
     [`AI 검토 대상 제외: ${AE.REVIEW_EXCLUDED.map(x => `${x.doc ? AE.ASPICE_DOCS[x.doc].title : x.label}(${x.why})`).join(" · ")}`],
@@ -12034,7 +12034,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                           <td style={{ ...cell }} onClick={e => e.stopPropagation()}><input type="checkbox" disabled={busy || !c.total} checked={pick.includes(c.key)} onChange={() => togglePick(c.key)} title={c.total ? `선택 검토에 포함 (변경분 ${chOf[c.key] || 0}건)` : "항목 없음"} /></td>
                           <td style={{ ...cell, color: T.muted }}>{c.group}</td>
                           <td style={{ ...cell }}><span style={{ color: T.muted }}>{c.proc}</span> {c.label}</td>
-                          <td style={{ ...cell }} onClick={e => { e.stopPropagation(); setRvLevel(c.key); setRvGuide(true); }} title="눌러서 검토 기준 설명 보기"><span style={{ color: T.accent, borderBottom: `1px dotted ${T.accent}`, cursor: "help" }}>{AE.vdaVersionLabel(V)}</span><span style={{ color: T.muted }}> → {AE.REVIEW_KINDS[c.kind].ver}</span></td>
+                          <td style={{ ...cell }} onClick={e => { e.stopPropagation(); setRvLevel(c.key); setRvGuide(true); }} title="눌러서 검토 기준 설명 보기"><span style={{ color: T.accent, borderBottom: `1px dotted ${T.accent}`, cursor: "help" }}>{AE.vdaVersionLabel(V)}</span><span title={AE.criteriaTip(c.kind)} style={{ color: T.muted }}> → {AE.criteriaName(c.kind)}</span></td>
                           <td style={{ ...cell, textAlign: "right" }}>{c.total}</td>
                           <td style={{ ...cell }}>{c.total ? <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ flex: 1, height: 5, background: T.border, borderRadius: 3, overflow: "hidden" }}><span style={{ display: "block", width: `${pct}%`, height: "100%", background: pct === 100 ? T.green : T.amber }} /></span>{c.reviewedAny}/{c.total}</span> : "-"}</td>
                           <td style={{ ...cell, textAlign: "right", color: c.open ? T.accent : T.muted }}>{c.open}</td>
@@ -12194,17 +12194,17 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                     </div>);
                 })()}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 10.5, color: T.muted, flexWrap: "wrap" }}>
-                  <span>검토 기준 <b style={{ color: T.text }}>① {AE.vdaVersionLabel(V)} BP 요건</b> → <b style={{ color: T.text }}>② {K.ver}</b> — {AE.REVIEW_KIND_ABOUT[S.kind].what}</span>
+                  <span>검토 기준 <b style={{ color: T.text }}>① {AE.vdaVersionLabel(V)} BP 요건</b> → <b title={AE.criteriaTip(S.kind)} style={{ color: T.text, borderBottom: `1px dotted ${T.muted}`, cursor: "help" }}>② {AE.criteriaName(S.kind)}</b> — {AE.REVIEW_KIND_ABOUT[S.kind].what}</span>
                   <button onClick={() => setRvGuide(g => !g)} style={{ ...small, padding: "2px 9px" }}>{rvGuide ? "검토 기준 접기 ▴" : "검토 기준 자세히 보기 ▾"}</button>
                 </div>
                 {rvGuide && (
                   <div style={{ marginTop: 8, padding: "10px 12px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg, fontSize: 11, lineHeight: 1.6 }}>
                     <div style={{ marginBottom: 6, padding: "6px 8px", background: T.accent + "10", border: `1px solid ${T.accent}44`, borderRadius: 7 }}><b>① 1차 — Automotive SPICE {AE.vdaVersionLabel(V)} (VDA QMC) 프로세스 BP 요건</b>: 적용 기준으로 고른 버전의 {S.proc} BP를 항목 단위 점검문으로 요약한 것입니다(원문은 VDA QMC 발행본 기준). 검토 AI는 이 기준을 <b>먼저</b> 적용하고 코드는 <code>VDA-…</code>로 시작합니다.
                       <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>{RC.vda.map(c => <div key={c.code} style={{ fontSize: 10.5 }}><code style={{ color: T.accent }}>{c.code}</code> <b>{c.label}</b> — <span style={{ color: T.muted }}>{c.desc}</span></div>)}</div></div>
-                    <div style={{ marginBottom: 6 }}><b>② 2차 — {K.ver}</b>: {AE.REVIEW_KIND_ABOUT[S.kind].what}입니다.
+                    <div style={{ marginBottom: 6 }}><b>② 2차 — {AE.criteriaName(S.kind)}</b>: {AE.REVIEW_KIND_ABOUT[S.kind].what}입니다.
                       <div style={{ marginTop: 3, paddingLeft: 10 }}>
                         <div>· 검토 AI는 <b>이 점검표에 있는 항목으로만</b> 지적합니다. 점검표에 없는 엉뚱한 지적은 자동으로 걸러져 판정 목록에 올라오지 않습니다.</div>
-                        <div>· 이름 끝의 <b>{String(K.ver).split("-").pop()}</b>은 점검표의 판(버전) 번호입니다. 의견마다 몇 판으로 검토했는지 남으므로, 나중에 점검표가 바뀌어도 그때 어떤 기준으로 검토했는지 알 수 있습니다.</div>
+                        <div>· <b>{AE.criteriaParts(S.kind).abbr}</b>는 {AE.criteriaParts(S.kind).en}의 약자{S.kind === "test" ? "(Test Case가 아님)" : ""}이고, 끝의 <b>{AE.criteriaParts(S.kind).num}</b>은 점검표의 판(버전) 번호입니다. SPIDer가 정한 이름이며 표준 용어는 아닙니다. 의견마다 몇 판으로 검토했는지 남으므로, 나중에 점검표가 바뀌어도 그때 어떤 기준으로 검토했는지 알 수 있습니다.</div>
                       </div></div>
                     <div style={{ color: T.muted, marginBottom: 8 }}>이 점검표는 어디서 왔나요? {AE.REVIEW_KIND_ABOUT[S.kind].std}</div>
                     {(() => { const gb = gbFor(S.proc); const n = guides.filter(g => gSel[g.id] !== false && guideApplies(g, "aspice", S.proc)).length;

@@ -1914,6 +1914,21 @@ export function reviewCoverage(model, provider = "") {
 // ═══════════════════════════════════════════════════════════════════════════
 // 11-c) 검토 기준 안내(쉬운 설명·나쁜 예→좋은 예) · 검토 대상 직접 수정
 // ═══════════════════════════════════════════════════════════════════════════
+// 2차 점검표 이름 — 코드(RC·AC·DC·TC)는 SPIDer 내부 이름이므로 화면에는 항상 풀어 쓴 이름과 함께 보여 준다
+export const REVIEW_KIND_NAMES = {
+  req: { ko: "요구사항 점검표", en: "Requirements Criteria" },
+  arch: { ko: "아키텍처 점검표", en: "Architecture Criteria" },
+  unit: { ko: "상세설계 점검표", en: "Detailed Design Criteria" },
+  test: { ko: "시험 점검표", en: "Test Criteria" },
+};
+export function criteriaParts(kind) {
+  const K = REVIEW_KINDS[kind] || REVIEW_KINDS.req; const N = REVIEW_KIND_NAMES[kind] || REVIEW_KIND_NAMES.req;
+  const [abbr, num] = String(K.ver).split("-");
+  return { ...N, abbr, num, ver: K.ver };
+}
+export const criteriaName = kind => { const p = criteriaParts(kind); return `${p.ko} ${p.ver}`; };
+export const criteriaTip = kind => { const p = criteriaParts(kind);
+  return `${p.ver} = ${p.ko}\n${p.abbr} = ${p.en}의 약자 · ${p.num} = 점검표 판(버전) 번호${kind === "test" ? "\n※ 여기서 TC는 Test Case(시험 케이스)가 아니라 시험 산출물을 보는 점검표입니다." : ""}\nSPIDer가 정한 이름이며 ASPICE·ISO 표준 용어는 아닙니다.`; };
 export const REVIEW_KIND_ABOUT = {
   req: { what: "요구사항 문장이 제대로 쓰였는지 보는 점검표", std: "요구사항 국제표준(ISO/IEC/IEEE 29148)이 정한 '좋은 요구사항의 조건'을 그대로 옮겼습니다 — 뜻이 하나로만 읽히고, 시험으로 확인할 수 있고, 한 문장에 요구가 하나이고, 빠진 조건이 없고, 다른 요구와 모순되지 않고, '어떻게'가 아니라 '무엇을'을 말하고, 실제로 만들 수 있어야 합니다." },
   arch: { what: "구조(요소·인터페이스·동작 모드·설계 근거)가 분명한지 보는 점검표", std: "아키텍처 기술 국제표준(ISO/IEC/IEEE 42010)과, ASPICE가 설계서에 요구하는 내용(구성 요소 정의·요구 할당·인터페이스·동작 모드·설계 근거)을 합쳐 만들었습니다." },
