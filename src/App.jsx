@@ -1671,9 +1671,30 @@ JSON만 출력: {"pbs":["string"]}`, 2000);
       setServerStatus({ state, err: msg, by });
       if (explicit || srvWarnRef.current !== state + msg) {
         srvWarnRef.current = state + msg;
-        alert((state === "conflict" ? "⚠ 저장하지 않았습니다 — " : state === "locked" ? "🔒 저장하지 않았습니다 — " : "서버 저장 실패: ") + msg +
+        if (state === "conflict" && !force && editingIdRef.current) {
+          // 충돌 — 버튼 위치를 찾게 하지 않고 이 자리에서 바로 고르게 한다
+          setTimeout(() => {
+            const ok = window.confirm("⚠ 저장하지 않았습니다 — " + msg +
+              "\n\n지금 작업 내용은 이 PC(브라우저)에 그대로 보관되어 있습니다." +
+              "\n\n[확인] 지금 내 내용으로 서버 저장본을 덮어씁니다. (먼저 백업 파일을 자동으로 받아 둡니다)" +
+              "\n[취소] 저장하지 않습니다. 상대 내용을 살리려면 대시보드에서 프로젝트를 다시 여세요.");
+            if (!ok) return;
+            try {   // 덮어쓰기 전 백업 — V-모델 전체를 .json으로
+              const bak = makeVmodelBackup(projectForm || {}, requirements || {});
+              const d = new Date(), pad = n => String(n).padStart(2, "0");
+              const name = `SPIDer_V모델백업_${String(projectForm?.name || "프로젝트").replace(/[\\/:*?"<>|]/g, "_").trim()}_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}_덮어쓰기전.json`;
+              const url = URL.createObjectURL(new Blob([JSON.stringify(bak)], { type: "application/json" }));
+              const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+              setTimeout(() => URL.revokeObjectURL(url), 5000);
+            } catch (_) { /* 백업 실패해도 이 PC 임시저장본은 남아 있음 */ }
+            forceNextRef.current = true;
+            setTimeout(() => serverSaveRef.current && serverSaveRef.current({ explicit: true }), 300);
+          }, 0);
+          return false;
+        }
+        alert((state === "conflict" ? "⚠ 덮어쓰기도 저장하지 못했습니다 — " : state === "locked" ? "🔒 저장하지 않았습니다 — " : "서버 저장 실패: ") + msg +
           "\n\n지금 작업 내용은 이 PC(브라우저)에 그대로 보관되어 있습니다." +
-          (state === "conflict" ? "\n\n· 내 내용을 살리려면: V-모델 하단 [✓ 저장]을 다시 누르면 덮어쓸지 묻습니다(백업 파일을 먼저 받아 둡니다).\n· 상대 내용을 살리려면: 대시보드에서 프로젝트를 다시 열어 최신 내용을 확인하세요." : ""));
+          (state === "conflict" ? "\n잠시 뒤 V-모델 하단 오른쪽 끝의 [✓ 저장]을 다시 눌러 주세요." : ""));
       }
       return false;
     };
