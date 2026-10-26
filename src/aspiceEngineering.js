@@ -2011,6 +2011,13 @@ export function reviewEditSpec(model, key, id) {
     fields: [F("title", "시험명", 1), F("precondition", "사전조건", 2), F("steps", "절차", 3), F("expected", "기대 결과", 2), F("passCriteria", "합격 기준", 2)] };
 }
 // 수정 적용 (SYS 요구 제목·내용 제외 — 화면이 확정 요구 items로 처리). 수정한 시험은 수동 작성으로 표시해 규칙 재생성 때 덮어쓰지 않는다.
+// '맞음' 의견이 이미 현재 내용에 반영되어 있어 고칠 것이 없을 때 — 변경 없이 '반영 확인' 조치 기록만 남긴다(④ 대기에서 빠지고 RTM 수정 이력에 남음)
+export function markReviewResolved(model, key, id, meta = {}) {
+  const m = normalizeModel(JSON.parse(JSON.stringify(model)));
+  m.aiReview.edits = [...m.aiReview.edits, { at: meta.at || new Date().toISOString(), scope: key, id,
+    changes: [{ k: "none", label: "조치", before: "", after: "현재 내용에 이미 반영됨 — 변경 없음" }], by: meta.by || "user", via: meta.via || "review(반영 확인)" }].slice(-500);
+  return m;
+}
 export function applyReviewEdit(model, key, id, patch, meta = {}) {
   const S = reviewScope(key); if (!S) return model;
   const m = normalizeModel(JSON.parse(JSON.stringify(model)));

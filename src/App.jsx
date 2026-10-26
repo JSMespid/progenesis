@@ -10280,7 +10280,19 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
     const fk = String(fkey || "");
     const via = fk.startsWith("fq|") ? (rvEdit.aiDraft ? "fix-queue(AI 초안·QA 편집 승인)" : "fix-queue(QA 편집 승인)") : rvEdit.aiDraft ? "review(AI 초안·QA 승인)" : fk.startsWith("qf|") || fk.startsWith("rule") ? "rule" : "review";
     const ok = applyPatch(key, id, vals, via);
-    if (!ok) { setRvEdit(x => x ? { ...x, msg: "바뀐 내용이 없어 적용할 것이 없습니다. 아래 '규칙 판정'에 남은 항목이 있으면 그 칸을 고친 뒤 적용하세요. 그대로 두려면 [취소]." } : x); return; }
+    if (!ok) {
+      // 바뀐 내용이 없음 — '맞음' 의견이 이미 현재 내용에 반영되어 있으면 '반영 확인'으로 기록할 수 있게 한다
+      const pend = AE.reviewView(model).list.filter(f => f.level === key && f.reqId === id && !f.removed && f.judge?.state === "valid" && !f.edits.length);
+      if (pend.length && window.confirm(`${id} — 바뀐 내용이 없습니다.\n\n'맞음'으로 판정한 의견 ${pend.length}건이 지금 내용에 이미 반영되어 있다면 [확인]을 누르세요.\n'반영 완료(변경 없음)'로 기록되어 ④ 수정안 대기에서 빠지고, 수정 이력(추적 매트릭스)에 남습니다.\n\n고칠 곳이 남아 있으면 [취소]를 누르고 칸을 고친 뒤 [적용]하세요.`)) {
+        setModel(m => AE.markReviewResolved(m, key, id, { via: fk.startsWith("fq|") ? "fix-queue(반영 확인)" : "review(반영 확인)" }));
+        if (fk.startsWith("fq|")) { const card = (fixQ?.cards || []).find(c => c.id === id); if (card) approveJudge(card); finishQueueCard(id, "approved"); }
+        setRvEdit(null);
+        setNote(`${id} — 의견 ${pend.length}건을 '반영 완료(변경 없음)'로 기록했습니다. 판정 목록에 '✎ 수정함'으로 표시됩니다. 저장을 눌러 확정하세요.`);
+        return;
+      }
+      setRvEdit(x => x ? { ...x, msg: pend.length ? "바뀐 내용이 없어 적용하지 않았습니다. 고칠 칸을 수정한 뒤 [적용]하세요. 그대로 두려면 [취소]." : "바뀐 내용이 없어 적용할 것이 없습니다. 그대로 두려면 [취소]." } : x);
+      return;
+    }
     if (fk.startsWith("fq|")) { const card = (fixQ?.cards || []).find(c => c.id === id); if (card) approveJudge(card); finishQueueCard(id, "approved"); }
     setRvEdit(null);
     setNote(`${id} 수정을 반영했습니다 — 판정 목록에 '✎ 수정함'으로 표시되고, '변경분 검토'로 수정 결과를 다시 확인할 수 있습니다. 저장을 눌러 확정하세요.`);
@@ -12479,7 +12491,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                                 {f.edits.map((e, i) => (
                                   <div key={i} style={{ marginTop: 4, paddingLeft: 8, borderLeft: `2px solid ${T.green}66` }}>
                                     <div style={{ color: T.muted, fontSize: 9.5 }}>{String(e.at).slice(0, 16).replace("T", " ")}{e.via === "rule" ? " · 규칙 검사 결과에서 수정" : ""}</div>
-                                    {e.changes.map((c, j) => <div key={j}><b>{c.label}</b>: <span style={{ color: T.red, textDecoration: "line-through" }}>{c.before || "(비어 있음)"}</span> → <span style={{ color: T.green }}>{c.after || "(비어 있음)"}</span></div>)}
+                                    {e.changes.map((c, j) => c.k === "none" ? <div key={j}><b>{c.label}</b>: <span style={{ color: T.green }}>{c.after}</span></div> : <div key={j}><b>{c.label}</b>: <span style={{ color: T.red, textDecoration: "line-through" }}>{c.before || "(비어 있음)"}</span> → <span style={{ color: T.green }}>{c.after || "(비어 있음)"}</span></div>)}
                                   </div>))}
                               </details>)}
                           </td>
