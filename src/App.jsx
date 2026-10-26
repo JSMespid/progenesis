@@ -12386,7 +12386,10 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                     if (!fs.length) return;
                     let note = "";
                     if (st === "invalid" || st === "opinion") { note = window.prompt(`${fs.length}건에 같은 사유를 적용합니다 — ${st === "invalid" ? "지적이 틀렸다고 보는 이유" : "보류 사유"}를 적어 주세요`, ""); if (note === null) return; }
-                    else if (!window.confirm(`표시된 미판정 의견 ${fs.length}건을 모두 '맞음'으로 판정합니다. 이후 ④ [✦ 수정안 생성]으로 고치거나 대상별 ✎ 대상 수정에서 직접 고치면 됩니다.\n\n계속할까요?`)) return;
+                    else {
+                      if (!window.confirm(`미판정 의견 ${fs.length}건을 모두 '맞음'으로 판정합니다.\n\n· '맞음'은 산출물을 고치는 근거가 됩니다 — 이후 ④ 수정안 대상이 됩니다.\n· 판정 기록에 '일괄 맞음(${fs.length}건)'으로 남아 개별 판정과 구분됩니다.\n\n의견 내용을 확인하셨다면 [확인]을 누르세요.`)) return;
+                      note = `일괄 맞음(${fs.length}건)`;
+                    }
                     keepRv(fs.map(f => f.key)); setRvStepOpen(p => p || "judge");
                     setModel(m => AE.judgeReview(m, fs.map(f => f.key), st, note));
                   };
@@ -12405,8 +12408,9 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                       </>; })()}
                       {openList.length > 1 && <>
                         <span style={{ flex: 1 }} />
-                        <button disabled={busy} onClick={() => bulk(openList, "opinion")} title={`표시된 미판정 ${openList.length}건을 모두 '보류'로 판정합니다 — 같은 사유를 입력받습니다.\n'맞음'은 의견마다 확인해서 판정합니다.`} style={{ ...btn, color: T.accent }}>△ 일괄 보류 {openList.length}</button>
-                        <button disabled={busy} onClick={() => bulk(openList, "invalid")} title={`표시된 미판정 ${openList.length}건을 모두 '틀림'으로 판정합니다 — 같은 사유를 입력받습니다.\n'맞음'은 의견마다 확인해서 판정합니다.`} style={btn}>✕ 일괄 틀림 {openList.length}</button>
+                        <button disabled={busy} onClick={() => bulk(openList, "valid")} title={`표시된 미판정 ${openList.length}건을 모두 '맞음'으로 판정합니다.\n'맞음'은 산출물을 고치는 근거가 되므로 의견 내용을 확인한 뒤 사용하세요. 판정 기록에 '일괄 맞음'으로 남습니다.`} style={{ ...btn, color: T.green }}>✓ 일괄 맞음 {openList.length}</button>
+                        <button disabled={busy} onClick={() => bulk(openList, "opinion")} title={`표시된 미판정 ${openList.length}건을 모두 '보류'로 판정합니다 — 같은 사유를 입력받습니다.`} style={{ ...btn, color: T.accent }}>△ 일괄 보류 {openList.length}</button>
+                        <button disabled={busy} onClick={() => bulk(openList, "invalid")} title={`표시된 미판정 ${openList.length}건을 모두 '틀림'으로 판정합니다 — 같은 사유를 입력받습니다.`} style={btn}>✕ 일괄 틀림 {openList.length}</button>
                       </>}
                     </div>
                     {rvGroup && (() => {
