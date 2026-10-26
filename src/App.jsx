@@ -9860,7 +9860,7 @@ const AE_GUIDE = {
     done: "오류 0, 변경 영향 확인 대기 0, 사유 없는 누락 0이면 끝. 경고·정보는 사유가 있으면 남아 있어도 됩니다." },
   review: { why: "작성한 산출물을 생성 AI와 다른 검토 AI가 보고 의견을 내고, QA 담당자가 그 의견이 맞는지 판정합니다. 판정 기록이 SUP.1 QA 증적이 됩니다.",
     todo: ["[전체 산출물 미검토·변경분 검토] 또는 표에서 산출물을 골라 검토합니다(시스템 요구부터 권장). 검토 AI는 설정 → AI 연동의 기본 검토 AI가 쓰입니다.", "③에서 의견마다 맞음 / 틀림(사유 기재) / 보류로 판정합니다.", "④ [✦ 수정안 생성]으로 '맞음' 의견의 수정안을 만들고 카드마다 승인·편집·반려합니다. 승인 전에는 아무것도 바뀌지 않습니다.", "수정이 끝나면 ②의 [미검토·변경분 검토]로 고친 항목을 재검토합니다."],
-    done: "현황표의 모든 산출물이 '완료'(검토됨 100%, 미판정 0)면 끝. \'빠진 곳 점검\'에서 [교차검토 끝난 요구 → Reviewed]로 상태를 올립니다." },
+    done: "현황표의 모든 산출물이 '완료'(검토됨 100%, 미판정 0)면 끝. 교차검토가 끝난 요구는 단계 칸의 ⚑ Reviewed로 상태를 올립니다." },
 };
 const AE_LS_HINTS = "spiderqa_ae_hints";
 const AE_LS_INTRO = "spiderqa_ae_intro_seen", AE_LS_GUIDE = "spiderqa_ae_guide_hidden";
@@ -9893,6 +9893,20 @@ function AeDraftProgress({ at }) {
       </div>
     </div>);
 }
+// 머리글 버튼용 선 아이콘 (이모지 대신 — 화면·OS마다 모양이 달라지지 않게)
+function AeIcon({ name, size = 14 }) {
+  const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true, style: { flexShrink: 0 } };
+  if (name === "help") return <svg {...p}><circle cx="12" cy="12" r="9" /><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6" /><path d="M12 17h.01" /></svg>;
+  if (name === "bulb") return <svg {...p}><path d="M9 18h6" /><path d="M10 21h4" /><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2V16h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" /></svg>;
+  if (name === "close") return <svg {...p}><path d="M6 6l12 12M18 6L6 18" /></svg>;
+  if (name === "robot") return <svg {...p}><rect x="5" y="8" width="14" height="11" rx="2.5" /><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5" /></svg>;
+  if (name === "user") return <svg {...p}><circle cx="12" cy="8" r="3.5" /><path d="M5 20c1.2-3.6 4-5 7-5s5.8 1.4 7 5" /></svg>;
+  if (name === "arrow") return <svg {...p}><path d="M5 12h14M13 6l6 6-6 6" /></svg>;
+  return null;
+}
+// 머리글 보조 버튼(안내·사용법) — 알약 모양, 아이콘 + 글자
+const aePill = on => ({ display: "inline-flex", alignItems: "center", gap: 6, height: 30, padding: "0 12px", borderRadius: 999, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+  border: `1px solid ${on ? T.accent : "#C9D2DE"}`, background: on ? T.accentDim : "#FFFFFF", color: on ? T.accent : T.text, boxShadow: "0 1px 2px rgba(16,24,40,0.06)" });
 function AeSec({ title, right, children, open: openProp, onToggle, accent }) {
   const uid = React.useId();
   const rc = React.useContext(AeRunCtx);
@@ -11423,9 +11437,9 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
             <div className="ae-hint" style={{ fontSize: 10.5, color: T.muted, marginTop: 2 }}>확정 시스템 요구(SYS.2) → 아키텍처(SYS.3) → SW·HW 요구/설계 → 검증 수단 → 양방향 추적성 — 하나의 추적 모델에서 모든 산출물을 생성합니다</div>
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <button onClick={() => setHints(!hints)} title={hints ? "단계별 할 일·화면 설명 문구를 숨깁니다" : "단계별 할 일·화면 설명 문구를 보여 줍니다"} style={{ ...small, padding: "4px 9px", background: hints ? T.accent + "22" : "none" }}>💡 안내 {hints ? "숨기기" : "보기"}</button>
-            <button onClick={() => { setIntroOpen(true); }} title="사용법 안내 보기" style={{ ...small, padding: "4px 9px" }}>❓ 사용법</button>
-            <button onClick={requestClose} title="닫기" style={{ background: "none", border: "none", color: T.muted, fontSize: 18, cursor: "pointer" }}>✕</button>
+            <button onClick={() => setHints(!hints)} aria-pressed={hints} title={hints ? "단계별 할 일·화면 설명 문구를 숨깁니다" : "단계별 할 일·화면 설명 문구를 보여 줍니다"} style={aePill(hints)}><AeIcon name="bulb" />안내 {hints ? "켜짐" : "꺼짐"}</button>
+            <button onClick={() => { setIntroOpen(true); }} title="처음 사용법 — V-모델 흐름·진행 순서·AI와 사람의 역할" style={aePill(false)}><AeIcon name="help" />사용법</button>
+            <button onClick={requestClose} title="닫기" aria-label="닫기" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: 999, border: "1px solid transparent", background: "transparent", color: T.muted, cursor: "pointer" }}><AeIcon name="close" size={16} /></button>
           </div>
         </div>
         <div style={{ padding: "8px 18px 0", flexShrink: 0 }}>
@@ -12935,42 +12949,90 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
         </div>
         {introOpen && (
           <div onClick={closeIntro} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 5, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, borderRadius: 14 }}>
-            <div onClick={e => e.stopPropagation()} style={{ background: T.surface, border: `1px solid ${T.accent}66`, borderRadius: 12, padding: "18px 22px", maxWidth: 820, width: "100%", maxHeight: "100%", overflowY: "auto", fontSize: 12, lineHeight: 1.7 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>🚗 V-모델 산출물 엔지니어링 — 처음 사용하시나요?</div>
-              <div style={{ color: T.muted, marginBottom: 12 }}>고객 요구 한 묶음에서 시스템·SW·HW 요구, 설계, 시험까지 <b>서로 연결된(추적되는)</b> 산출물을 만드는 창입니다. 아래 순서대로 가면 되고, 어느 단계에 있든 위쪽 <b>'👉 다음 할 일 → 바로 가기'</b>를 누르면 해야 할 곳으로 이동합니다.</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                <div>
-                  <div style={{ fontWeight: 700, marginBottom: 4 }}>V-모델이란</div>
-                  <div style={{ fontFamily: "monospace", fontSize: 11, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: 10, whiteSpace: "pre", lineHeight: 1.5 }}>{`고객 요구 ─▶ 시스템 요구 ······ 시스템 시험
-                 │                    ▲
-                 ▼                    │
-            시스템 구조 ········ 통합 시험
-                 │                    ▲
-                 ▼                    │
-          SW·HW 요구/설계 ··· SW·HW 시험
-                 │                    ▲
-                 ▼                    │
-              유닛(코드) ─────▶ 유닛 시험`}</div>
-                  <div style={{ color: T.muted, fontSize: 11, marginTop: 4 }}>왼쪽으로 내려가며 구체화하고(화살표), 오른쪽에서 같은 높이의 시험으로 확인합니다(점선). 어느 한 줄이 끊기면 '빠진 곳 점검'에서 '빠짐'으로 보입니다.</div>
-                </div>
-                <div>
-                  <div style={{ fontWeight: 700, marginBottom: 4 }}>보통 진행하는 순서</div>
-                  <ol style={{ margin: "0 0 8px 18px", padding: 0 }}>
-                    {AE_TABS.filter(([id]) => !(id === "SW" && !model.scope.SW) && !(id === "HW" && !model.scope.HW)).map(([id, label]) => <li key={id}><b>{label}</b> <span style={{ color: T.muted }}>— {AE_GUIDE[id]?.done}</span></li>)}
-                  </ol>
-                  <div style={{ fontWeight: 700, marginBottom: 4 }}>자동으로 되는 것 / 사람이 하는 것</div>
-                  <div style={{ fontSize: 11 }}>
-                    <div><span style={{ color: T.green }}>자동</span> — 요구 도출·파생 초안, 요소·컴포넌트 초안, 시험 생성, 추적 매트릭스, 규칙 점검, 검토 AI 의견, 수정안 초안</div>
-                    <div><span style={{ color: T.amber }}>사람</span> — 확정(요구사항 확정 버튼), 할당 확인, 고객 합의 상태, 검토 의견 판정(맞음·틀림·보류), 수정안 승인, 변경 영향 판정</div>
+            <div onClick={e => e.stopPropagation()} role="dialog" aria-label="V-모델 산출물 엔지니어링 사용법" style={{ background: T.surface, borderRadius: 16, maxWidth: 940, width: "100%", maxHeight: "100%", overflowY: "auto", fontSize: 12.5, lineHeight: 1.65, boxShadow: "0 20px 50px rgba(15,23,42,0.25)" }}>
+              {(() => {
+                const steps = AE_TABS.filter(([id]) => !(id === "SW" && !model.scope.SW) && !(id === "HW" && !model.scope.HW));
+                const H = ({ n, t, d }) => <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "0 0 10px" }}><span style={{ fontSize: 11, fontWeight: 700, color: T.accent, letterSpacing: 0.5 }}>{n}</span><span style={{ fontSize: 14.5, fontWeight: 700 }}>{t}</span>{d && <span style={{ fontSize: 11.5, color: T.muted }}>{d}</span>}</div>;
+                const card = { background: T.bg, border: `1px solid ${T.border}`, borderRadius: 12, padding: "14px 16px" };
+                // V-모델 도해 (왼쪽 내려가며 구체화 · 오른쪽 올라가며 시험 · 같은 높이끼리 검증)
+                const L = [["시스템 요구", "SYS.2"], ["시스템 구조", "SYS.3"], ["SW·HW 요구·설계", "SWE·HWE"], ["유닛 설계·코드", "SWE.3"]];
+                const R = [["시스템 시험", "SYS.5"], ["통합 시험", "SYS.4"], ["SW·HW 시험", "SWE·HWE"], ["유닛 시험", "SWE.4"]];
+                const bw = 118, bh = 38, ys = [46, 102, 158, 214];
+                const box = (x, y, [t, s2], tone, k) => <g key={k}><rect x={x} y={y} width={bw} height={bh} rx="9" fill={tone === "L" ? T.accentDim : "#DCFCE7"} stroke={tone === "L" ? T.accent : T.green} strokeWidth="1.2" /><text x={x + bw / 2} y={y + 16} textAnchor="middle" fontSize="12" fontWeight="700" fill={T.text}>{t}</text><text x={x + bw / 2} y={y + 30} textAnchor="middle" fontSize="10" fill={T.muted}>{s2}</text></g>;
+                return (<>
+                  <div style={{ padding: "22px 26px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "flex-start", gap: 14 }}>
+                    <div style={{ width: 44, height: 44, borderRadius: 12, background: T.accentDim, color: T.accent, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><AeIcon name="help" size={24} /></div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: -0.3 }}>V-모델 산출물 엔지니어링 사용법</div>
+                      <div style={{ color: T.muted, marginTop: 2 }}>고객 요구 한 묶음에서 시스템·SW·HW 요구, 설계, 시험까지 <b style={{ color: T.text }}>서로 연결된(추적되는)</b> 산출물을 만듭니다. 막히면 화면 위쪽 <b style={{ color: T.text }}>👉 다음 할 일 → 바로 가기</b>를 누르세요.</div>
+                    </div>
+                    <button onClick={closeIntro} aria-label="닫기" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: 999, border: "none", background: T.subtle, color: T.muted, cursor: "pointer" }}><AeIcon name="close" size={16} /></button>
                   </div>
-                </div>
-              </div>
-              <div style={{ marginTop: 12, padding: "8px 10px", background: T.bg, borderRadius: 8, fontSize: 11, color: T.muted }}>
-                💡 안내 문구('이 단계에서 할 일' 카드와 화면 설명)는 기본으로 숨겨져 있습니다. 필요할 때 오른쪽 위 <b>💡 안내 보기</b>를 누르면 모든 탭에 함께 나타나고, 다시 누르면 숨겨집니다. 이 사용법은 <b>❓ 사용법</b>으로 언제든 볼 수 있습니다. <b>✓ 저장</b>을 누르면(창은 닫히지 않음) 이 PC와 서버에 저장되어 같은 프로젝트의 팀원이 각자 PC에서 현재 상태를 봅니다. 편집은 한 번에 한 사람만 할 수 있습니다.
-              </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-                <Btn onClick={closeIntro} style={{ fontSize: 12, padding: "7px 16px" }}>시작하기 →</Btn>
-              </div>
+                  <div style={{ padding: "18px 26px", display: "grid", gridTemplateColumns: "minmax(0,1.05fr) minmax(0,1fr)", gap: 18 }}>
+                    <div style={card}>
+                      <H n="01" t="V-모델 한눈에 보기" />
+                      <svg viewBox="0 0 380 282" width="100%" role="img" aria-label="V-모델 도해: 왼쪽은 요구에서 코드까지 구체화, 오른쪽은 같은 높이의 시험으로 검증">
+                        <defs><marker id="ae-v-ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1 1L9 5L1 9z" fill={T.muted} /></marker></defs>
+                        <rect x="8" y="4" width="110" height="26" rx="13" fill="#FFFFFF" stroke={T.border} /><text x="63" y="21" textAnchor="middle" fontSize="11.5" fontWeight="700" fill={T.text}>고객 요구 SYS.1</text>
+                        <path d="M40 30 L40 46" stroke={T.muted} strokeWidth="1.4" markerEnd="url(#ae-v-ah)" />
+                        {L.map((b2, i) => box(8 + i * 16, ys[i], b2, "L", "l" + i))}
+                        {R.map((b2, i) => box(254 - i * 16, ys[i], b2, "R", "r" + i))}
+                        {L.slice(0, 3).map((_, i) => <path key={"ld" + i} d={`M${8 + i * 16 + 40} ${ys[i] + bh} L${8 + (i + 1) * 16 + 40} ${ys[i + 1]}`} stroke={T.accent} strokeWidth="1.4" markerEnd="url(#ae-v-ah)" />)}
+                        {R.slice(0, 3).map((_, i) => <path key={"ru" + i} d={`M${254 - (i + 1) * 16 + bw - 40} ${ys[i + 1]} L${254 - i * 16 + bw - 40} ${ys[i] + bh}`} stroke={T.green} strokeWidth="1.4" markerEnd="url(#ae-v-ah)" />)}
+                        {ys.map((y, i) => <path key={"h" + i} d={`M${254 - i * 16 - 4} ${y + bh / 2} L${8 + i * 16 + bw + 6} ${y + bh / 2}`} stroke={T.muted} strokeWidth="1" strokeDasharray="4 4" markerEnd="url(#ae-v-ah)" />)}
+                        <text x="190" y="276" textAnchor="middle" fontSize="10.5" fill={T.muted}>점선 = 같은 높이의 시험이 왼쪽 산출물을 검증</text>
+                      </svg>
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, color: T.muted, marginTop: 4 }}>
+                        <span><b style={{ color: T.accent }}>■</b> 왼쪽: 내려가며 구체화</span><span><b style={{ color: T.green }}>■</b> 오른쪽: 올라가며 시험</span><span>한 줄이라도 끊기면 '빠진 곳 점검'에 표시</span>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                      <div style={card}>
+                        <H n="02" t="AI와 사람의 역할" d="AI가 초안을 만들고, 결정은 사람이 합니다" />
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                          {[["robot", "AI·규칙이 자동으로", T.accent, T.accentDim, ["요구 도출·파생 초안", "요소·컴포넌트 초안", "시험 생성", "추적 매트릭스", "규칙 점검", "검토 AI 의견", "수정안 초안"]],
+                            ["user", "사람이 결정", T.green, "#DCFCE7", ["요구 확정", "할당 확인", "고객 합의 상태", "검토 의견 판정", "수정안 승인", "변경 영향 판정", "Reviewed 올리기"]]].map(([ic, t, c, bg, xs]) => (
+                            <div key={t} style={{ background: "#FFFFFF", border: `1px solid ${T.border}`, borderRadius: 10, padding: 10 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, color: c, marginBottom: 6 }}><span style={{ width: 24, height: 24, borderRadius: 7, background: bg, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><AeIcon name={ic} size={15} /></span>{t}</div>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>{xs.map(x => <span key={x} style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 999, background: bg, color: c === T.green ? "#14532D" : "#1E3A8A" }}>{x}</span>)}</div>
+                            </div>))}
+                        </div>
+                      </div>
+                      <div style={card}>
+                        <H n="03" t="QA 교차검토 흐름" d="점검·QA 탭" />
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                          {[["①", "규칙 검사", "자동"], ["②", "검토 AI", "자동"], ["③", "사람 판정", "사람"], ["④", "수정안", "AI 초안 → 승인"], ["⚑", "Reviewed", "상태 올리기"]].map(([n, t, d], i, arr) => (
+                            <React.Fragment key={t}>
+                              <div style={{ textAlign: "center", minWidth: 62 }}>
+                                <div style={{ width: 30, height: 30, margin: "0 auto 3px", borderRadius: 999, background: i === 4 ? T.green : T.accent, color: "#fff", fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>{n}</div>
+                                <div style={{ fontSize: 11.5, fontWeight: 700 }}>{t}</div><div style={{ fontSize: 10, color: T.muted }}>{d}</div>
+                              </div>
+                              {i < arr.length - 1 && <span style={{ color: T.muted }}><AeIcon name="arrow" size={14} /></span>}
+                            </React.Fragment>))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ padding: "0 26px 18px" }}>
+                    <div style={card}>
+                      <H n="04" t="진행 순서" d="각 단계의 '끝' 기준을 채우면 다음으로 넘어갑니다" />
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
+                        {steps.map(([id, label], i) => (
+                          <div key={id} style={{ display: "flex", gap: 10, background: "#FFFFFF", border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 12px" }}>
+                            <div style={{ width: 24, height: 24, borderRadius: 999, background: T.accentDim, color: T.accent, fontWeight: 800, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</div>
+                            <div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 12.5 }}>{label}</div><div style={{ fontSize: 11, color: T.muted, lineHeight: 1.55 }}>{AE_GUIDE[id]?.done}</div></div>
+                          </div>))}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ padding: "12px 26px", borderTop: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", background: T.bg, borderRadius: "0 0 16px 16px" }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: T.muted }}><AeIcon name="bulb" />화면 설명은 오른쪽 위 <b style={{ color: T.text }}>안내</b> 버튼으로 켜고 끕니다</span>
+                    <span style={{ fontSize: 11.5, color: T.muted }}><b style={{ color: T.text }}>✓ 저장</b> = 이 PC와 서버에 저장(팀 공유) · 편집은 한 번에 한 사람</span>
+                    <span style={{ flex: 1 }} />
+                    <Btn onClick={closeIntro} style={{ fontSize: 13, padding: "9px 20px" }}>시작하기 →</Btn>
+                  </div>
+                </>);
+              })()}
             </div>
           </div>)}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px", borderTop: `1px solid ${T.border}`, flexShrink: 0, gap: 8 }}>
