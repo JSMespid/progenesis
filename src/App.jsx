@@ -12201,8 +12201,12 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                   <div style={{ marginTop: 8, padding: "10px 12px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg, fontSize: 11, lineHeight: 1.6 }}>
                     <div style={{ marginBottom: 6, padding: "6px 8px", background: T.accent + "10", border: `1px solid ${T.accent}44`, borderRadius: 7 }}><b>① 1차 — Automotive SPICE {AE.vdaVersionLabel(V)} (VDA QMC) 프로세스 BP 요건</b>: 적용 기준으로 고른 버전의 {S.proc} BP를 항목 단위 점검문으로 요약한 것입니다(원문은 VDA QMC 발행본 기준). 검토 AI는 이 기준을 <b>먼저</b> 적용하고 코드는 <code>VDA-…</code>로 시작합니다.
                       <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>{RC.vda.map(c => <div key={c.code} style={{ fontSize: 10.5 }}><code style={{ color: T.accent }}>{c.code}</code> <b>{c.label}</b> — <span style={{ color: T.muted }}>{c.desc}</span></div>)}</div></div>
-                    <div style={{ marginBottom: 6 }}><b>② 2차 — {K.ver}</b>는 {AE.REVIEW_KIND_ABOUT[S.kind].what}입니다. 검토 AI는 이 기준에 해당하는 문제만 지적하고, 기준 코드가 맞지 않는 의견은 규칙으로 걸러집니다. 판 번호(1.0)를 고정해 두어 언제 어떤 기준으로 검토했는지가 기록에 남습니다.</div>
-                    <div style={{ color: T.muted, marginBottom: 8 }}>근거: {AE.REVIEW_KIND_ABOUT[S.kind].std}</div>
+                    <div style={{ marginBottom: 6 }}><b>② 2차 — {K.ver}</b>: {AE.REVIEW_KIND_ABOUT[S.kind].what}입니다.
+                      <div style={{ marginTop: 3, paddingLeft: 10 }}>
+                        <div>· 검토 AI는 <b>이 점검표에 있는 항목으로만</b> 지적합니다. 점검표에 없는 엉뚱한 지적은 자동으로 걸러져 판정 목록에 올라오지 않습니다.</div>
+                        <div>· 이름 끝의 <b>{String(K.ver).split("-").pop()}</b>은 점검표의 판(버전) 번호입니다. 의견마다 몇 판으로 검토했는지 남으므로, 나중에 점검표가 바뀌어도 그때 어떤 기준으로 검토했는지 알 수 있습니다.</div>
+                      </div></div>
+                    <div style={{ color: T.muted, marginBottom: 8 }}>이 점검표는 어디서 왔나요? {AE.REVIEW_KIND_ABOUT[S.kind].std}</div>
                     {(() => { const gb = gbFor(S.proc); const n = guides.filter(g => gSel[g.id] !== false && guideApplies(g, "aspice", S.proc)).length;
                       return <div style={{ marginBottom: 8, padding: "6px 8px", background: T.amber + "10", border: `1px solid ${T.amber}44`, borderRadius: 7 }}><b>③ 3차 — 조직 작성 가이드</b> (코드 <code>{AE.ORG_GUIDE_CRITERION.code}</code>): {S.proc}에 적용되는 작성 가이드 {n}건{gb ? "의 규칙에 어긋난 항목을 마지막으로 지적합니다. 가이드는 해당 프로세스 탭의 📐 작성 가이드에서 관리합니다." : "이 없어 이번 검토에는 적용되지 않습니다. 해당 프로세스 탭의 📐 작성 가이드에서 등록하면 적용됩니다."}</div>; })()}
                     <div style={{ overflowX: "auto" }}>
