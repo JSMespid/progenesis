@@ -1217,7 +1217,15 @@ export default function SpiderQaAgent() {
   const [pbsNoAi, setPbsNoAi] = useState(() => { try { return localStorage.getItem(PBS_NOAI_KEY) === "1"; } catch { return false; } });
   function togglePbsNoAi(v) { setPbsNoAi(!!v); try { localStorage.setItem(PBS_NOAI_KEY, v ? "1" : "0"); } catch {} }
   const [deliverablesData, setDeliverablesData] = useState(null);
-  const [requirements, setRequirements] = useState(null);   // AI 작성 요구사항: { items:[...], sourceName, updatedAt }
+  const [requirements, setRequirements] = useState(null);
+  // ASPICE 적용 기준의 단일 기준 = 기본정보. 저장된 V-모델(requirements.aspice)의 버전을 항상 맞춘다 → 산출물 문서·ZIP·검토 기준이 같은 버전으로 나온다.
+  // 기본정보에 버전이 비어 있는 오래된 과제는 V-모델의 버전을 기본정보로 가져온다.
+  useEffect(() => {
+    if (projectForm.track !== "aspice") return;
+    const fv = projectForm.aspiceVersion, mv = requirements?.aspice?.version;
+    if (fv && AE.ASPICE_VERSIONS.some(v => v.id === fv)) { if (requirements?.aspice && mv !== fv) setRequirements(r => (r?.aspice && r.aspice.version !== fv) ? { ...r, aspice: { ...r.aspice, version: fv } } : r); }
+    else if (mv && AE.ASPICE_VERSIONS.some(v => v.id === mv)) setProjectForm(p => p.aspiceVersion ? p : { ...p, aspiceVersion: mv });
+  }, [projectForm.track, projectForm.aspiceVersion, requirements?.aspice?.version]);   // eslint-disable-line react-hooks/exhaustive-deps   // AI 작성 요구사항: { items:[...], sourceName, updatedAt }
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
   const [genProgress, setGenProgress] = useState(null);   // 산출물 생성 진행 상황: { percent, label }
@@ -1400,7 +1408,7 @@ export default function SpiderQaAgent() {
           : dev === "HW" ? "개발 범위는 SYS+HW다(SW는 협력사). L2는 'HW'만 사용한다."
           : dev === "SYS" ? "개발 범위는 시스템 통합이다(SW·HW는 협력사 개발). L2에 'HW'와 'SW'를 모두 포함해 협력사가 개발할 시스템 요소를 나타낸다. HW는 회로 블록 단위, SW는 소프트웨어 컴포넌트 단위로 분해한다."
           : "개발 범위는 HW+SW다. L2에 'HW'와 'SW'를 모두 반드시 포함한다. HW는 회로 블록(예: MCU, 전원, 센싱·측정, 통신 트랜시버, 구동·출력, 보호·커넥터) 단위로, SW는 소프트웨어 컴포넌트(예: 애플리케이션 기능, 통신 스택, 진단, BSW·드라이버, 부트로더) 단위로 분해한다.";
-        const result = await callClaude(`당신은 Automotive SPICE 4.0 SYS.3(시스템 아키텍처 설계)에 정통한 차량 전장 시스템 엔지니어입니다. 아래 과제의 PBS(제품 분해 구조)를 시스템 요소 단위로 작성하세요.
+        const result = await callClaude(`당신은 Automotive SPICE ${projectForm.aspiceVersion === "3.1" ? "3.1" : "4.0"} SYS.3(시스템 아키텍처 설계)에 정통한 차량 전장 시스템 엔지니어입니다. 아래 과제의 PBS(제품 분해 구조)를 시스템 요소 단위로 작성하세요.
 과제명: ${projectForm.name}, 시스템명: ${sys}, 고객사: ${projectForm.client}
 규칙:
 1) "${sys} > (HW 또는 SW) > 구성요소" 형식으로 한 줄에 하나씩 작성한다.
@@ -2433,7 +2441,7 @@ function AspiceProcessPanel({ form, onDevChange, tailoring, setTailoring, ossp, 
             </select>
           : <b style={{ color:T.accent }}>{ossp?.label || "—"}</b>}
         <span>· 생명주기 <b style={{ color:T.text }}>V-Model</b> (자동 지정)</span>
-        <span>· 목표 <b style={{ color:T.text }}>{aspiceClOf(form)}</b> · {(AE.ASPICE_VERSIONS.find(v => v.id === (form.aspiceVersion || "both")) || {}).label}</span>
+        <span>· 목표 <b style={{ color:T.text }}>{aspiceClOf(form)}</b> · {(AE.ASPICE_VERSIONS.find(v => v.id === (form.aspiceVersion || "4.0")) || {}).label}</span>
       </div>
       <div style={{ fontSize:13, fontWeight:600, marginBottom:4 }}>적용 프로세스 범위</div>
       <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>VDA 범위를 기준으로 일반적인 공급사 과제에 맞춰 기본 선택되어 있습니다 (협력사 개발이면 ACQ.4를 켜세요). 해당 없는 프로세스는 해제하면 그 산출물이 목록에서 빠집니다. SW·HW 범위는 기본정보의 개발 범위와 연동되며, V-모델 적용 범위와 WBS·산출물 목록에 함께 반영됩니다.</div>
@@ -2445,7 +2453,7 @@ function AspiceProcessPanel({ form, onDevChange, tailoring, setTailoring, ossp, 
             <label key={g.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderRadius:8, border:`1px solid ${on ? T.accent+"88" : T.border}`, background: on ? T.accentGlow : T.bg, cursor: g.lock ? "default" : "pointer", fontSize:12, color: on ? T.text : T.muted }}>
               <input type="checkbox" checked={on} disabled={g.lock} onChange={() => !g.lock && toggle(g.id)} />
               <span style={{ flex:1 }}>{g.label}{g.lock && <span style={{ color:T.muted, fontSize:10.5 }}> · 필수</span>}</span>
-              {g.id === "HWE" && (form?.aspiceVersion || "both") !== "4.0" && <span title="3.1 PRM에는 HWE가 없어 4.0 HWE.1~4를 PAM 확장으로 준용합니다" style={{ fontSize:10, color:T.amber }}>3.1: PAM 확장</span>}
+              {g.id === "HWE" && (form?.aspiceVersion || "4.0") !== "4.0" && <span title="3.1 PRM에는 HWE가 없어 4.0 HWE.1~4를 PAM 확장으로 준용합니다" style={{ fontSize:10, color:T.amber }}>3.1: PAM 확장</span>}
               <span style={{ fontSize:10.5, color:T.muted }}>{g.note || (n ? `산출물 ${n}종` : "")}</span>
             </label>
           );
@@ -2535,8 +2543,8 @@ function TrackField({ form, onChooseTrack, osspChosen }) {
             style={{ fontSize:12, padding:"6px 12px", borderRadius:8, cursor:"pointer", fontFamily:"inherit", border:`1px solid ${form.track === t.id ? T.accent : T.border}`, background: form.track === t.id ? T.accent : "transparent", color: form.track === t.id ? "#fff" : T.text }}>{t.icon} {t.label}</button>
         ))}
         {form.track === "aspice" && (
-          <select value={form.aspiceVersion || "both"} onChange={e => onChooseTrack("aspice", e.target.value)} style={{ fontSize:11.5, padding:"5px 8px", background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, fontFamily:"inherit" }}>
-            {aspiceVersionChoices(form.aspiceVersion || "both").map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+          <select value={form.aspiceVersion || "4.0"} onChange={e => onChooseTrack("aspice", e.target.value)} style={{ fontSize:11.5, padding:"5px 8px", background:T.surface, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, fontFamily:"inherit" }}>
+            {aspiceVersionChoices(form.aspiceVersion || "4.0").map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
           </select>
         )}
         {form.track === "aspice" && (
@@ -8059,7 +8067,7 @@ function makeAspiceArchDocx(level, meta, ctx, doc) {
   const prj = level === "SYS" ? fullModel.reqs.SYS.filter(aeIsProjectReq) : [];
   if (prj.length) body += docxP(`※ 프로젝트·프로세스 요구 ${prj.length}건(${prj.map(r => r.id).join(", ")})은 제품 기능이 아닌 인도물·보고·인증·프로세스 요구이므로 시스템 요소에 할당하지 않으며, 요구사항 추적 매트릭스의 '프로젝트·프로세스 요구' 시트에서 관리 프로세스·관리 산출물로 추적한다.`, { size: 18, spacingAfter: 160 });
   body += docxP(`${++sec}. 아키텍처 분석·설계 근거`, { bold: true, size: 26, spacingAfter: 120 }) +
-    docxP(model.rationale[level] || "설계 근거·대안 평가 결과 미작성 (TBD) — 3.1 BP5/BP6(대안 평가), 4.0 04-06/04-04 'justifying rationale' 요구", { size: 20 }) +
+    docxP(model.rationale[level] || `설계 근거·대안 평가 결과 미작성 (TBD) — ${AE.verPick(model.version, "BP5/BP6(대안 평가)", "04-06/04-04 'justifying rationale'")} 요구`, { size: 20 }) +
     [].concat(info.analysis?.text || []).map(t => docxP(t, { size: 20, spacingAfter: 100 })).join("") +
     (info.analysis?.rows?.length ? docxTable([info.analysis.header || [], ...info.analysis.rows], -1) : "");
   if ((info.sections || []).length) {
@@ -8105,7 +8113,7 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
       [], ["실행 정보", `유닛별 최신 실행 결과 누적 (실행 유닛 ${Object.keys(R.units).length}개, 마지막 ${String(R.at).replace("T", " ").slice(0, 16)}) · 환경 ${R.cc || "-"} · ${R.os || "-"}${R.coverage ? " · gcov 커버리지 측정 포함" : ""} · 케이스 ${cs.length}건 중 통과 ${cs.filter(c => c.result === "pass").length}`],
       ["검증 환경", "호스트 실행(SIL) — RTE 스텁·시험 하네스(SPIDer UT). 로직 검증이며 타깃 MCU의 타이밍·메모리·인터럽트 동작은 이 결과로 보증하지 않음(타깃·HILS 검증 별도)."],
       ["정적 검증", `MISRA 준수 최종 판정은 ${AE.ddSettings(model).tools.join(" · ")} 결과로 함 — 이 결과서는 동적 유닛 시험 결과`],
-      [], ["※ 4.0 15-52: 통과·미통과·미수행, 수행 정보(일자·수행자), 결과 요약을 포함해야 한다. 3.1 13-50과 동일 목적."]];
+      [], [`※ ${AE.verPick(model.version, "13-50", "15-52")}: 통과·미통과·미수행, 수행 정보(일자·수행자), 결과 요약을 포함해야 한다.`]];
     return makeXlsxBook([
       std.cover,
       { name: "검증 결과", rows, widths: [5, 13, 18, 36, 20, 11, 18, 30, 12, 34], headerRows: [3], titleRows: [0], freezeRow: 4, validations: tests.length ? [{ sqref: `E5:E${4 + tests.length}`, list: AE.RESULT_LIST, title: "결과", prompt: "Pass · Fail · Not executed · Blocked 중 선택" }] : [] },
@@ -8125,7 +8133,7 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
       ["수행률", S.total ? `${Math.round((S.total - S.none) / S.total * 100)}%` : "-"], ["합격률(수행 기준)", S.total - S.none ? `${Math.round(S.pass / (S.total - S.none) * 100)}%` : "-"],
       ["수행 기간", dates.length ? `${dates[0]} ~ ${dates[dates.length - 1]}` : "-"], ["형상(SW/HW 버전)", [...new Set(done.map(t => t.result.config).filter(Boolean))].join(", ") || "-"],
       [], ["불합격·수행 불가 항목"], ["ID", "결과 · 결함·문제 ID · 비고"], ...(fails.length ? fails.map(t => [t.id, `${AE.RESULT_STATES[t.result.state]} · ${t.result.defect || "결함 ID 없음"}${t.result.note ? " · " + t.result.note : ""}`]) : [["-", "없음"]]),
-      [], ["※ 4.0 15-52: 통과·미통과·미수행, 수행 정보(일자·수행자), 결과 요약을 포함해야 한다. 3.1 13-50과 동일 목적."],
+      [], [`※ ${AE.verPick(model.version, "13-50", "15-52")}: 통과·미통과·미수행, 수행 정보(일자·수행자), 결과 요약을 포함해야 한다.`],
       ["※ 결과 열은 목록(Pass · Fail · Not executed · Blocked)에서 고르고, 이 파일을 SPIDer V-모델 › 검증 탭 [⬆ 결과 엑셀 가져오기]로 올리면 결과가 시험별로 반영됩니다."]];
     return makeXlsxBook([
       std.cover,
@@ -8139,7 +8147,7 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
     AE.RESULT_STATES[r.state || "none"], r.date || "", r.by || "", r.config || "", r.defect || ""]); });
   const techs = [...new Set(tests.map(t => t.technique).filter(Boolean))];
   const strategy = [[`${tl.label} 전략`], [],
-    ["항목", "내용", "근거(3.1 / 4.0)"],
+    ["항목", "내용", `근거 (${AE.versionName(model.version)})`],
     ["검증 대상", tl.targetKind === "req" ? `${AE.LEVELS[tl.level].label} 요구사항 ${model.reqs[tl.level].length}건` : tl.targetKind === "unit" ? `SW 유닛 ${model.units.SW.length}개 (골격 — 구체 케이스는 코드 확정 후 작성)` : `${AE.LEVELS[tl.level].compLabel} ${model.comps[tl.level].length}개 · 인터페이스 ${model.interfaces[tl.level].length}건`, "08-52 Context / 08-60"],
     ["검증 기법", techs.join(", ") || "-", "08-52 Test strategy / 08-60 Techniques"],
     ["진입 기준", "검증 대상 형상(SW·HW 버전) 확정 및 형상 식별 기록, 검증 환경 준비 완료", "08-52 / 08-60 entry criteria"],
@@ -8149,6 +8157,8 @@ function makeAspiceVerifXlsx(kind, meta, ctx, doc) {
     ["검증 환경", [...new Set(tests.map(t => t.env).filter(Boolean))].join(", ") || "TBD — 검증 환경 정보(HILS·벤치·챔버) 확보 후 기재", "08-52 environment / 08-60 infrastructure"],
     ...(tl.targetKind === "if" ? [["통합 순서", `${model.comps[tl.level].map(c => c.name).join(" → ") || "TBD"} (의존 관계에 따라 조정)`, "08-50 system integration / 06-50"]] : []),
   ];
+  // 근거 열은 '3.1 근거 / 4.0 근거'로 적어 두고, 선택한 적용 기준의 것만 남긴다
+  strategy.forEach((r, i) => { if (i >= 3 && r.length === 3 && / \/ /.test(r[2])) { const [a, b] = r[2].split(" / "); r[2] = AE.verPick(model.version, a, b, model.version !== "3.1" && model.version !== "4.0"); } });
   const sel = [[`${term} 선택 세트`], [], ["No", `${term} ID`, "제목", "선택", "선택 근거", "회귀 대상"]];
   tests.forEach((t, i) => sel.push([String(i + 1), t.id, t.title || "", "선택", t.origin === "rule" ? `요구 조건(${t.technique || "요구 기반"})에서 결정적으로 도출` : "요구 정상 시나리오", t.regression ? "Y" : ""]));
   // SWE.4 — 호스트 실행 케이스(입력→기대)를 명세에 함께 수록 (요구·설계 추적 포함)
@@ -8184,7 +8194,7 @@ function makeAspiceStkXlsx(meta, ctx, doc) {
   const cnt = st => model.reqs.STK.filter(k => (k.status || "검토 중") === st).length;
   const sum = [["합의 현황 요약"], [], ["구분", "건수"], ["전체", String(model.reqs.STK.length)], ["합의", String(cnt("합의"))], ["검토 중", String(cnt("검토 중"))], ["보류", String(cnt("보류"))],
     ["시스템 요구 미도출", String(model.reqs.STK.filter(k => !(sysBy[k.id] || []).length).length)], [],
-    ["※ 이해관계자 요구는 OEM·법규 원문을 고쳐 쓰지 않고 그대로 발췌한 문장이며, 시스템 요구(SYS.2)는 이를 분석해 검증 가능하게 재기술한 것이다. 합의 상태는 이해관계자와의 합의 증적(4.0 SYS.1.BP5 / 3.1 SYS.1.BP5·BP6)이다."]];
+    [`※ 이해관계자 요구는 OEM·법규 원문을 고쳐 쓰지 않고 그대로 발췌한 문장이며, 시스템 요구(SYS.2)는 이를 분석해 검증 가능하게 재기술한 것이다. 합의 상태는 이해관계자와의 합의 증적(${AE.verPick(model.version, "SYS.1.BP5·BP6", "SYS.1.BP5")})이다.`]];
   const std = xlsxStdParts({ title: doc?.name || D.title, docCode: projectDocNo(meta, doc?.code || D.code), phase: "SYS.1", meta, infoRows: [["적용 기준", `Automotive SPICE ${AE.ASPICE_VERSIONS.find(v => v.id === model.version)?.label || model.version}`], ["정보항목(WP)", AE.wpLabel("STK_LIST", model.version)]] });
   return makeXlsxBook([
     std.cover,
@@ -8368,7 +8378,7 @@ function makeAspiceRtmXlsx(meta, ctx, doc) {
   if (!F.length) cons.push(["-", "-", "발견된 문제 없음", ""]);
   // 이해관계자 요구 → 시스템 요구 (3.1 SYS.2.BP6 / 4.0 SYS.2.BP5) — 입력 문서의 모든 조항이 어디서 처리되는지
   const sysAll = Object.fromEntries(fullModel.reqs.SYS.map(r => [r.id, r]));
-  const stk = [["이해관계자 요구 추적 (입력 문서 조항 → 시스템 요구·프로젝트 요구)"], [`정보항목: 3.1 13-22 / 4.0 13-51 — 근거 BP: ${AE.bpLabel("SYS_REQ_TRACE", model.version)}`], ["출처 ID", "입력 문서", "조항 요지", "처리 구분", "연결 요구", "비고"],
+  const stk = [["이해관계자 요구 추적 (입력 문서 조항 → 시스템 요구·프로젝트 요구)"], [`${model.version === "3.1" ? "WP" : model.version === "4.0" ? "정보항목" : "WP·정보항목"}: ${AE.verPick(model.version, "13-22", "13-51")} — 근거 BP: ${AE.bpLabel("SYS_REQ_TRACE", model.version)}`], ["출처 ID", "입력 문서", "조항 요지", "처리 구분", "연결 요구", "비고"],
     ...(fullModel.stakeholders || []).map(x => {
       const miss = (x.reqs || []).filter(id => !sysAll[id]);
       return [x.id, x.doc || "", x.title || "", x.disposition || "", (x.reqs || []).map(id => `${id} ${sysAll[id]?.title || "(미존재)"}`).join("\n") || "-", [x.note, miss.length ? `참조 오류: ${miss.join(", ")}` : ""].filter(Boolean).join(" / ")];
@@ -9785,7 +9795,7 @@ function aeInitSub(t, m) {
 // 단계별 안내 — 왜 하는지 · 할 일 · 끝났다고 보는 기준 (기능은 그대로, 화면 위에 안내만 얹는다)
 const AE_GUIDE = {
   setup: { why: "V-모델 전체에 적용되는 기준을 정합니다. 여기서 정한 ASPICE 버전·개발 범위(SW/HW)에 따라 이후 탭과 생성되는 문서가 달라집니다.",
-    todo: ["ASPICE 버전(3.1 / 4.0 / 겸용)과 개발 범위(SYS + SW / SYS + SW + HW)를 고릅니다.", "확보한 입력자료(고객 사양서·DBC·회의록 등)를 체크합니다. 없는 자료는 TBD로 남겨도 됩니다.", "통신 DB(DBC)가 있으면 끌어다 놓아 인터페이스 요구를 자동으로 만듭니다."],
+    todo: ["적용 기준(ASPICE 버전 — 프로젝트 기본정보에서 선택)과 개발 범위를 확인합니다.", "확보한 입력자료(고객 사양서·DBC·회의록 등)를 체크합니다. 없는 자료는 TBD로 남겨도 됩니다.", "통신 DB(DBC)가 있으면 끌어다 놓아 인터페이스 요구를 자동으로 만듭니다."],
     done: "버전·범위를 정하고 저장하면 끝. 입력자료는 나중에 추가해도 됩니다." },
   req: { why: "고객(OEM)이 말한 문장(이해관계자 요구)을 그대로 남기고, 그것을 우리 시스템이 검증할 수 있는 문장(시스템 요구)으로 다시 씁니다. 둘을 연결해 두어야 '고객 요구를 빠짐없이 분석했다'는 근거가 됩니다.",
     todo: ["고객 사양서·RFQ 등을 붙여넣거나 파일을 올리고 [원문에서 요구 도출]을 누릅니다.", "이해관계자 요구마다 시스템 요구가 연결됐는지(SYS 칸) 확인하고, 0건이면 [＋ 도출]·[연결…]·'해당 없음'으로 처리합니다.", "시스템 요구의 [상세]에서 검증 기준(합격·불합격을 가를 수치)을 확인한 뒤 [확정·V-모델 반영]을 누릅니다."],
@@ -11125,7 +11135,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               <span style={{ fontFamily: "monospace", fontSize: 10, color: T.accent }}>{r.id}</span>
               {lv === "SYS" ? <span style={{ fontSize: 11 }}>{r.title} <span style={{ color: T.muted, fontSize: 10 }}>· {r.type}</span></span>
                 : <input value={r.title || ""} onChange={e => updReq(lv, i, "title", e.target.value)} style={inp} />}
-              <select value={r.verifMethod || "Test"} onChange={e => updReq(lv, i, "verifMethod", e.target.value)} style={inp} title="검증 방법 (4.0 08-60: test·measurement·analysis·inspection·review…)">
+              <select value={r.verifMethod || "Test"} onChange={e => updReq(lv, i, "verifMethod", e.target.value)} style={inp} title={`검증 방법${V === "3.1" ? "" : ` (${AE.verPick(V, "", "08-60")})`}: test·measurement·analysis·inspection·review…`}>
                 {AE.VERIF_METHODS.map(x => <option key={x}>{x}</option>)}
               </select>
               <select value={r.status || "Draft"} onChange={e => updReq(lv, i, "status", e.target.value)} style={inp}>{ASPICE_STATUS.map(x => <option key={x}>{x}</option>)}</select>
@@ -11139,12 +11149,12 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 6 }}>
                 <div><div style={{ fontSize: 10, color: T.muted }}>요구 내용{lv === "SYS" ? " (요구사항 AI 작성에서 수정)" : ""}</div>
                   {lv === "SYS" ? <div style={{ fontSize: 10.5, lineHeight: 1.5 }}>{r.text}</div> : <textarea value={r.text || ""} onChange={e => updReq(lv, i, "text", e.target.value)} style={ta} />}</div>
-                <div><div style={{ fontSize: 10, color: T.muted }}>검증 기준 (3.1 17-50 / 4.0 verifiable)</div><textarea value={r.verifCriteria || ""} onChange={e => updReq(lv, i, "verifCriteria", e.target.value)} style={ta} /></div>
+                <div><div style={{ fontSize: 10, color: T.muted }}>검증 기준 ({AE.verPick(V, "17-50", "verifiable")})</div><textarea value={r.verifCriteria || ""} onChange={e => updReq(lv, i, "verifCriteria", e.target.value)} style={ta} /></div>
                 <div><div style={{ fontSize: 10, color: T.muted }}>안전 등급 (ISO 26262 대상 시)</div>
                   <select value={r.safety || ""} onChange={e => updReq(lv, i, "safety", e.target.value)} style={inp}>{["", "QM", "ASIL A", "ASIL B", "ASIL C", "ASIL D"].map(x => <option key={x} value={x}>{x || "-"}</option>)}</select></div>
                 <div style={{ display: "flex", gap: 10, alignItems: "flex-end", fontSize: 10.5 }}>
                   <label><input type="checkbox" checked={!!r.security} onChange={e => updReq(lv, i, "security", e.target.checked)} /> 보안 관련</label>
-                  {lv === "SYS" && <label title="4.0 17-57 (IATF 16949)"><input type="checkbox" checked={!!r.special} onChange={e => updReq(lv, i, "special", e.target.checked)} /> 특별 특성</label>}
+                  {lv === "SYS" && <label title={V === "3.1" ? "특별 특성 (IATF 16949)" : `${AE.verPick(V, "", "17-57")} 특별 특성 (IATF 16949)`}><input type="checkbox" checked={!!r.special} onChange={e => updReq(lv, i, "special", e.target.checked)} /> 특별 특성</label>}
                   {lv !== "SYS" && <span style={{ color: T.muted }}>상위: {(r.parents || []).join(", ") || "없음"}</span>}
                   {lv !== "SYS" && <button onClick={() => set(n => { n.reqs[lv] = n.reqs[lv].filter(x => x.id !== r.id); delete n.alloc[lv][r.id]; })} style={{ ...small, color: T.red, marginLeft: "auto" }}>삭제</button>}
                 </div>
@@ -11522,11 +11532,11 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
               <div className="ae-hint" style={{ fontSize: 10, color: T.muted, marginBottom: 6 }}>구분: HW·SW·HW+SW·ME(기구)·외부(시스템 경계 밖). SW/HW 하위 요구는 'SW'·'HW'가 포함된 요소에 할당된 시스템 요구에서 파생됩니다. DBC로 추가된 요소·인터페이스는 재생성 시 보존됩니다.</div>
               {CompList({ lv: "SYS" })}
             </AeSec>
-            <AeSec title={`시스템 인터페이스 ${model.interfaces.SYS.length}건 (3.1 SYS.3.BP3 / 4.0 04-06 Interface Definitions)`}>{IfList({ lv: "SYS" })}</AeSec>
+            <AeSec title={`시스템 인터페이스 ${model.interfaces.SYS.length}건 (${AE.verPick(V, "SYS.3.BP3", "04-06 Interface Definitions")})`}>{IfList({ lv: "SYS" })}</AeSec>
             <AeSec title={`요구 할당 — 시스템 요구 ${model.reqs.SYS.length}건을 요소에 할당 (${AE.procLabel("SYS.3", V)} BP · 검증 방법·상태는 ${AE.procLabel("SYS.2", V)} 속성)`}>
               {ReqList({ lv: "SYS" })}
             </AeSec>
-            <AeSec title="운영 모드·상태 (동적 측면 — 3.1 SYS.3.BP4 / 4.0 SYS.3.BP2)">
+            <AeSec title={`운영 모드·상태 (동적 측면 — ${AE.verPick(V, "SYS.3.BP4", "SYS.3.BP2")})`}>
               {model.modes.map((x, i) => (
                 <div key={i} style={{ display: "grid", gridTemplateColumns: "140px 1fr 1fr 22px", gap: 5, marginBottom: 4 }}>
                   <input value={x.name} onChange={e => set(n => { n.modes[i].name = e.target.value; })} placeholder="모드명" style={inp} />
@@ -11536,7 +11546,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                 </div>))}
               <button onClick={() => set(n => { n.modes.push({ name: "", desc: "", transition: "" }); })} style={small}>＋ 모드 추가</button>
             </AeSec>
-            <AeSec title="아키텍처 분석·설계 근거 (3.1 SYS.3.BP5 / 4.0 04-06 justifying rationale)">
+            <AeSec title={`아키텍처 분석·설계 근거 (${AE.verPick(V, "SYS.3.BP5", "04-06 justifying rationale")})`}>
               <textarea value={model.rationale.SYS} onChange={e => set(n => { n.rationale.SYS = e.target.value; })} style={{ ...ta, minHeight: 60 }} placeholder="대안 구조와 선택 근거(재사용 플랫폼·원가·안전·제조성 등)" />
             </AeSec>
           </>)}
@@ -11884,19 +11894,19 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                 const setReg = fn => set(n => { n.tests = n.tests.map(t => ts.some(x => x.id === t.id) ? { ...t, regression: fn(t) } : t); });
                 return (
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 11, padding: "6px 10px", marginBottom: 6, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8 }}>
-                    <span title={AE.REGRESSION_ABOUT}>회귀 시험 대상 <b>{regN}</b> / {ts.length}건 <span style={{ color: T.muted, cursor: "help" }}>ⓘ</span></span>
+                    <span title={AE.regressionAbout(V)}>회귀 시험 대상 <b>{regN}</b> / {ts.length}건 <span style={{ color: T.muted, cursor: "help" }}>ⓘ</span></span>
                     <span className="ae-hint" style={{ color: T.muted, fontSize: 10 }}>— 설계·코드가 바뀐 뒤 다시 수행할 시험 (검증 명세서의 '선택 세트·회귀 대상'에 그대로 기록)</span>
                     <span style={{ flex: 1 }} />
                     <button onClick={() => setReg(() => true)} style={small}>회귀 모두 지정</button>
                     <button onClick={() => setReg(() => false)} style={small}>회귀 모두 해제</button>
-                    <button onClick={() => setReg(t => AE.defaultRegression(model, t))} title={AE.REGRESSION_ABOUT} style={small}>회귀 기본값으로</button>
+                    <button onClick={() => setReg(t => AE.defaultRegression(model, t))} title={AE.regressionAbout(V)} style={small}>회귀 기본값으로</button>
                   </div>);
               })()}
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {ts.length > 0 && (
                   <div style={{ display: "grid", gridTemplateColumns: "84px 110px 1fr 150px 56px 112px 52px", gap: 6, alignItems: "center", fontSize: 10, color: T.muted, padding: "0 9px" }}>
                     <span>시험 ID</span><span>검증 대상</span><span>제목</span><span>기법</span>
-                    <span title={AE.REGRESSION_ABOUT} style={{ textAlign: "center", cursor: "help" }}>회귀 대상 ⓘ</span><span title="Pass · Fail · Not executed · Blocked — 수행일·수행자·형상·결함 ID는 [상세]">결과 ⓘ</span><span />
+                    <span title={AE.regressionAbout(V)} style={{ textAlign: "center", cursor: "help" }}>회귀 대상 ⓘ</span><span title="Pass · Fail · Not executed · Blocked — 수행일·수행자·형상·결함 ID는 [상세]">결과 ⓘ</span><span />
                   </div>)}
                 {ts.map(t => { const i = model.tests.indexOf(t); return (
                   <div key={t.id} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", background: T.bg }}>
@@ -11924,7 +11934,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                         {[["precondition", "사전조건(진입 기준)"], ["steps", "절차 (';' 구분)"], ["expected", "기대 결과"], ["passCriteria", "합격 기준"], ["env", "검증 환경"]].map(([k, l]) => (
                           <div key={k}><div style={{ fontSize: 10, color: T.muted }}>{l}</div><textarea value={t[k] || ""} onChange={e => set(n => { n.tests[i] = { ...n.tests[i], [k]: e.target.value, origin: "manual" }; })} style={ta} /></div>))}
                         <div style={{ gridColumn: "1 / -1", border: `1px dashed ${T.border}`, borderRadius: 7, padding: "6px 8px" }}>
-                          <div style={{ fontSize: 10, color: T.muted, marginBottom: 4 }}>검증 결과 기록 (3.1 13-50 / 4.0 15-52){t.result?.state ? ` — ${AE.RESULT_STATES[t.result.state]}` : " — 위 [결과]에서 먼저 고르세요"}{(t.resultLog || []).length ? ` · 이전 결과 ${t.resultLog.length}회: ${t.resultLog.slice(-3).map(x => `${AE.RESULT_STATES[x.state] || "-"}(${x.date || "-"})`).join(" → ")}` : ""}</div>
+                          <div style={{ fontSize: 10, color: T.muted, marginBottom: 4 }}>검증 결과 기록 ({AE.verPick(V, "13-50", "15-52")}){t.result?.state ? ` — ${AE.RESULT_STATES[t.result.state]}` : " — 위 [결과]에서 먼저 고르세요"}{(t.resultLog || []).length ? ` · 이전 결과 ${t.resultLog.length}회: ${t.resultLog.slice(-3).map(x => `${AE.RESULT_STATES[x.state] || "-"}(${x.date || "-"})`).join(" → ")}` : ""}</div>
                           <div style={{ display: "grid", gridTemplateColumns: "120px 110px 1fr 140px", gap: 6 }}>
                             {[["date", "수행일", "date"], ["by", "수행자", "text"], ["config", "형상(SW/HW 버전)", "text"], ["defect", t.result?.state === "fail" ? "결함·문제 ID (필수)" : "결함·문제 ID", "text"]].map(([k, l, ty]) => (
                               <div key={k}><div style={{ fontSize: 9.5, color: k === "defect" && t.result?.state === "fail" && !t.result?.defect ? T.red : T.muted }}>{l}</div><input type={ty} disabled={!t.result?.state} value={t.result?.[k] || ""} onChange={e => setModel(m => AE.setTestResults(m, [t.id], { [k]: e.target.value }))} style={inp} /></div>))}
@@ -12091,7 +12101,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {chip(`${S.proc} 관련 규칙 지적`, `오류 ${hereN("error")} · 경고 ${hereN("warn")}`, hereN("error") ? T.red : ruleHere.length ? T.amber : T.green, "here")}
                   {S.kind === "req" && chip(`품질 플래그 걸린 ${S.proc} ${K.noun}`, `${qf} / ${lvItems.length}건`, qf ? T.amber : T.green, "qf",
-                    `품질 플래그란?\n${K.noun} 한 건의 문장을 AI 없이 규칙으로 읽어, 다시 볼 필요가 있는 ${K.noun}에 붙이는 표시입니다.\n오류가 아니라 "한 번 확인하세요"라는 신호이며, 고칠지는 QA 담당자가 판단합니다.\n\n이런 경우에 붙습니다\n· 모호어 — '적절히·충분히·효율적'처럼 잴 수 없는 말\n· 검증 기준 없음 — 무엇으로 합격을 판단할지 비어 있음\n· 정량 기준 없음 — 성능·비기능 ${K.noun}에 수치+단위나 적용 규격이 없음\n· 복합 요구 의심 — 한 문장에 여러 요구가 섞여 있음\n· 설계 제약 성격 — 시스템 ${K.noun}에 MCU·알고리즘 같은 설계 용어가 있음\n· 요구 내용 없음 — 제목과 내용이 모두 비어 있음\n\n근거: ASPICE 4.0 정보항목 17-00 요구사항 특성`)}
+                    `품질 플래그란?\n${K.noun} 한 건의 문장을 AI 없이 규칙으로 읽어, 다시 볼 필요가 있는 ${K.noun}에 붙이는 표시입니다.\n오류가 아니라 "한 번 확인하세요"라는 신호이며, 고칠지는 QA 담당자가 판단합니다.\n\n이런 경우에 붙습니다\n· 모호어 — '적절히·충분히·효율적'처럼 잴 수 없는 말\n· 검증 기준 없음 — 무엇으로 합격을 판단할지 비어 있음\n· 정량 기준 없음 — 성능·비기능 ${K.noun}에 수치+단위나 적용 규격이 없음\n· 복합 요구 의심 — 한 문장에 여러 요구가 섞여 있음\n· 설계 제약 성격 — 시스템 ${K.noun}에 MCU·알고리즘 같은 설계 용어가 있음\n· 요구 내용 없음 — 제목과 내용이 모두 비어 있음\n\n근거: ASPICE ${AE.verPick(V, "WP 17-00 요구사항 명세", "정보항목 17-00 요구사항")} 특성`)}
                   <span style={{ alignSelf: "center", fontSize: 10.5, color: T.muted, marginLeft: 4 }}>참고 — V-모델 전체:</span>
                   {chip("오류", sevN("error"), sevN("error") ? T.red : T.green, "error")}
                   {chip("경고", sevN("warn"), sevN("warn") ? T.amber : T.green, "warn")}
@@ -12880,7 +12890,7 @@ function StepDeliverables({ deliverablesData, generating, genProgress, genError,
             <div style={{ fontSize:12, fontWeight:700 }}>🚗 ASPICE V-모델 산출물 (시스템·SW·HW 요구 → 설계 → 검증 수단 → 추적성)</div>
             <div style={{ fontSize:10.5, color:T.muted, marginTop:2 }}>
               {am ? `SYS ${am.reqs.SYS.length} · 요소 ${am.comps.SYS.length}${am.scope.SW ? ` · SW ${am.reqs.SW.length}` : ""}${am.scope.HW ? ` · HW ${am.reqs.HW.length}` : ""} · 검증 수단 ${am.tests.length} · 일관성 오류 ${errs}건${openLinks ? ` · 변경 검토 필요 연결 ${openLinks}건` : ""} — 저장된 내용은 아래 '전체 ZIP 다운로드'의 해당 산출물에 반영됩니다${(() => { const ex = deliverablesData ? aspiceExtraKinds(deliverablesData, { ...(pdpCtx || {}), requirements }) : []; return ex.length ? ` (WBS에 없는 V-모델 문서 ${ex.length}종은 ZIP의 '99_V-모델 추가 산출물' 폴더에 함께 담김)` : ""; })()}`
-                  : requirements?.items?.length ? "확정된 시스템 요구사항에서 SYS.3 → SWE.1/2 · HWE.1/2 → 검증 수단(SYS.4/5·SWE.5/6·HWE.3/4)을 생성합니다 (ASPICE 3.1·4.0 겸용)"
+                  : requirements?.items?.length ? `확정된 시스템 요구사항에서 SYS.3 → SWE.1/2 · HWE.1/2 → 검증 수단(SYS.4/5·SWE.5/6·HWE.3/4)을 생성합니다 (${AE.versionName(form?.aspiceVersion || "4.0")})`
                   : "먼저 '시스템 요구사항 명세서'의 🤖 AI 작성으로 SYS.2 요구사항을 확정하세요 (DBC만으로 시작할 수도 있습니다)"}
             </div>
           </div>

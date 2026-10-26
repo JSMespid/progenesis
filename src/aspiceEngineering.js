@@ -18,6 +18,14 @@ export const ASPICE_VERSIONS = [
   { id: "3.1", label: "ASPICE 3.1", desc: "17-12/17-11 · 08-50/08-52 · 13-22 · HWE는 PAM 확장으로 표기" },
 ];
 export const versionsOf = v => (v === "3.1" ? ["3.1"] : v === "4.0" ? ["4.0"] : ["3.1", "4.0"]);
+// 선택한 적용 기준에 맞는 근거 번호만 — 3.1이면 3.1, 4.0이면 4.0, (이전 설정)겸용이면 둘 다. 해당 버전에 없는 근거는 빈 문자열
+export function verPick(version, r31, r40, prefix = true) {
+  const vs = versionsOf(version);
+  const one = v => { const r = v === "3.1" ? r31 : r40; return r ? (prefix ? `${v} ${r}` : r) : ""; };
+  if (vs.length === 1) return one(vs[0]);
+  return [one("3.1"), one("4.0")].filter(Boolean).join(" / ");
+}
+export const versionName = v => (v === "3.1" ? "ASPICE 3.1" : v === "4.0" ? "ASPICE 4.0" : "ASPICE 3.1 + 4.0");
 
 // ── 레벨·프로세스 정의 ────────────────────────────────────────────────────
 // 각 레벨은 (요구사항 프로세스, 설계 프로세스, 통합검증, 요구사항검증)의 V 짝으로 구성된다.
@@ -390,7 +398,7 @@ export function qualityFlags(req) {
   const conj = (text.match(/(?:하고|하며|및|그리고|또한)\s/g) || []).length;
   if (conj >= 3) flags.push({ code: "compound", msg: "복합 요구 의심(분할 검토)" });
   const dz = DESIGN_HINTS.filter(w => low.includes(w));
-  if (dz.length && req.level !== "SW" && req.level !== "HW") flags.push({ code: "design", msg: `설계 제약 성격(${dz[0]}) — 4.0 17-00 Design Constraint 분류 검토` });
+  if (dz.length && req.level !== "SW" && req.level !== "HW") flags.push({ code: "design", msg: `설계 제약 성격(${dz[0]}) — 요구가 아닌 설계 제약(Design Constraint)으로 분류할지 검토` });
   if (!String(req.text || req.title || "").trim()) flags.push({ code: "empty", msg: "요구 내용 없음" });
   return flags;
 }
@@ -616,6 +624,7 @@ export function importResultRows(model, rows) {
     m = setTestResults(m, [id], { ...patch, src: "import" }); updated++; });
   return { model: m, updated, unknown, skipped };
 }
+export const regressionAbout = version => `회귀 시험 대상 — 설계·코드가 바뀐 뒤 다시 수행할 시험 (${verPick(version, "08-50 회귀 전략", "08-58 검증 수단 선택 세트")}). 기본값: 인터페이스 통합·결함 주입 시험은 체크, 요구 기반은 우선순위 '상'·안전 관련일 때 체크, 유닛·컴포넌트 거동 시험은 해제.`;
 export const REGRESSION_ABOUT = "회귀 시험 대상 — 설계·코드가 바뀐 뒤 다시 수행할 시험 (3.1 08-50 회귀 전략 / 4.0 08-58 검증 수단 선택 세트). 기본값: 인터페이스 통합·결함 주입 시험은 체크, 요구 기반은 우선순위 '상'·안전 관련일 때 체크, 유닛·컴포넌트 거동 시험은 해제.";
 // 인터페이스(요소 간 관계) → 통합 검증 수단 (SYS.4 / SWE.5 / HWE.3)
 export function ruleTestsForInterface(itf, testLevel, compName = {}) {
@@ -663,7 +672,7 @@ export function ruleTestsForInterface(itf, testLevel, compName = {}) {
 // ═══════════════════════════════════════════════════════════════════════════
 export function emptyModel() {
   return {
-    schema: 1, version: "both", scope: { SYS: true, SW: true, HW: false }, useAI: true,
+    schema: 1, version: "4.0", scope: { SYS: true, SW: true, HW: false }, useAI: true,
     inputs: {}, charOverride: {}, templateChecks: {},
     reqs: { STK: [], SYS: [], SW: [], HW: [] },   // STK = 이해관계자 요구(SYS.1), SYS 요구의 상위
     comps: { SYS: [], SW: [], HW: [] },
@@ -1559,7 +1568,7 @@ export function reviewSystemPrompt() {
 }
 
 // 검토 대상 요구(batch)와 상위 요구(parents)로 검토 프롬프트를 만든다.
-export function promptReview({ level, reqs, parents = [], version = "both", guideBlock = "" }) {
+export function promptReview({ level, reqs, parents = [], version = "4.0", guideBlock = "" }) {
   const proc = (LEVELS[level] || {}).reqProc || level;
   const vda = vdaCriteria(proc, version);
   const crit = `[1차 — ${vdaBasis(version)}]\n${vda.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}\n\n[2차 — ${REVIEW_CRITERIA_VER}, ${REVIEW_CRITERIA_BASIS}]\n${REVIEW_CRITERIA.map(c => `- ${c.code}: ${c.label} — ${c.desc}`).join("\n")}`;
@@ -1841,7 +1850,7 @@ const KIND_NOTES = {
   test: "8) 'TBD'로 명시된 부분(예: 코드 확정 후 작성, 기준 등급 TBD)은 계획된 미작성이므로 지적하지 않는다. 시험이 [관련 항목]의 대상을 실제로 검증하는지, 기대 결과·합격 기준으로 합격·불합격을 판정할 수 있는지를 중심으로 본다.",
 };
 // 검토 프롬프트 — 요구는 기존 프롬프트(promptReview) 그대로, 그 밖의 산출물은 종류별 기준으로
-export function reviewPrompt(model, key, batch, version = "both", guideBlock = "") {
+export function reviewPrompt(model, key, batch, version = "4.0", guideBlock = "") {
   const S = reviewScope(key), K = reviewKindOf(key);
   const m = normalizeModel(model);
   if (S.kind === "req") {
@@ -1880,7 +1889,7 @@ ${JSON.stringify(batch.map(b => b.body))}
 {"findings":[{"id":"","criterion":"${K.criteria[0].code}","severity":"minor","evidence":"","issue":"","suggestion":""}]}`;
 }
 // 검토 범위에 맞춘 의견 검증 (대상 ID·기준 코드·근거 인용)
-export function validateReviewScope(raw, batch, key, version = "both") {
+export function validateReviewScope(raw, batch, key, version = "4.0") {
   const S = reviewScope(key);
   const all = reviewCriteriaFor(key, version).all;
   if (!S || S.kind === "req") return validateReview(raw, batch.map(b => b.src || b), { criteria: all });
@@ -3435,7 +3444,7 @@ const VDA_BP = {
     ["STRUCT", "BP2", "BP2", "구조화", "요구가 유형(기능·비기능·인터페이스)·우선순위·그룹으로 구조화·분류되어 있는가"],
     ["ANALYZE", "BP3", "BP3", "분석·실현성", "정확성·기술적 실현 가능성·검증 가능성 관점에서 분석된 흔적(수치·조건·제약)이 있는가"],
     ["CONTEXT", "BP4", "BP4", "환경 영향", "운영 환경·시스템 컨텍스트(다른 요소·외부 시스템)에 미치는 영향이 고려되었는가"],
-    ["VERIFC", "BP3", "BP5", "검증 기준", "합격·불합격을 가를 검증 기준(수치·허용오차·조건)이 요구에 붙어 있는가 (4.0은 BP3 분석에 포함)"],
+    ["VERIFC", "BP3", "BP5", "검증 기준", { both: "합격·불합격을 가를 검증 기준(수치·허용오차·조건)이 요구에 붙어 있는가 (4.0은 BP3 분석에 포함)", "4.0": "합격·불합격을 가를 검증 기준(수치·허용오차·조건)이 요구에 붙어 있는가 (BP3 분석의 일부)", "3.1": "합격·불합격을 가를 검증 기준(수치·허용오차·조건)이 요구에 붙어 있는가" }],
     ["TRACE", "BP5", "BP6", "양방향 추적", "상위 요구와의 양방향 추적(부모 ID)이 있고 고아 요구가 아닌가"],
     ["CONSIST", "BP5", "BP7", "일관성", "상위 요구 및 같은 수준의 다른 요구와 내용·수치·용어가 일관되는가"],
     ["COMM", "BP6", "BP8", "합의·공유", "관련자(고객·설계)와 합의된 상태(status·release)가 표시되어 있는가"],
@@ -3445,7 +3454,7 @@ const VDA_BP = {
     ["ALLOC", "BP2", "BP2", "요구 할당", "상위 요구가 요소에 빠짐없이·중복 없이 할당되어 있는가"],
     ["IFACE", "BP3", "BP3", "인터페이스 정의", "요소 간·외부 인터페이스의 방향·데이터(신호)·주기·프로토콜·범위가 정의되어 있는가"],
     ["DYN", "BP4", "BP4", "동적 동작", "운영 모드·상태 전이·타이밍·시퀀스 등 동적 동작이 기술되고 요소 설명과 맞는가"],
-    ["ALT", "BP5", "BP5", "대안 평가·근거", "아키텍처 대안 검토와 선택 근거(자원·성능·안전·비용)가 있는가 (SWE.2 3.1 BP6 자원 소비 목표 포함)"],
+    ["ALT", "BP5", "BP5", "대안 평가·근거", { both: "아키텍처 대안 검토와 선택 근거(자원·성능·안전·비용)가 있는가 (SWE.2 3.1 BP6 자원 소비 목표 포함)", "4.0": "아키텍처 대안 검토와 선택 근거(자원·성능·안전·비용)가 있는가", "3.1": "아키텍처 대안 검토와 선택 근거(자원·성능·안전·비용)가 있는가 (SWE.2는 BP6 자원 소비 목표 포함)" }],
     ["TRACE", "BP6", "BP6", "양방향 추적", "요구 ↔ 요소(↔ 인터페이스) 양방향 추적이 성립하는가"],
     ["CONSIST", "BP6", "BP7", "일관성", "요구·요소·인터페이스·동적 동작 사이에 명칭·수치·방향이 일관되는가"],
     ["COMM", "BP7", "BP8", "합의·공유", "합의된 설계임이 식별되고 관련자에게 공유 가능한 상태인가"],
@@ -3471,16 +3480,16 @@ const VDA_BP = {
   ],
 };
 export function vdaVersionLabel(version) { const vs = versionsOf(version); return vs.map(v => `PAM v${v}`).join(" + "); }
-export function vdaCriteria(proc, version = "both") {
+export function vdaCriteria(proc, version = "4.0") {
   const fam = VDA_FAMILY[proc]; if (!fam) return [];
   const vs = versionsOf(version);
   const bpLabel = r => vs.length === 1 ? (vs[0] === "4.0" ? r[1] : r[2]) : (r[1] === r[2] ? r[1] : `4.0 ${r[1]} / 3.1 ${r[2]}`);
-  return VDA_BP[fam].map(r => ({ code: `VDA-${proc.replace(".", "")}-${r[0]}`, label: `ASPICE ${proc} ${bpLabel(r)} ${r[3]}`, desc: r[4], vda: true, bp: bpLabel(r) }));
+  return VDA_BP[fam].map(r => ({ code: `VDA-${proc.replace(".", "")}-${r[0]}`, label: `ASPICE ${proc} ${bpLabel(r)} ${r[3]}`, desc: typeof r[4] === "string" ? r[4] : (vs.length === 1 ? r[4][vs[0]] : r[4].both), vda: true, bp: bpLabel(r) }));
 }
 export const vdaBasis = version => `Automotive SPICE ${vdaVersionLabel(version)} (VDA QMC) 프로세스 BP 요건 — 점검용 요약`;
 export const isVdaCode = code => /^VDA-/.test(String(code || ""));
 // 검토 범위 key의 전체 기준(1차 VDA + 2차 기존) — 화면 표기·의견 라벨·검증용
-export function reviewCriteriaFor(key, version = "both") {
+export function reviewCriteriaFor(key, version = "4.0") {
   const S = reviewScope(key); const K = reviewKindOf(key);
   return { vda: S ? vdaCriteria(S.proc, version) : [], base: K.criteria, all: [...(S ? vdaCriteria(S.proc, version) : []), ...K.criteria, ORG_GUIDE_CRITERION], ver: `${vdaVersionLabel(version)} + ${K.ver}`, baseVer: K.ver };
 }
