@@ -10257,7 +10257,26 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
     if (!window.confirm(`승인 대기 ${pend.length}건을 모두 승인합니다.\n각 항목의 수정안이 적용되고 이력에 남습니다.\n내용을 확인하지 않은 승인은 심사 때 설명하기 어렵습니다. 계속할까요?`)) return;
     pend.forEach(c => approveCard(c));
   }
-  useEffect(() => { apiFetch("/api/review").then(c => { setRv(c); const ready = (c.available || []).filter(a => a.ready); setRvProv(ready.some(a => a.id === c.defaultProvider) ? c.defaultProvider : (ready[0]?.id || "")); }).catch(e => setRv({ error: e.message })); }, []);
+  // 검토 AI 설정 — 창을 열 때 + 설정에서 바꿨을 때(spider:review-config) + 다른 탭/PC에서 바꾼 뒤 이 탭으로 돌아왔을 때 다시 읽는다
+  const rvDefRef = useRef(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => apiFetch("/api/review").then(c => {
+      if (!alive) return;
+      setRv(c);
+      const ready = (c.available || []).filter(a => a.ready);
+      const def = ready.some(a => a.id === c.defaultProvider) ? c.defaultProvider : (ready[0]?.id || "");
+      const defChanged = rvDefRef.current !== null && rvDefRef.current !== def;
+      rvDefRef.current = def;
+      // 기본 검토 AI가 바뀌었으면 그것으로, 아니면 지금 고른 것을 유지(사용 불가가 됐으면 기본으로)
+      setRvProv(p => (rvDefRef.current !== null && !defChanged && ready.some(a => a.id === p)) ? p : def);
+    }).catch(e => { if (alive) setRv({ error: e.message }); });
+    load();
+    const onVis = () => { if (document.visibilityState === "visible") load(); };
+    window.addEventListener("spider:review-config", load);
+    document.addEventListener("visibilitychange", onVis);
+    return () => { alive = false; window.removeEventListener("spider:review-config", load); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
   const rvSel = (rv?.available || []).find(a => a.id === rvProv) || null;
   // ── ② 검토 AI 의견 — 검토 범위(요구·아키텍처·상세설계·검증 명세) 1개를 검토 ──
   // onProg(fraction 0~1, 표시 문구): 진행률 보고. 반환: { done, kept, dropped, failed, timeouts, fatal } (검토 기록은 이 안에서 모델에 반영)
@@ -12047,7 +12066,7 @@ function AspiceEngModal({ onClose, onReload, form, wbs, requirements, setRequire
                         `${S.proc} 관련 규칙 지적: 오류 ${hereN("error")} · 경고 ${hereN("warn")}${S.kind === "req" ? ` · 품질 플래그 걸린 ${K.noun} ${qf} / ${lvItems.length}건` : ""}\n참고 — V-모델 전체: 오류 ${sevN("error")} · 경고 ${sevN("warn")}\nAI 없이 규칙으로 추적성·품질을 점검 — 오류는 반드시 해소`, hereN("error") > 0)}
                       <span style={{ alignSelf: "center", color: T.muted }}>→</span>
                       {step("ai", "②", "검토 AI", changedN, `${K.noun} 검토할 것`, "rv-ai",
-                        `검토할 ${K.noun} ${changedN} / ${lvItems.length}건 — ${rvSel ? `${rvSel.label.replace(/ \(.*\)$/, "")}에게 처음 보내거나 검토 후 바뀐 것` : "검토 AI 미선택: 전체가 대상"}\n지금까지 받은 의견 ${cnt.total}건`, !!changedN)}
+                        `검토할 ${K.noun} ${changedN} / ${lvItems.length}건 — ${rvSel ? `${rvSel.label.replace(/ \(.*\)$/, "")}${rvSel.model ? ` · ${rvSel.model}` : ""}에게 처음 보내거나 검토 후 바뀐 것` : "검토 AI 미선택: 전체가 대상"}\n지금까지 받은 의견 ${cnt.total}건`, !!changedN)}
                       <span style={{ alignSelf: "center", color: T.muted }}>→</span>
                       {step("judge", "③", "사람 판정", cnt.open, "의견 미판정", "rv-judge",
                         `미판정 의견 ${cnt.open} / ${cnt.total}건 — QA 담당자가 맞음·보류·틀림을 판정할 것\n판정 끝남: 맞음 ${cnt.valid} · 보류 ${cnt.opinion} · 틀림 ${cnt.invalid}${(() => { const r = cnt.total - cnt.open - cnt.valid - cnt.opinion - cnt.invalid; return r > 0 ? ` · 대상 삭제 ${r}` : ""; })()}`, !!cnt.open)}
@@ -14643,6 +14662,7 @@ function AiTab({ flash, settings, onReload }) {
   const [verify, setVerify] = useState(null);
 
   const loadRv = () => apiFetch("/api/review").then(c => { setRv(c); return c; }).catch(e => { setRv({ error: e.message }); return null; });
+  const notifyRv = () => { try { window.dispatchEvent(new Event("spider:review-config")); } catch { /* 무시 */ } };   // 열려 있는 V-모델 창의 검토 AI 표시 갱신
   useEffect(() => { loadRv(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // 등록 모델 목록 — Claude를 맨 위에. 검토 설정 조회가 실패해도 Claude 행은 생성 설정으로 보여준다.
@@ -14670,11 +14690,13 @@ function AiTab({ flash, settings, onReload }) {
         setKey("");
         await onReload();
         await loadRv();
+        notifyRv();
         flash("ok", clearKey ? "저장된 Claude 키를 삭제했습니다. 이후 환경변수(ANTHROPIC_API_KEY)를 사용합니다." : "Anthropic Claude 설정을 저장했습니다 (생성 AI·검토 AI 공용).");
       } else {
         const r = await apiFetch("/api/review", { method: "PUT", body: JSON.stringify({ provider: edit, model: model.trim(), baseUrl: baseUrl.trim(), apiKey: clearKey ? null : (key.trim() || undefined) }) });
         setKey("");
         await loadRv();
+        notifyRv();
         const re = r?.reassigned ? ` 기본 검토 AI가 사용 불가가 되어 ${(r.available || []).find(a => a.id === r.reassigned)?.label || r.reassigned}(으)로 자동 지정했습니다.` : "";
         flash("ok", (clearKey ? "저장된 키를 삭제했습니다." : "AI 모델 설정을 저장했습니다.") + re);
       }
@@ -14696,6 +14718,7 @@ function AiTab({ flash, settings, onReload }) {
     try {
       await apiFetch("/api/review", { method: "PUT", body: JSON.stringify({ provider: id, setDefault: true }) });
       await loadRv();
+      notifyRv();
       flash("ok", "기본 검토 AI를 지정했습니다.");
     } catch (e) { flash("error", e.message); }
     setBusy(false);
